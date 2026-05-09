@@ -1,0 +1,212 @@
+"""
+Portfolio backtesting engine for universe-selection strategies.
+
+Trade mechanics:
+  - On rebalance day N:
+      1. Select stocks using prices UP TO day N-1 (no look-ahead bias)
+      2. Sell all positions at day N open
+      3. Buy new selection at day N open
+  - Non-rebalance days: hold, record equity at close
+  - Costs: commission (both sides) + stamp tax (sell side only)
+  - Lot size: 100-share lots (A-share standard)
+
+Rolling price history:
+  rolling_prices[code] is updated with today's close AFTER select_stocks is called,
+  so the strategy always sees data up to yesterday — no look-ahead bias.
+"""
+from collections import defaultdict
+from typing import Any, Dict, List
+
+import numpy as np
+import pandas as pd
+
+from ..strategies.portfolio_base import PortfolioBaseStrategy
+
+
+def run_portfolio_backtest(
+    ref_data: pd.DataFrame,                    # universe: code, name, price, market_cap
+    price_data: Dict[str, pd.DataFrame],       # {code: OHLCV DataFrame}
+    strategy: PortfolioBaseStrategy,
+    initial_capital: float = 100_000,
+    commission_rate: float = 0.0003,
+    min_commission: float = 5.0,
+    stamp_tax_rate: float = 0.001,
+) -> Dict[str, Any]:
+
+    hold_days: int = int(strategy.params.get("hold_days", 5))
+
+    # ── Build sorted trading-day index ───────────────────────────────────────
+    all_dates = sorted(set(
+        row["date"]
+        for df in price_data.values()
+        for row in df[["date"]].to_dict("records")
+    ))
+    if not all_dates:
+        raise ValueError("无可用历史数据，请检查日期范围")
+
+    # ── Build fast date → {code: {open, close}} lookup ─────────────────────
+    price_lookup: Dict[Any, Dict[str, Dict[str, float]]] = {}
+    for code, df in price_data.items():
+        for rec in df[["date", "open", "close"]].to_dict("records"):
+            d = rec["date"]
+            if d not in price_lookup:
+                price_lookup[d] = {}
+            price_lookup[d][code] = {
+                "open": float(rec["open"]),
+                "close": float(rec["close"]),
+            }
+
+    # ── Simulation ────────────────────────────────────────────────────────────
+    capital = float(initial_capital)
+    holdings: Dict[str, int] = {}          # {code: shares held}
+    trades: List[dict] = []
+    equity_curve: List[dict] = []
+    holdings_log: List[dict] = []
+    day_counter = 0
+
+    # rolling_prices[code] = chronological list of close prices UP TO yesterday.
+    # Updated at the END of each day loop iteration.
+    rolling_prices: Dict[str, List[float]] = defaultdict(list)
+
+    for date in all_dates:
+        day_prices = price_lookup.get(date, {})
+
+        if day_counter % hold_days == 0:
+            # ── Selection uses YESTERDAY'S closes (no look-ahead bias) ──────
+            # rolling_prices has not been updated for today yet → yesterday's data
+            close_for_selection: Dict[str, float] = {}
+            for code in day_prices:
+                hist = rolling_prices[code]
+                # Fallback to today's open on the very first bar (no prior history)
+                close_for_selection[code] = hist[-1] if hist else day_prices[code]["open"]
+
+            # ── Sell all current positions at today's OPEN ──────────────────
+            for code, shares in list(holdings.items()):
+                if code in day_prices and shares > 0:
+                    sell_price = day_prices[code]["open"]
+                    revenue = shares * sell_price
+                    comm = max(revenue * commission_rate, min_commission)
+                    tax = revenue * stamp_tax_rate
+                    capital += revenue - comm - tax
+                    trades.append({
+                        "date": str(date.date()),
+                        "type": "卖出",
+                        "code": code,
+                        "price": round(sell_price, 3),
+                        "shares": shares,
+                        "amount": round(revenue, 2),
+                        "commission": round(comm + tax, 2),
+                        "capital": round(capital, 2),
+                    })
+            holdings = {}
+
+            # ── Let strategy choose new stocks ──────────────────────────────
+            new_stocks = strategy.select_stocks(
+                date, close_for_selection, ref_data, rolling_prices
+            )
+            # Only keep codes that actually traded today
+            new_stocks = [s for s in new_stocks if s in day_prices]
+
+            # ── Buy equal-weight at today's OPEN ────────────────────────────
+            if new_stocks and capital > 0:
+                cash_per = capital / len(new_stocks)
+                bought = []
+                for code in new_stocks:
+                    buy_price = day_prices[code]["open"]
+                    if buy_price <= 0:
+                        continue
+                    shares = int(cash_per / buy_price / 100) * 100
+                    if shares <= 0:
+                        continue
+                    cost = shares * buy_price
+                    comm = max(cost * commission_rate, min_commission)
+                    if cost + comm <= capital:
+                        holdings[code] = shares
+                        capital -= cost + comm
+                        bought.append(code)
+                        trades.append({
+                            "date": str(date.date()),
+                            "type": "买入",
+                            "code": code,
+                            "price": round(buy_price, 3),
+                            "shares": shares,
+                            "amount": round(cost, 2),
+                            "commission": round(comm, 2),
+                            "capital": round(capital, 2),
+                        })
+                if bought:
+                    holdings_log.append({"date": str(date.date()), "stocks": bought})
+
+        # ── Daily equity at CLOSE ─────────────────────────────────────────────
+        pos_value = sum(
+            holdings[code] * day_prices[code]["close"]
+            for code in holdings
+            if code in day_prices
+        )
+        equity_curve.append({
+            "date": str(date.date()),
+            "value": round(capital + pos_value, 2),
+        })
+
+        # ── Update rolling_prices with TODAY'S close (AFTER selection) ───────
+        for code, prices in day_prices.items():
+            rolling_prices[code].append(prices["close"])
+
+        day_counter += 1
+
+    # ── Force-close remaining at last close ──────────────────────────────────
+    if holdings:
+        last_prices = price_lookup.get(all_dates[-1], {})
+        for code, shares in holdings.items():
+            if code in last_prices and shares > 0:
+                p = last_prices[code]["close"]
+                revenue = shares * p
+                comm = max(revenue * commission_rate, min_commission)
+                tax = revenue * stamp_tax_rate
+                capital += revenue - comm - tax
+        if equity_curve:
+            equity_curve[-1]["value"] = round(capital, 2)
+
+    # ── Performance metrics ───────────────────────────────────────────────────
+    equity = pd.Series([e["value"] for e in equity_curve])
+    total_ret = (equity.iloc[-1] - initial_capital) / initial_capital
+    days = len(equity)
+    annual_ret = (1 + total_ret) ** (252 / days) - 1 if days > 0 else 0.0
+
+    max_dd = float(((equity - equity.cummax()) / equity.cummax()).min())
+
+    daily_ret = equity.pct_change().dropna()
+    rf_daily = 0.03 / 252
+    sharpe = (
+        float((daily_ret.mean() - rf_daily) / daily_ret.std() * np.sqrt(252))
+        if daily_ret.std() > 0 else 0.0
+    )
+
+    code_buy_prices: Dict[str, List[float]] = defaultdict(list)
+    win, total = 0, 0
+    for t in trades:
+        if t["type"] == "买入":
+            code_buy_prices[t["code"]].append(t["price"])
+        elif t["type"] == "卖出":
+            buys = code_buy_prices.get(t["code"], [])
+            if buys:
+                if t["price"] > buys.pop(0):
+                    win += 1
+                total += 1
+
+    return {
+        "strategy_name": strategy.name,
+        "metrics": {
+            "total_return": round(total_ret * 100, 2),
+            "annual_return": round(annual_ret * 100, 2),
+            "max_drawdown": round(max_dd * 100, 2),
+            "sharpe_ratio": round(sharpe, 3),
+            "win_rate": round(win / total * 100, 2) if total > 0 else 0.0,
+            "trade_count": total,
+            "final_value": round(float(equity.iloc[-1]), 2),
+            "initial_capital": initial_capital,
+        },
+        "equity_curve": equity_curve,
+        "trades": trades,
+        "holdings_log": holdings_log,
+    }
