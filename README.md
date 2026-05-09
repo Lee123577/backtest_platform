@@ -1,4 +1,4 @@
-A股量化回测平台
+**A股量化回测平台**
 基于 FastAPI + ECharts 的 A 股量化策略回测系统，支持单股信号策略与多股票组合选股策略两种模式。
 
 功能特性
@@ -8,41 +8,14 @@ K线图：ECharts 蜡烛图 + 成交量子图，买卖信号标注
 绩效指标：总收益、年化收益、最大回撤、夏普比率、胜率、交易次数
 调仓日志：每期持仓股票列表
 数据缓存：行情数据按日期缓存为 CSV，避免重复请求
-项目结构
-backtest_platform/
-├── run.py                        # 启动入口
-├── requirements.txt
-└── app/
-    ├── main.py                   # FastAPI 路由
-    ├── data/
-    │   ├── data_loader.py        # 单股 K 线获取、缓存
-    │   └── market_data.py        # 全市场快照、并行下载历史数据
-    ├── engine/
-    │   ├── backtest.py           # 单股回测引擎
-    │   └── portfolio_backtest.py # 组合回测引擎
-    ├── strategies/
-    │   ├── base.py               # 单股策略基类
-    │   ├── portfolio_base.py     # 组合策略基类
-    │   ├── registry.py           # 策略注册表
-    │   ├── ma_cross.py           # 双均线
-    │   ├── rsi_strategy.py       # RSI
-    │   ├── macd_strategy.py      # MACD
-    │   ├── bollinger_strategy.py # 布林带
-    │   ├── kdj_strategy.py       # KDJ
-    │   ├── small_cap.py          # 小市值组合
-    │   ├── momentum_strategy.py  # 动量组合
-    │   └── low_vol_strategy.py   # 低波动组合
-    └── static/
-        ├── index.html
-        ├── css/style.css
-        └── js/app.js
-安装与运行
-环境要求：Python 3.9+
 
-cd backtest_platform
+**安装与运行
+环境要求：Python 3.9+**
+
+**cd backtest_platform
 pip install -r requirements.txt
 python run.py
-浏览器访问 http://127.0.0.1:8000
+浏览器访问 http://127.0.0.1:8000**
 
 内置策略
 单股信号策略
