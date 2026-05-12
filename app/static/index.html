@@ -55,6 +55,18 @@
             <option value="">不复权</option>
           </select>
         </div>
+        <div class="form-group">
+          <label>滑点（%）</label>
+          <input type="number" id="slippage" value="0.01" min="0" max="1" step="0.01" style="width:90px">
+        </div>
+        <div class="form-group">
+          <label>止损（%，0=关闭）</label>
+          <input type="number" id="stopLoss" value="0" min="0" max="50" step="1" style="width:90px">
+        </div>
+        <div class="form-group">
+          <label>止盈（%，0=关闭）</label>
+          <input type="number" id="takeProfit" value="0" min="0" max="200" step="1" style="width:90px">
+        </div>
       </div>
 
       <hr class="divider">
@@ -135,6 +147,12 @@
   <div class="loader-box">
     <div class="spinner"></div>
     <p id="loadingMsg">加载中…</p>
+    <div id="progressBar" style="display:none">
+      <div class="pb-track">
+        <div class="pb-fill"></div>
+      </div>
+      <span class="pb-label">0%</span>
+    </div>
   </div>
 </div>
 
