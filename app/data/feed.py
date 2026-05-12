@@ -82,6 +82,7 @@ def _remove_proxy(func, *args, **kwargs):
 
 
 def _akshare_kline(code: str, start: str, end: str, adjust: str) -> pd.DataFrame:
+    """Eastmoney source — fastest when accessible (push2his.eastmoney.com)."""
     raw = ak.stock_zh_a_hist(
         symbol=code,
         period="daily",
@@ -100,6 +101,48 @@ def _akshare_kline(code: str, start: str, end: str, adjust: str) -> pd.DataFrame
     df = df[[c for c in col_map.values() if c in df.columns]].copy()
     df["date"] = pd.to_datetime(df["date"])
     return df.sort_values("date").reset_index(drop=True)
+
+
+def _sina_kline(code: str, start: str, end: str, adjust: str) -> pd.DataFrame:
+    """
+    Sina source — fallback when push2his.eastmoney.com is blocked.
+    Uses ak.stock_zh_a_daily(symbol='sh600519'/'sz000001').
+    """
+    prefix = "sh" if code.startswith(("6", "9")) else "sz"
+    raw = ak.stock_zh_a_daily(
+        symbol=f"{prefix}{code}",
+        start_date=start.replace("-", ""),
+        end_date=end.replace("-", ""),
+        adjust=adjust or "",
+    )
+    if raw is None or raw.empty:
+        raise ValueError(f"sina 未返回数据：{code}")
+    keep = [c for c in ("date", "open", "high", "low", "close",
+                        "volume", "amount", "turnover") if c in raw.columns]
+    df = raw[keep].copy()
+    df["date"] = pd.to_datetime(df["date"])
+    return df.sort_values("date").reset_index(drop=True)
+
+
+def _tencent_kline(code: str, start: str, end: str, adjust: str) -> pd.DataFrame:
+    """Tencent source — last-resort fallback. Note: no volume column."""
+    prefix = "sh" if code.startswith(("6", "9")) else "sz"
+    raw = ak.stock_zh_a_hist_tx(
+        symbol=f"{prefix}{code}",
+        start_date=start.replace("-", ""),
+        end_date=end.replace("-", ""),
+        adjust=adjust or "",
+    )
+    if raw is None or raw.empty:
+        raise ValueError(f"tencent 未返回数据：{code}")
+    df = raw.copy()
+    df["date"] = pd.to_datetime(df["date"])
+    if "volume" not in df.columns and "amount" in df.columns:
+        # Tencent only gives amount (万元); fake a volume so downstream code doesn't break
+        df["volume"] = (df["amount"] * 10000 / df["close"]).fillna(0).astype(int)
+    keep = [c for c in ("date", "open", "high", "low", "close", "volume", "amount")
+            if c in df.columns]
+    return df[keep].sort_values("date").reset_index(drop=True)
 
 
 def _akshare_index(symbol: str, start: str, end: str) -> Optional[pd.DataFrame]:
@@ -146,27 +189,53 @@ class AkshareDataFeed(DataFeed):
         if cache_file.exists():
             return pd.read_csv(cache_file, parse_dates=["date"])
 
-        for caller in [
-            lambda: _remove_proxy(_akshare_kline, code, start_date, end_date, adjust),
-            lambda: _akshare_kline(code, start_date, end_date, adjust),
+        errors = []
+        for label, caller in [
+            ("eastmoney 无代理",  lambda: _remove_proxy(_akshare_kline, code, start_date, end_date, adjust)),
+            ("eastmoney 系统代理", lambda: _akshare_kline(code, start_date, end_date, adjust)),
+            ("sina 无代理",       lambda: _remove_proxy(_sina_kline, code, start_date, end_date, adjust)),
+            ("sina 系统代理",      lambda: _sina_kline(code, start_date, end_date, adjust)),
+            ("tencent 无代理",    lambda: _remove_proxy(_tencent_kline, code, start_date, end_date, adjust)),
+            ("tencent 系统代理",   lambda: _tencent_kline(code, start_date, end_date, adjust)),
         ]:
             try:
                 df = caller()
-                df.to_csv(cache_file, index=False)
-                return df
-            except Exception:
+                if df is not None and not df.empty:
+                    df.to_csv(cache_file, index=False)
+                    return df
+            except Exception as exc:
+                errors.append(f"[{label}] {type(exc).__name__}: {str(exc)[:120]}")
                 continue
 
-        raise ValueError(f"获取行情数据失败：{code}")
+        detail = "\n  ".join(errors)
+        raise ValueError(f"获取行情数据失败：{code}\n  {detail}")
 
     def get_stock_name(self, code: str) -> str:
+        # First try: the daily universe snapshot (populated by portfolio mode)
         try:
-            df = ak.stock_individual_info_em(symbol=code)
-            row = df[df["item"] == "股票简称"]
-            if not row.empty:
-                return str(row.iloc[0]["value"])
+            from datetime import date as _date
+            snap = CACHE_DIR / f"universe_snapshot_{_date.today().strftime('%Y%m%d')}.csv"
+            if snap.exists():
+                import pandas as _pd
+                df = _pd.read_csv(snap, dtype={"code": str})
+                row = df[df["code"] == code]
+                if not row.empty:
+                    return str(row.iloc[0]["name"])
         except Exception:
             pass
+
+        # Fallback: eastmoney individual info (may be blocked)
+        for caller in [
+            lambda: _remove_proxy(ak.stock_individual_info_em, symbol=code),
+            lambda: ak.stock_individual_info_em(symbol=code),
+        ]:
+            try:
+                df = caller()
+                row = df[df["item"] == "股票简称"]
+                if not row.empty:
+                    return str(row.iloc[0]["value"])
+            except Exception:
+                continue
         return code
 
 
