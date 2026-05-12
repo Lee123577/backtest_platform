@@ -1,6 +1,18 @@
+# Core
 fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
-akshare>=1.12.0
 pandas>=2.1.0
 numpy>=1.26.0
 python-multipart>=0.0.6
+
+# Default data source
+akshare>=1.12.0
+curl_cffi>=0.6.0          # fallback TLS impersonation for akshare market snapshot
+
+# Optional data sources (install whichever you use)
+# tqsdk>=3.6.0            # 天勤量化: pip install tqsdk
+# rqdatac                 # 米矿 rqdata: contact RiceQuant for licence
+
+# Optional live trading (install whichever gateway you use)
+# openctp-ctp             # SimNow / OpenCTP CTP wheels: pip install openctp-ctp
+# vnpy_ctp                # via vnpy ecosystem: pip install vnpy_ctp

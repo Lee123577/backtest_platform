@@ -236,8 +236,9 @@ async function loadKline() {
     if (!res.ok) throw new Error(data.detail || '请求失败');
 
     await fetchStockTag(code);
-    renderKline(data.data, `${document.getElementById('stockTag').textContent} (${code})`);
     document.getElementById('klinePanel').style.display = '';
+    renderKline(data.data, `${document.getElementById('stockTag').textContent} (${code})`);
+    klineChart?.resize();
     scrollTo('klinePanel');
   } catch (e) {
     showError(e.message);
@@ -256,6 +257,10 @@ async function runBacktest() {
   const { start, end, adjust } = getDateParams();
   const capital = parseFloat(document.getElementById('capital').value) || 100000;
 
+  const slippagePct = parseFloat(document.getElementById('slippage').value) || 0;
+  const stopLossPct = parseFloat(document.getElementById('stopLoss').value) || 0;
+  const takeProfitPct = parseFloat(document.getElementById('takeProfit').value) || 0;
+
   const payload = {
     stock_code: code,
     start_date: start, end_date: end,
@@ -263,6 +268,9 @@ async function runBacktest() {
     strategies: instances.map(inst => ({
       strategy_id: inst.id, params: inst.params, label: inst.label,
     })),
+    slippage_rate: slippagePct / 100,
+    stop_loss: stopLossPct > 0 ? stopLossPct / 100 : null,
+    take_profit: takeProfitPct > 0 ? takeProfitPct / 100 : null,
   };
 
   showLoading('正在回测，请稍候…');
@@ -278,11 +286,17 @@ async function runBacktest() {
 
     const title = `${data.stock_name || ''} (${data.stock_code})`;
     document.getElementById('stockTag').textContent = data.stock_name || '';
-    renderKline(data.kline, title);
+
+    // Show panels BEFORE chart init so ECharts can measure real dimensions
     document.getElementById('klinePanel').style.display = '';
+    document.getElementById('resultsPanel').style.display = '';
+
+    renderKline(data.kline, title);
+    klineChart?.resize();
 
     renderResults(data.results, data.benchmark, `${data.stock_name || data.stock_code}  ${start} → ${end}`);
-    document.getElementById('resultsPanel').style.display = '';
+    equityChart?.resize();
+
     scrollTo('resultsPanel');
   } catch (e) {
     showError(e.message);
@@ -291,7 +305,7 @@ async function runBacktest() {
   }
 }
 
-// ── Portfolio backtest ────────────────────────────────────────────────────────
+// ── Portfolio backtest (SSE streaming) ───────────────────────────────────────
 async function runPortfolioBacktest() {
   if (!selectedPortfolio) return showPortfolioError('请先选择一个选股策略');
   clearPortfolioError();
@@ -299,14 +313,11 @@ async function runPortfolioBacktest() {
   const start = document.getElementById('pStartDate').value;
   const end = document.getElementById('pEndDate').value;
   const capital = parseFloat(document.getElementById('pCapital').value) || 100000;
-
   const cap_min = selectedPortfolio.params['cap_min'] ?? 20;
   const cap_max = selectedPortfolio.params['cap_max'] ?? 30;
 
-  showLoading(
-    `正在扫描全市场（市值 ${cap_min}~${cap_max} 亿元），` +
-    `首次运行需下载历史数据，请耐心等待…`
-  );
+  showLoading('正在准备回测…');
+  showProgressBar(0);
 
   const payload = {
     strategy_id: selectedPortfolio.id,
@@ -323,27 +334,60 @@ async function runPortfolioBacktest() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.detail || '组合回测失败');
 
-    document.getElementById('klinePanel').style.display = 'none';
-
-    const subtitle = `${selectedPortfolio.strategy.name}  市值${data.cap_range}  ` +
-      `共${data.universe_count}只股票  ${start} → ${end}`;
-    renderResults(data.results, data.benchmark, subtitle, true);
-
-    // Show holdings log if available
-    const result = data.results?.[0];
-    if (result?.holdings_log?.length) {
-      renderHoldingsLog(result.holdings_log);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || '请求失败');
     }
 
-    document.getElementById('resultsPanel').style.display = '';
-    scrollTo('resultsPanel');
+    // Read SSE stream line by line
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+
+      // Each SSE event ends with \n\n
+      const events = buf.split('\n\n');
+      buf = events.pop(); // last chunk may be incomplete
+
+      for (const block of events) {
+        const line = block.split('\n').find(l => l.startsWith('data: '));
+        if (!line) continue;
+        let evt;
+        try { evt = JSON.parse(line.slice(6)); } catch { continue; }
+
+        if (evt.type === 'progress') {
+          showLoading(evt.msg || '处理中…');
+          if (evt.pct != null) showProgressBar(evt.pct);
+
+        } else if (evt.type === 'error') {
+          throw new Error(evt.msg);
+
+        } else if (evt.type === 'result') {
+          document.getElementById('klinePanel').style.display = 'none';
+          document.getElementById('resultsPanel').style.display = '';
+
+          const subtitle = `${selectedPortfolio.strategy.name}  市值${evt.cap_range}  ` +
+            `共${evt.universe_count}只股票  ${start} → ${end}`;
+          renderResults(evt.results, evt.benchmark, subtitle, true);
+          equityChart?.resize();
+
+          const result = evt.results?.[0];
+          if (result?.holdings_log?.length) renderHoldingsLog(result.holdings_log);
+
+          scrollTo('resultsPanel');
+        }
+      }
+    }
   } catch (e) {
     showPortfolioError(e.message);
   } finally {
     hideLoading();
+    hideProgressBar();
   }
 }
 
@@ -418,13 +462,16 @@ function renderResults(results, benchmark, subtitle, isPortfolio = false) {
 }
 
 const METRIC_DEFS = [
-  { key: 'total_return',  label: '总收益率',    unit: '%',  kind: 'pct' },
-  { key: 'annual_return', label: '年化收益率',  unit: '%',  kind: 'pct' },
-  { key: 'max_drawdown',  label: '最大回撤',    unit: '%',  kind: 'dd'  },
-  { key: 'sharpe_ratio',  label: '夏普比率',    unit: '',   kind: 'sharpe' },
-  { key: 'win_rate',      label: '胜率',        unit: '%',  kind: 'pct' },
-  { key: 'trade_count',   label: '完整交易次数', unit: '次', kind: 'neutral' },
-  { key: 'final_value',   label: '最终资产',    unit: '元', kind: 'money' },
+  { key: 'total_return',      label: '总收益率',      unit: '%',  kind: 'pct' },
+  { key: 'annual_return',     label: '年化收益率',    unit: '%',  kind: 'pct' },
+  { key: 'max_drawdown',      label: '最大回撤',      unit: '%',  kind: 'dd'  },
+  { key: 'max_drawdown_days', label: '最大回撤天数',  unit: '天', kind: 'neutral' },
+  { key: 'sharpe_ratio',      label: '夏普比率',      unit: '',   kind: 'sharpe' },
+  { key: 'sortino_ratio',     label: 'Sortino比率',   unit: '',   kind: 'sharpe' },
+  { key: 'calmar_ratio',      label: 'Calmar比率',    unit: '',   kind: 'sharpe' },
+  { key: 'win_rate',          label: '胜率',          unit: '%',  kind: 'pct' },
+  { key: 'trade_count',       label: '完整交易次数',  unit: '次', kind: 'neutral' },
+  { key: 'final_value',       label: '最终资产',      unit: '元', kind: 'money' },
 ];
 
 function renderMetrics(results, benchmark) {
@@ -635,6 +682,18 @@ function showLoading(msg) {
   document.getElementById('loading').style.display = 'flex';
 }
 function hideLoading() { document.getElementById('loading').style.display = 'none'; }
+
+function showProgressBar(pct) {
+  const bar = document.getElementById('progressBar');
+  if (!bar) return;
+  bar.style.display = 'block';
+  bar.querySelector('.pb-fill').style.width = `${Math.min(100, pct)}%`;
+  bar.querySelector('.pb-label').textContent = `${Math.round(pct)}%`;
+}
+function hideProgressBar() {
+  const bar = document.getElementById('progressBar');
+  if (bar) bar.style.display = 'none';
+}
 
 function showError(msg) {
   document.getElementById('settingsError').innerHTML = `<div class="error-box">${escHtml(msg)}</div>`;

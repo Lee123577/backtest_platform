@@ -31,6 +31,7 @@ def run_portfolio_backtest(
     commission_rate: float = 0.0003,
     min_commission: float = 5.0,
     stamp_tax_rate: float = 0.001,
+    slippage_rate: float = 0.0001,
 ) -> Dict[str, Any]:
 
     hold_days: int = int(strategy.params.get("hold_days", 5))
@@ -83,7 +84,7 @@ def run_portfolio_backtest(
             # ── Sell all current positions at today's OPEN ──────────────────
             for code, shares in list(holdings.items()):
                 if code in day_prices and shares > 0:
-                    sell_price = day_prices[code]["open"]
+                    sell_price = day_prices[code]["open"] * (1 - slippage_rate)
                     revenue = shares * sell_price
                     comm = max(revenue * commission_rate, min_commission)
                     tax = revenue * stamp_tax_rate
@@ -112,7 +113,7 @@ def run_portfolio_backtest(
                 cash_per = capital / len(new_stocks)
                 bought = []
                 for code in new_stocks:
-                    buy_price = day_prices[code]["open"]
+                    buy_price = day_prices[code]["open"] * (1 + slippage_rate)
                     if buy_price <= 0:
                         continue
                     shares = int(cash_per / buy_price / 100) * 100
@@ -159,7 +160,7 @@ def run_portfolio_backtest(
         last_prices = price_lookup.get(all_dates[-1], {})
         for code, shares in holdings.items():
             if code in last_prices and shares > 0:
-                p = last_prices[code]["close"]
+                p = last_prices[code]["close"] * (1 - slippage_rate)
                 revenue = shares * p
                 comm = max(revenue * commission_rate, min_commission)
                 tax = revenue * stamp_tax_rate
@@ -173,14 +174,31 @@ def run_portfolio_backtest(
     days = len(equity)
     annual_ret = (1 + total_ret) ** (252 / days) - 1 if days > 0 else 0.0
 
-    max_dd = float(((equity - equity.cummax()) / equity.cummax()).min())
+    drawdown_series = (equity - equity.cummax()) / equity.cummax()
+    max_dd = float(drawdown_series.min())
+
+    # Max drawdown duration
+    underwater = drawdown_series < 0
+    max_dd_days, cur = 0, 0
+    for u in underwater:
+        cur = cur + 1 if u else 0
+        max_dd_days = max(max_dd_days, cur)
 
     daily_ret = equity.pct_change().dropna()
     rf_daily = 0.03 / 252
+
     sharpe = (
         float((daily_ret.mean() - rf_daily) / daily_ret.std() * np.sqrt(252))
         if daily_ret.std() > 0 else 0.0
     )
+
+    downside = daily_ret[daily_ret < rf_daily] - rf_daily
+    sortino = (
+        float((daily_ret.mean() - rf_daily) / downside.std() * np.sqrt(252))
+        if len(downside) > 1 and downside.std() > 0 else 0.0
+    )
+
+    calmar = round(annual_ret / abs(max_dd), 3) if max_dd != 0 else 0.0
 
     code_buy_prices: Dict[str, List[float]] = defaultdict(list)
     win, total = 0, 0
@@ -200,7 +218,10 @@ def run_portfolio_backtest(
             "total_return": round(total_ret * 100, 2),
             "annual_return": round(annual_ret * 100, 2),
             "max_drawdown": round(max_dd * 100, 2),
+            "max_drawdown_days": max_dd_days,
             "sharpe_ratio": round(sharpe, 3),
+            "sortino_ratio": round(sortino, 3),
+            "calmar_ratio": calmar,
             "win_rate": round(win / total * 100, 2) if total > 0 else 0.0,
             "trade_count": total,
             "final_value": round(float(equity.iloc[-1]), 2),
