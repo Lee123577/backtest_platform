@@ -27,6 +27,18 @@ CACHE_DIR = Path(__file__).parent.parent.parent / "data" / "cache"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def atomic_to_csv(df: pd.DataFrame, target: Path) -> None:
+    """Atomic CSV write: write to .tmp sibling then os.replace.
+
+    Prevents corrupted cache files when multiple threads/processes
+    write the same path concurrently (see ThreadPoolExecutor in
+    market_data.download_universe_history).
+    """
+    tmp = target.with_suffix(target.suffix + f".{os.getpid()}.tmp")
+    df.to_csv(tmp, index=False)
+    os.replace(tmp, target)
+
+
 # ── Abstract base ──────────────────────────────────────────────────────────────
 
 class DataFeed(ABC):
@@ -175,7 +187,7 @@ def _akshare_index(symbol: str, start: str, end: str) -> Optional[pd.DataFrame]:
     df = df[[c for c in col_map.values() if c in df.columns]].copy()
     df["date"] = pd.to_datetime(df["date"])
     df = df.sort_values("date").reset_index(drop=True)
-    df.to_csv(cache, index=False)
+    atomic_to_csv(df, cache)
     return df
 
 
@@ -201,7 +213,7 @@ class AkshareDataFeed(DataFeed):
             try:
                 df = caller()
                 if df is not None and not df.empty:
-                    df.to_csv(cache_file, index=False)
+                    atomic_to_csv(df, cache_file)
                     return df
             except Exception as exc:
                 errors.append(f"[{label}] {type(exc).__name__}: {str(exc)[:120]}")
@@ -287,7 +299,7 @@ class TqDataFeed(DataFeed):
         end_dt = pd.to_datetime(end_date)
         df = df[(df["date"] >= start_dt) & (df["date"] <= end_dt)].reset_index(drop=True)
 
-        df.to_csv(cache_file, index=False)
+        atomic_to_csv(df, cache_file)
         return df
 
     def get_stock_name(self, code: str) -> str:
@@ -347,7 +359,7 @@ class RqdataDataFeed(DataFeed):
 
         df = raw.reset_index().rename(columns={"index": "date"})
         df["date"] = pd.to_datetime(df["date"])
-        df.to_csv(cache_file, index=False)
+        atomic_to_csv(df, cache_file)
         return df
 
     def get_stock_name(self, code: str) -> str:

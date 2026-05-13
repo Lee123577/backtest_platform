@@ -1,5 +1,6 @@
 import asyncio
 import json
+from datetime import date as _date
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -9,6 +10,19 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+
+
+def _validate_date_range(start: str, end: str) -> None:
+    """Raise HTTPException(400) on bad date input — keep error UX consistent."""
+    try:
+        s = _date.fromisoformat(start)
+        e = _date.fromisoformat(end)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "日期格式须为 YYYY-MM-DD")
+    if s >= e:
+        raise HTTPException(400, "开始日期必须早于结束日期")
+    if s.year < 1990:
+        raise HTTPException(400, "开始日期不能早于 1990 年")
 
 from .data.data_loader import get_kline_data, get_stock_name, normalize_code
 from .data.feed import CACHE_DIR
@@ -54,6 +68,7 @@ async def api_stock_info(code: str):
 
 @app.get("/api/stock/{code}/kline")
 async def api_kline(code: str, start_date: str, end_date: str, adjust: str = "qfq"):
+    _validate_date_range(start_date, end_date)
     code = normalize_code(code)
     try:
         df = get_kline_data(code, start_date, end_date, adjust)
@@ -92,6 +107,10 @@ class BacktestRequest(BaseModel):
 
 @app.post("/api/backtest")
 async def api_backtest(req: BacktestRequest):
+    _validate_date_range(req.start_date, req.end_date)
+    if req.initial_capital <= 0:
+        raise HTTPException(400, "初始资金必须大于 0")
+
     code = normalize_code(req.stock_code)
 
     try:
@@ -160,7 +179,15 @@ async def api_portfolio_backtest(req: PortfolioBacktestRequest):
     Event format:  data: <json>\n\n
     Types: "progress" {msg, pct?}  |  "result" {…}  |  "error" {msg}
     """
+    # Pre-flight validation — fail fast with 400 before opening the stream
+    _validate_date_range(req.start_date, req.end_date)
+    if req.initial_capital <= 0:
+        raise HTTPException(400, "初始资金必须大于 0")
+
     def _sse(payload: dict) -> str:
+        # Strip any control chars from msg to prevent SSE-stream injection
+        if isinstance(payload.get("msg"), str):
+            payload["msg"] = payload["msg"].replace("\r", " ").replace("\n", " ")
         return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
     async def generate():

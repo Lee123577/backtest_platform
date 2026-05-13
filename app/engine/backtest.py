@@ -125,7 +125,7 @@ def run_backtest(
                     if cost + comm <= capital:
                         position = shares
                         entry_price = exec_price
-                        capital -= cost + comm
+                        capital = round(capital - cost - comm, 2)
                         trades.append({
                             "date": str(row["date"].date()),
                             "type": "买入",
@@ -133,7 +133,7 @@ def run_backtest(
                             "shares": shares,
                             "amount": round(cost, 2),
                             "commission": round(comm, 2),
-                            "capital": round(capital, 2),
+                            "capital": capital,
                         })
 
             elif sig == -1 and position > 0:
@@ -141,7 +141,7 @@ def run_backtest(
                 revenue = position * exec_price
                 comm = max(revenue * commission_rate, min_commission)
                 tax = revenue * stamp_tax_rate
-                capital += revenue - comm - tax
+                capital = round(capital + revenue - comm - tax, 2)
                 trades.append({
                     "date": str(row["date"].date()),
                     "type": "卖出",
@@ -149,7 +149,7 @@ def run_backtest(
                     "shares": position,
                     "amount": round(revenue, 2),
                     "commission": round(comm + tax, 2),
-                    "capital": round(capital, 2),
+                    "capital": capital,
                 })
                 position = 0
                 entry_price = 0.0
@@ -161,6 +161,9 @@ def run_backtest(
                 forced_sell = True
             elif take_profit and close_price >= entry_price * (1 + take_profit):
                 forced_sell = True
+        else:
+            # Defensive: clear any stale flag whenever we hold no position
+            forced_sell = False
 
         equity_values.append(capital + position * close_price)
 

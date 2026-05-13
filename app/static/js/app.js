@@ -232,12 +232,36 @@ function updateRunBtn() {
   document.getElementById('runBtn').disabled = instances.length === 0;
 }
 
+// ── Input validation helpers ──────────────────────────────────────────────────
+function validateStockCode(code) {
+  if (!code) return '请输入股票代码';
+  if (!/^\d{6}$/.test(code)) return '股票代码须为6位数字（如 000001）';
+  return null;
+}
+
+function validateDateRange(start, end) {
+  if (!start || !end) return '请填写完整的开始和结束日期';
+  if (new Date(start) >= new Date(end)) return '开始日期必须早于结束日期';
+  return null;
+}
+
+function validatePositive(val, label) {
+  if (!Number.isFinite(val) || val <= 0) return `${label}必须为大于 0 的数字`;
+  return null;
+}
+
 // ── Load K-line (signal mode) ──────────────────────────────────────────────────
 async function loadKline() {
   const code = getCode();
-  if (!code) return showError('请输入股票代码');
+  const codeErr = validateStockCode(code);
+  if (codeErr) return showError(codeErr);
 
   const { start, end, adjust } = getDateParams();
+  const dateErr = validateDateRange(start, end);
+  if (dateErr) return showError(dateErr);
+
+  const btn = document.getElementById('loadKlineBtn');
+  btn.disabled = true;
   showLoading('获取K线数据…');
   clearError();
 
@@ -257,18 +281,26 @@ async function loadKline() {
     showError(e.message);
   } finally {
     hideLoading();
+    btn.disabled = false;
   }
 }
 
 // ── Single-stock backtest ──────────────────────────────────────────────────────
 async function runBacktest() {
   const code = getCode();
-  if (!code) return showError('请输入股票代码');
+  const codeErr = validateStockCode(code);
+  if (codeErr) return showError(codeErr);
   if (instances.length === 0) return showError('请至少添加一个策略');
 
-  clearError();
   const { start, end, adjust } = getDateParams();
-  const capital = parseFloat(document.getElementById('capital').value) || 100000;
+  const dateErr = validateDateRange(start, end);
+  if (dateErr) return showError(dateErr);
+
+  const capital = parseFloat(document.getElementById('capital').value);
+  const capErr = validatePositive(capital, '初始资金');
+  if (capErr) return showError(capErr);
+
+  clearError();
 
   const slippagePct = parseFloat(document.getElementById('slippage').value) || 0;
   const stopLossPct = parseFloat(document.getElementById('stopLoss').value) || 0;
@@ -286,6 +318,8 @@ async function runBacktest() {
     take_profit: takeProfitPct > 0 ? takeProfitPct / 100 : null,
   };
 
+  const runBtn = document.getElementById('runBtn');
+  runBtn.disabled = true;
   showLoading('正在回测，请稍候…');
 
   try {
@@ -315,19 +349,24 @@ async function runBacktest() {
     showError(e.message);
   } finally {
     hideLoading();
+    runBtn.disabled = instances.length === 0;
   }
 }
 
 // ── Portfolio backtest (SSE streaming) ───────────────────────────────────────
 async function runPortfolioBacktest() {
   if (!selectedPortfolio) return showPortfolioError('请先选择一个选股策略');
-  clearPortfolioError();
 
   const start = document.getElementById('pStartDate').value;
   const end = document.getElementById('pEndDate').value;
-  const capital = parseFloat(document.getElementById('pCapital').value) || 100000;
-  const cap_min = selectedPortfolio.params['cap_min'] ?? 20;
-  const cap_max = selectedPortfolio.params['cap_max'] ?? 30;
+  const dateErr = validateDateRange(start, end);
+  if (dateErr) return showPortfolioError(dateErr);
+
+  const capital = parseFloat(document.getElementById('pCapital').value);
+  const capErr = validatePositive(capital, '初始资金');
+  if (capErr) return showPortfolioError(capErr);
+
+  clearPortfolioError();
 
   showLoading('正在准备回测…');
   showProgressBar(0);
@@ -339,6 +378,35 @@ async function runPortfolioBacktest() {
     start_date: start,
     end_date: end,
     initial_capital: capital,
+  };
+
+  const runBtn = document.getElementById('runPortfolioBtn');
+  runBtn.disabled = true;
+
+  // Process a single SSE 'data: …' line. Throws on error events.
+  const processEvent = (line) => {
+    let evt;
+    try { evt = JSON.parse(line.slice(6)); } catch { return; }
+
+    if (evt.type === 'progress') {
+      showLoading(evt.msg || '处理中…');
+      if (evt.pct != null) showProgressBar(evt.pct);
+    } else if (evt.type === 'error') {
+      throw new Error(evt.msg);
+    } else if (evt.type === 'result') {
+      document.getElementById('klinePanel').style.display = 'none';
+      document.getElementById('resultsPanel').style.display = '';
+
+      const subtitle = `${selectedPortfolio.strategy.name}  市值${evt.cap_range}  ` +
+        `共${evt.universe_count}只股票  ${start} → ${end}`;
+      renderResults(evt.results, evt.benchmark, subtitle, true);
+      equityChart?.resize();
+
+      const result = evt.results?.[0];
+      if (result?.holdings_log?.length) renderHoldingsLog(result.holdings_log);
+
+      scrollTo('resultsPanel');
+    }
   };
 
   try {
@@ -353,7 +421,6 @@ async function runPortfolioBacktest() {
       throw new Error(err.detail || '请求失败');
     }
 
-    // Read SSE stream line by line
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buf = '';
@@ -363,51 +430,35 @@ async function runPortfolioBacktest() {
       if (done) break;
       buf += decoder.decode(value, { stream: true });
 
-      // Each SSE event ends with \n\n
       const events = buf.split('\n\n');
-      buf = events.pop(); // last chunk may be incomplete
+      buf = events.pop();   // last chunk may be incomplete
 
       for (const block of events) {
         const line = block.split('\n').find(l => l.startsWith('data: '));
-        if (!line) continue;
-        let evt;
-        try { evt = JSON.parse(line.slice(6)); } catch { continue; }
-
-        if (evt.type === 'progress') {
-          showLoading(evt.msg || '处理中…');
-          if (evt.pct != null) showProgressBar(evt.pct);
-
-        } else if (evt.type === 'error') {
-          throw new Error(evt.msg);
-
-        } else if (evt.type === 'result') {
-          document.getElementById('klinePanel').style.display = 'none';
-          document.getElementById('resultsPanel').style.display = '';
-
-          const subtitle = `${selectedPortfolio.strategy.name}  市值${evt.cap_range}  ` +
-            `共${evt.universe_count}只股票  ${start} → ${end}`;
-          renderResults(evt.results, evt.benchmark, subtitle, true);
-          equityChart?.resize();
-
-          const result = evt.results?.[0];
-          if (result?.holdings_log?.length) renderHoldingsLog(result.holdings_log);
-
-          scrollTo('resultsPanel');
-        }
+        if (line) processEvent(line);
       }
+    }
+
+    // Flush any trailing event that arrived without a final \n\n
+    buf += decoder.decode();
+    if (buf.trim()) {
+      const line = buf.split('\n').find(l => l.startsWith('data: '));
+      if (line) processEvent(line);
     }
   } catch (e) {
     showPortfolioError(e.message);
   } finally {
     hideLoading();
     hideProgressBar();
+    runBtn.disabled = false;
   }
 }
 
 // ── K-line chart ──────────────────────────────────────────────────────────────
 function renderKline(data, title) {
   const el = document.getElementById('klineChart');
-  if (!klineChart) klineChart = echarts.init(el, 'dark');
+  if (klineChart) { klineChart.dispose(); klineChart = null; }
+  klineChart = echarts.init(el, 'dark');
   document.getElementById('klinePanelTitle').textContent = `K线图  ${title}`;
 
   const dates  = data.map(d => d.date);
@@ -415,7 +466,11 @@ function renderKline(data, title) {
   const vols   = data.map(d => d.volume);
   const upColors = data.map(d => d.close >= d.open ? '#ef5350' : '#26a69a');
 
-  const startPct = Math.max(0, Math.round((1 - 120 / data.length) * 100));
+  // Adaptive default window: show ~25% of range, clamped to [20, 120] bars
+  const visible = Math.min(120, Math.max(20, Math.floor(data.length * 0.25)));
+  const startPct = data.length > visible
+    ? Math.round((1 - visible / data.length) * 100)
+    : 0;
 
   klineChart.setOption({
     backgroundColor: '#1c2128', animation: false,
@@ -538,7 +593,8 @@ const LINE_COLORS = ['#58a6ff', '#f4a261', '#e63946', '#2a9d8f', '#e9c46a', '#a8
 
 function renderEquityChart(results, benchmark) {
   const el = document.getElementById('equityChart');
-  if (!equityChart) equityChart = echarts.init(el, 'dark');
+  if (equityChart) { equityChart.dispose(); equityChart = null; }
+  equityChart = echarts.init(el, 'dark');
 
   const series = [];
   if (benchmark?.equity_curve?.length) {
