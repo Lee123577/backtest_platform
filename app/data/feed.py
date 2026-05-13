@@ -33,10 +33,20 @@ def atomic_to_csv(df: pd.DataFrame, target: Path) -> None:
     Prevents corrupted cache files when multiple threads/processes
     write the same path concurrently (see ThreadPoolExecutor in
     market_data.download_universe_history).
+
+    On any failure the .tmp file is cleaned up so we don't litter
+    the cache dir with orphans (e.g. when target is locked on Windows).
     """
     tmp = target.with_suffix(target.suffix + f".{os.getpid()}.tmp")
-    df.to_csv(tmp, index=False)
-    os.replace(tmp, target)
+    try:
+        df.to_csv(tmp, index=False)
+        os.replace(tmp, target)
+    except Exception:
+        try:
+            tmp.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise
 
 
 # ── Abstract base ──────────────────────────────────────────────────────────────
