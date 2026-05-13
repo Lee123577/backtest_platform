@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .data.data_loader import get_kline_data, get_stock_name, normalize_code
+from .data.feed import CACHE_DIR
 from .data.market_data import (
     download_universe_history,
     get_index_history,
@@ -194,15 +195,32 @@ async def api_portfolio_backtest(req: PortfolioBacktestRequest):
             return
 
         codes = universe_df["code"].tolist()
-        yield _sse({"type": "progress",
-                    "msg": f"股票池共 {len(codes)} 只，开始下载历史数据…", "pct": 2})
+
+        # Pre-check how many codes are already cached
+        n_cached = sum(
+            1 for c in codes
+            if (CACHE_DIR / f"{c}_{req.start_date}_{req.end_date}_qfq.csv").exists()
+        )
+        n_download = len(codes) - n_cached
+
+        if n_download == 0:
+            step2_msg = f"股票池共 {len(codes)} 只，全部命中本地缓存，加载中…"
+        else:
+            step2_msg = (
+                f"股票池共 {len(codes)} 只"
+                f"（{n_cached} 只已缓存，{n_download} 只需下载）…"
+            )
+        yield _sse({"type": "progress", "msg": step2_msg, "pct": 2})
 
         # ── Step 2: Download with live progress ──────────────────────────────
         progress_queue: asyncio.Queue = asyncio.Queue()
 
         def on_progress(done: int, total: int):
             pct = 2 + int(done / total * 88)
-            msg = f"下载历史数据  {done} / {total}"
+            if n_download == 0:
+                msg = f"从本地缓存加载  {done} / {total}"
+            else:
+                msg = f"处理数据  {done} / {total}（下载 {n_download} 只 / 缓存 {n_cached} 只）"
             loop.call_soon_threadsafe(
                 progress_queue.put_nowait,
                 {"type": "progress", "msg": msg, "pct": pct},
