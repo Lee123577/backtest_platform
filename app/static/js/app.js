@@ -79,14 +79,22 @@ function renderSignalStrategyGrid() {
 }
 
 function renderPortfolioStrategyGrid() {
-  document.getElementById('portfolioStrategyGrid').innerHTML = portfolioStrategies.map(s => `
-    <div class="strategy-card ${selectedPortfolio?.id === s.id ? 'selected-card' : ''}"
-         onclick="selectPortfolioStrategy('${s.id}')">
-      <div class="sc-name">${escHtml(s.name)}</div>
-      <div class="sc-desc">${escHtml(s.description)}</div>
-      <button class="btn btn-ghost sc-add">✓ 选择</button>
-    </div>
-  `).join('');
+  document.getElementById('portfolioStrategyGrid').innerHTML = portfolioStrategies.map(s => {
+    const isSelected = selectedPortfolio?.id === s.id;
+    return `
+      <div class="strategy-card${isSelected ? ' selected-card' : ''}"
+           onclick="selectPortfolioStrategy('${s.id}')">
+        <div class="sc-name">
+          ${escHtml(s.name)}
+          ${isSelected ? '<span class="sc-count-badge">✓</span>' : ''}
+        </div>
+        <div class="sc-desc">${escHtml(s.description)}</div>
+        <button class="btn ${isSelected ? 'btn-accent' : 'btn-ghost'} sc-add">
+          ${isSelected ? '✓ 已选择' : '✓ 选择'}
+        </button>
+      </div>
+    `;
+  }).join('');
 }
 
 // ── Portfolio strategy selection ──────────────────────────────────────────────
@@ -185,15 +193,11 @@ function updateLabel(idx, val) {
 
 function renderInstances() {
   const list = document.getElementById('instancesList');
-  const hint = document.getElementById('emptyHint');
 
   if (instances.length === 0) {
-    hint.style.display = '';
-    list.innerHTML = '';
-    list.appendChild(hint);
+    list.innerHTML = '<div class="empty-hint" id="emptyHint">请从上方选择策略并添加</div>';
     return;
   }
-  hint.style.display = 'none';
 
   list.innerHTML = instances.map((inst, idx) => {
     const paramRows = Object.entries(inst.strategy.params || {}).map(([key, schema]) => `
