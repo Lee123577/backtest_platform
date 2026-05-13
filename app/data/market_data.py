@@ -20,7 +20,7 @@ import pandas as pd
 import requests as _req
 
 from .data_loader import CACHE_DIR, get_kline_data
-from .feed import get_feed
+from .feed import atomic_to_csv, get_feed
 
 SNAP_CACHE = CACHE_DIR / f"universe_snapshot_{Date.today().strftime('%Y%m%d')}.csv"
 
@@ -63,9 +63,10 @@ def _fetch_via_xuangu() -> pd.DataFrame:
     })
 
     records: list = []
-    page, ps = 1, 1000
+    ps = 1000
+    MAX_PAGES = 20  # safety cap (20 * 1000 = 20k stocks, well above A-share total)
 
-    while True:
+    for page in range(1, MAX_PAGES + 1):
         params = {
             "st": "TOTAL_MARKET_CAP",
             "sr": -1,
@@ -100,9 +101,8 @@ def _fetch_via_xuangu() -> pd.DataFrame:
             except (TypeError, ValueError):
                 continue
 
-        if not result.get("nextpage") or not items:
+        if not result.get("nextpage") or not items or len(items) < ps:
             break
-        page += 1
         time.sleep(0.15)
 
     if not records:
@@ -246,7 +246,7 @@ def get_universe_snapshot() -> pd.DataFrame:
     # ── Attempt 1: xuangu API (data.eastmoney.com, reliable) ──────────────────
     try:
         df = _fetch_via_xuangu()
-        df.to_csv(SNAP_CACHE, index=False)
+        atomic_to_csv(df, SNAP_CACHE)
         return df
     except Exception as exc:
         errors.append(f"[方式1 xuangu选股器] {exc}")
@@ -256,7 +256,7 @@ def get_universe_snapshot() -> pd.DataFrame:
     try:
         raw = _call_no_proxy(ak.stock_zh_a_spot_em)
         df = _parse_akshare_raw(raw)
-        df.to_csv(SNAP_CACHE, index=False)
+        atomic_to_csv(df, SNAP_CACHE)
         return df
     except Exception as exc:
         errors.append(f"[方式2 akshare无代理] {exc}")
@@ -266,7 +266,7 @@ def get_universe_snapshot() -> pd.DataFrame:
     try:
         raw = ak.stock_zh_a_spot_em()
         df = _parse_akshare_raw(raw)
-        df.to_csv(SNAP_CACHE, index=False)
+        atomic_to_csv(df, SNAP_CACHE)
         return df
     except Exception as exc:
         errors.append(f"[方式3 akshare系统代理] {exc}")
@@ -274,7 +274,7 @@ def get_universe_snapshot() -> pd.DataFrame:
     # ── Attempt 4: curl_cffi Chrome TLS 模拟 ──────────────────────────────────
     try:
         df = _fetch_via_cffi()
-        df.to_csv(SNAP_CACHE, index=False)
+        atomic_to_csv(df, SNAP_CACHE)
         return df
     except Exception as exc:
         errors.append(f"[方式4 curl_cffi] {exc}")

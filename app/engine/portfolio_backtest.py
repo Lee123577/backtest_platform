@@ -69,6 +69,12 @@ def run_portfolio_backtest(
     # Updated at the END of each day loop iteration.
     rolling_prices: Dict[str, List[float]] = defaultdict(list)
 
+    # Last known close per held code — used to value suspended positions
+    # (when day_prices is missing that code, we fall back to this snapshot
+    # instead of dropping the position from equity, which would cause an
+    # unrealistic equity dip on suspension days).
+    last_close: Dict[str, float] = {}
+
     for date in all_dates:
         day_prices = price_lookup.get(date, {})
 
@@ -82,13 +88,16 @@ def run_portfolio_backtest(
                 close_for_selection[code] = hist[-1] if hist else day_prices[code]["open"]
 
             # ── Sell all current positions at today's OPEN ──────────────────
+            # Suspended stocks (no day_prices entry) cannot be sold today;
+            # keep them in holdings so they liquidate on the next available bar.
+            kept: Dict[str, int] = {}
             for code, shares in list(holdings.items()):
                 if code in day_prices and shares > 0:
                     sell_price = day_prices[code]["open"] * (1 - slippage_rate)
                     revenue = shares * sell_price
                     comm = max(revenue * commission_rate, min_commission)
                     tax = revenue * stamp_tax_rate
-                    capital += revenue - comm - tax
+                    capital = round(capital + revenue - comm - tax, 2)
                     trades.append({
                         "date": str(date.date()),
                         "type": "卖出",
@@ -97,9 +106,11 @@ def run_portfolio_backtest(
                         "shares": shares,
                         "amount": round(revenue, 2),
                         "commission": round(comm + tax, 2),
-                        "capital": round(capital, 2),
+                        "capital": capital,
                     })
-            holdings = {}
+                elif shares > 0:
+                    kept[code] = shares  # suspended; carry over
+            holdings = kept
 
             # ── Let strategy choose new stocks ──────────────────────────────
             new_stocks = strategy.select_stocks(
@@ -122,8 +133,8 @@ def run_portfolio_backtest(
                     cost = shares * buy_price
                     comm = max(cost * commission_rate, min_commission)
                     if cost + comm <= capital:
-                        holdings[code] = shares
-                        capital -= cost + comm
+                        holdings[code] = holdings.get(code, 0) + shares
+                        capital = round(capital - cost - comm, 2)
                         bought.append(code)
                         trades.append({
                             "date": str(date.date()),
@@ -133,38 +144,47 @@ def run_portfolio_backtest(
                             "shares": shares,
                             "amount": round(cost, 2),
                             "commission": round(comm, 2),
-                            "capital": round(capital, 2),
+                            "capital": capital,
                         })
                 if bought:
                     holdings_log.append({"date": str(date.date()), "stocks": bought})
 
         # ── Daily equity at CLOSE ─────────────────────────────────────────────
-        pos_value = sum(
-            holdings[code] * day_prices[code]["close"]
-            for code in holdings
-            if code in day_prices
-        )
+        # For suspended stocks, fall back to last known close so the equity
+        # curve doesn't drop them to zero on missing days.
+        pos_value = 0.0
+        for code, shares in holdings.items():
+            if code in day_prices:
+                pos_value += shares * day_prices[code]["close"]
+            elif code in last_close:
+                pos_value += shares * last_close[code]
+            # else: brand-new position with no prior close → contributes 0
         equity_curve.append({
             "date": str(date.date()),
             "value": round(capital + pos_value, 2),
         })
 
-        # ── Update rolling_prices with TODAY'S close (AFTER selection) ───────
+        # ── Update rolling_prices and last_close with TODAY'S close ──────────
         for code, prices in day_prices.items():
             rolling_prices[code].append(prices["close"])
+            last_close[code] = prices["close"]
 
         day_counter += 1
 
-    # ── Force-close remaining at last close ──────────────────────────────────
+    # ── Force-close remaining at last available close ───────────────────────
     if holdings:
         last_prices = price_lookup.get(all_dates[-1], {})
         for code, shares in holdings.items():
-            if code in last_prices and shares > 0:
-                p = last_prices[code]["close"] * (1 - slippage_rate)
+            if shares <= 0:
+                continue
+            # Use today's close if available, else most recent known close
+            close_px = last_prices.get(code, {}).get("close") or last_close.get(code)
+            if close_px:
+                p = close_px * (1 - slippage_rate)
                 revenue = shares * p
                 comm = max(revenue * commission_rate, min_commission)
                 tax = revenue * stamp_tax_rate
-                capital += revenue - comm - tax
+                capital = round(capital + revenue - comm - tax, 2)
         if equity_curve:
             equity_curve[-1]["value"] = round(capital, 2)
 

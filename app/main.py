@@ -1,5 +1,6 @@
 import asyncio
 import json
+from datetime import date as _date
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -10,7 +11,21 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+
+def _validate_date_range(start: str, end: str) -> None:
+    """Raise HTTPException(400) on bad date input — keep error UX consistent."""
+    try:
+        s = _date.fromisoformat(start)
+        e = _date.fromisoformat(end)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "日期格式须为 YYYY-MM-DD")
+    if s >= e:
+        raise HTTPException(400, "开始日期必须早于结束日期")
+    if s.year < 1990:
+        raise HTTPException(400, "开始日期不能早于 1990 年")
+
 from .data.data_loader import get_kline_data, get_stock_name, normalize_code
+from .data.feed import CACHE_DIR
 from .data.market_data import (
     download_universe_history,
     get_index_history,
@@ -53,6 +68,7 @@ async def api_stock_info(code: str):
 
 @app.get("/api/stock/{code}/kline")
 async def api_kline(code: str, start_date: str, end_date: str, adjust: str = "qfq"):
+    _validate_date_range(start_date, end_date)
     code = normalize_code(code)
     try:
         df = get_kline_data(code, start_date, end_date, adjust)
@@ -91,6 +107,10 @@ class BacktestRequest(BaseModel):
 
 @app.post("/api/backtest")
 async def api_backtest(req: BacktestRequest):
+    _validate_date_range(req.start_date, req.end_date)
+    if req.initial_capital <= 0:
+        raise HTTPException(400, "初始资金必须大于 0")
+
     code = normalize_code(req.stock_code)
 
     try:
@@ -159,7 +179,15 @@ async def api_portfolio_backtest(req: PortfolioBacktestRequest):
     Event format:  data: <json>\n\n
     Types: "progress" {msg, pct?}  |  "result" {…}  |  "error" {msg}
     """
+    # Pre-flight validation — fail fast with 400 before opening the stream
+    _validate_date_range(req.start_date, req.end_date)
+    if req.initial_capital <= 0:
+        raise HTTPException(400, "初始资金必须大于 0")
+
     def _sse(payload: dict) -> str:
+        # Strip any control chars from msg to prevent SSE-stream injection
+        if isinstance(payload.get("msg"), str):
+            payload["msg"] = payload["msg"].replace("\r", " ").replace("\n", " ")
         return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
     async def generate():
@@ -194,15 +222,32 @@ async def api_portfolio_backtest(req: PortfolioBacktestRequest):
             return
 
         codes = universe_df["code"].tolist()
-        yield _sse({"type": "progress",
-                    "msg": f"股票池共 {len(codes)} 只，开始下载历史数据…", "pct": 2})
+
+        # Pre-check how many codes are already cached
+        n_cached = sum(
+            1 for c in codes
+            if (CACHE_DIR / f"{c}_{req.start_date}_{req.end_date}_qfq.csv").exists()
+        )
+        n_download = len(codes) - n_cached
+
+        if n_download == 0:
+            step2_msg = f"股票池共 {len(codes)} 只，全部命中本地缓存，加载中…"
+        else:
+            step2_msg = (
+                f"股票池共 {len(codes)} 只"
+                f"（{n_cached} 只已缓存，{n_download} 只需下载）…"
+            )
+        yield _sse({"type": "progress", "msg": step2_msg, "pct": 2})
 
         # ── Step 2: Download with live progress ──────────────────────────────
         progress_queue: asyncio.Queue = asyncio.Queue()
 
         def on_progress(done: int, total: int):
             pct = 2 + int(done / total * 88)
-            msg = f"下载历史数据  {done} / {total}"
+            if n_download == 0:
+                msg = f"从本地缓存加载  {done} / {total}"
+            else:
+                msg = f"处理数据  {done} / {total}（下载 {n_download} 只 / 缓存 {n_cached} 只）"
             loop.call_soon_threadsafe(
                 progress_queue.put_nowait,
                 {"type": "progress", "msg": msg, "pct": pct},
