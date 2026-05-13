@@ -177,9 +177,23 @@ input[type=text]:focus, input[type=date]:focus, input[type=number]:focus, select
   background: rgba(88,166,255,.07);
   box-shadow: 0 0 0 1px var(--accent);
 }
-.sc-name { font-size: 13px; font-weight: 600; }
+.sc-name { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
 .sc-desc { font-size: 11px; color: var(--txt2); line-height: 1.4; }
 .sc-add { margin-top: 8px; font-size: 12px; padding: 4px 10px; }
+.sc-count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent);
+  color: #0d1117;
+  border-radius: 10px;
+  padding: 0 6px;
+  min-width: 18px;
+  height: 18px;
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
 
 /* selected instances */
 .instances-list { display: flex; flex-direction: column; gap: 10px; }

@@ -62,13 +62,20 @@ async function loadStrategies() {
 }
 
 function renderSignalStrategyGrid() {
-  document.getElementById('signalStrategyGrid').innerHTML = signalStrategies.map(s => `
-    <div class="strategy-card" onclick="addInstance('${s.id}')">
-      <div class="sc-name">${escHtml(s.name)}</div>
-      <div class="sc-desc">${escHtml(s.description)}</div>
-      <button class="btn btn-ghost sc-add">＋ 添加</button>
-    </div>
-  `).join('');
+  document.getElementById('signalStrategyGrid').innerHTML = signalStrategies.map(s => {
+    const count = instances.filter(i => i.id === s.id).length;
+    const hasAdded = count > 0;
+    return `
+      <div class="strategy-card${hasAdded ? ' selected-card' : ''}" onclick="addInstance('${s.id}')">
+        <div class="sc-name">
+          ${escHtml(s.name)}
+          ${hasAdded ? `<span class="sc-count-badge">${count}</span>` : ''}
+        </div>
+        <div class="sc-desc">${escHtml(s.description)}</div>
+        <button class="btn btn-ghost sc-add">${hasAdded ? `＋ 再添加（已选 ${count}）` : '＋ 添加'}</button>
+      </div>
+    `;
+  }).join('');
 }
 
 function renderPortfolioStrategyGrid() {
@@ -155,12 +162,14 @@ function addInstance(strategyId) {
   const label = sameCount > 0 ? `${strategy.name} #${sameCount + 1}` : strategy.name;
   instances.push({ id: strategyId, strategy, params, label });
   renderInstances();
+  renderSignalStrategyGrid();
   updateRunBtn();
 }
 
 function removeInstance(idx) {
   instances.splice(idx, 1);
   renderInstances();
+  renderSignalStrategyGrid();
   updateRunBtn();
 }
 
