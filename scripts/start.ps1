@@ -1,11 +1,9 @@
 # Start the backtest platform (Windows PowerShell)
-param(
-    [int]$Port = 8000
-)
 
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$PidFile   = Join-Path $ScriptDir "app.pid"
-$LogFile   = Join-Path $ScriptDir "output.log"
+# Project root is one level up from this script
+$RootDir  = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
+$PidFile  = Join-Path $RootDir "app.pid"
+$LogFile  = Join-Path $RootDir "output.log"
 
 # Check if already running
 if (Test-Path $PidFile) {
@@ -22,7 +20,7 @@ if (Test-Path $PidFile) {
 # Use cmd /c to merge stdout+stderr into the log file
 $proc = Start-Process cmd `
     -ArgumentList "/c", "python run.py >> `"$LogFile`" 2>&1" `
-    -WorkingDirectory $ScriptDir `
+    -WorkingDirectory $RootDir `
     -WindowStyle Hidden `
     -PassThru
 
@@ -33,7 +31,7 @@ if ($proc.HasExited) {
     exit 1
 }
 
-# Save the cmd wrapper PID (taskkill /t will kill the python child too)
+# Save PID (taskkill /t will kill the python child too)
 $proc.Id | Out-File $PidFile -Encoding ascii -NoNewline
 Write-Host "[OK] Service started (PID: $($proc.Id))"
 Write-Host "[OK] Log: $LogFile"

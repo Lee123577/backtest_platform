@@ -1,9 +1,10 @@
 #!/bin/bash
 # Start the backtest platform (Linux/macOS)
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PID_FILE="$SCRIPT_DIR/app.pid"
-LOG_FILE="$SCRIPT_DIR/output.log"
+# Project root is one level up from this script
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PID_FILE="$ROOT_DIR/app.pid"
+LOG_FILE="$ROOT_DIR/output.log"
 
 # Check if already running
 if [ -f "$PID_FILE" ]; then
@@ -18,7 +19,7 @@ if [ -f "$PID_FILE" ]; then
     fi
 fi
 
-cd "$SCRIPT_DIR" || exit 1
+cd "$ROOT_DIR" || exit 1
 
 # Prefer python3, fall back to python
 PYTHON=$(command -v python3 2>/dev/null || command -v python 2>/dev/null)
