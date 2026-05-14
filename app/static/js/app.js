@@ -473,32 +473,32 @@ function renderKline(data, title) {
     : 0;
 
   klineChart.setOption({
-    backgroundColor: '#1c2128', animation: false,
+    backgroundColor: '#ffffff', animation: false,
     grid: [
       { left: 60, right: 20, top: 30, bottom: 120 },
       { left: 60, right: 20, top: '78%', bottom: 60 },
     ],
     xAxis: [
       { type: 'category', data: dates, gridIndex: 0,
-        axisLabel: { show: false }, axisLine: { lineStyle: { color: '#444' } }, splitLine: { show: false } },
+        axisLabel: { show: false }, axisLine: { lineStyle: { color: '#d0d7de' } }, splitLine: { show: false } },
       { type: 'category', data: dates, gridIndex: 1,
-        axisLabel: { color: '#888', fontSize: 10 }, axisLine: { lineStyle: { color: '#444' } }, splitLine: { show: false } },
+        axisLabel: { color: '#57606a', fontSize: 10 }, axisLine: { lineStyle: { color: '#d0d7de' } }, splitLine: { show: false } },
     ],
     yAxis: [
       { type: 'value', scale: true, gridIndex: 0,
-        splitLine: { lineStyle: { color: '#2a2a3e' } }, axisLabel: { color: '#888' } },
+        splitLine: { lineStyle: { color: '#eaeef2' } }, axisLabel: { color: '#57606a' } },
       { type: 'value', gridIndex: 1, splitLine: { show: false },
-        axisLabel: { color: '#888', fontSize: 10, formatter: v => (v / 1e4).toFixed(0) + '万' } },
+        axisLabel: { color: '#57606a', fontSize: 10, formatter: v => (v / 1e4).toFixed(0) + '万' } },
     ],
     dataZoom: [
       { type: 'inside', xAxisIndex: [0, 1], start: startPct, end: 100 },
       { type: 'slider', xAxisIndex: [0, 1], bottom: 10, height: 22,
-        textStyle: { color: '#888' }, borderColor: '#333' },
+        textStyle: { color: '#57606a' }, borderColor: '#d0d7de', fillerColor: 'rgba(9,105,218,.08)' },
     ],
     tooltip: {
       trigger: 'axis', axisPointer: { type: 'cross' },
-      backgroundColor: '#1e2433', borderColor: '#444',
-      textStyle: { color: '#ddd', fontSize: 12 },
+      backgroundColor: '#ffffff', borderColor: '#d0d7de',
+      textStyle: { color: '#24292f', fontSize: 12 },
       formatter(params) {
         const i = params[0]?.dataIndex;
         if (i == null) return '';
@@ -589,12 +589,12 @@ function renderMetrics(results, benchmark) {
   document.getElementById('metricsWrap').innerHTML = html;
 }
 
-const LINE_COLORS = ['#58a6ff', '#f4a261', '#e63946', '#2a9d8f', '#e9c46a', '#a8dadc'];
+const LINE_COLORS = ['#0969da', '#e36209', '#cf222e', '#1a7f37', '#8250df', '#0550ae'];
 
 function renderEquityChart(results, benchmark) {
   const el = document.getElementById('equityChart');
   if (equityChart) { equityChart.dispose(); equityChart = null; }
-  equityChart = echarts.init(el, 'dark');
+  equityChart = echarts.init(el);
 
   const series = [];
   if (benchmark?.equity_curve?.length) {
@@ -602,7 +602,7 @@ function renderEquityChart(results, benchmark) {
       name: benchmark.strategy_name,
       type: 'line',
       data: benchmark.equity_curve.map(e => [e.date, e.value]),
-      lineStyle: { color: '#888', type: 'dashed', width: 1.5 },
+      lineStyle: { color: '#999', type: 'dashed', width: 1.5 },
       symbol: 'none',
     });
   }
@@ -617,13 +617,13 @@ function renderEquityChart(results, benchmark) {
   });
 
   equityChart.setOption({
-    backgroundColor: '#1c2128', animation: false,
-    legend: { textStyle: { color: '#ccc' }, top: 8 },
+    backgroundColor: '#ffffff', animation: false,
+    legend: { textStyle: { color: '#57606a' }, top: 8 },
     grid: { left: 70, right: 20, top: 46, bottom: 50 },
     tooltip: {
       trigger: 'axis',
-      backgroundColor: '#1e2433', borderColor: '#444',
-      textStyle: { color: '#ddd', fontSize: 12 },
+      backgroundColor: '#ffffff', borderColor: '#d0d7de',
+      textStyle: { color: '#24292f', fontSize: 12 },
       formatter(params) {
         let s = `<b>${params[0].axisValue}</b><br/>`;
         params.forEach(p => {
@@ -633,17 +633,17 @@ function renderEquityChart(results, benchmark) {
       },
     },
     xAxis: {
-      type: 'time', axisLabel: { color: '#888' },
-      axisLine: { lineStyle: { color: '#444' } }, splitLine: { show: false },
+      type: 'time', axisLabel: { color: '#57606a' },
+      axisLine: { lineStyle: { color: '#d0d7de' } }, splitLine: { show: false },
     },
     yAxis: {
       type: 'value', scale: true,
-      axisLabel: { color: '#888', formatter: v => '¥' + (v / 1e4).toFixed(0) + '万' },
-      splitLine: { lineStyle: { color: '#2a2a3e' } },
+      axisLabel: { color: '#57606a', formatter: v => '¥' + (v / 1e4).toFixed(0) + '万' },
+      splitLine: { lineStyle: { color: '#eaeef2' } },
     },
     dataZoom: [
       { type: 'inside' },
-      { type: 'slider', bottom: 4, height: 18, textStyle: { color: '#888' }, borderColor: '#333' },
+      { type: 'slider', bottom: 4, height: 18, textStyle: { color: '#57606a' }, borderColor: '#d0d7de', fillerColor: 'rgba(9,105,218,.08)' },
     ],
     series,
   }, true);
