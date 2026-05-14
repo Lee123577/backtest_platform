@@ -174,7 +174,7 @@ def run_backtest(
         revenue = position * exec_price
         comm = max(revenue * commission_rate, min_commission)
         tax = revenue * stamp_tax_rate
-        capital += revenue - comm - tax
+        capital = round(capital + revenue - comm - tax, 2)
         equity_values[-1] = capital
 
     equity = pd.Series(equity_values)

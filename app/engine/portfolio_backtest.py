@@ -133,7 +133,12 @@ def run_portfolio_backtest(
                     cost = shares * buy_price
                     comm = max(cost * commission_rate, min_commission)
                     if cost + comm <= capital:
-                        holdings[code] = holdings.get(code, 0) + shares
+                        # Suspended (kept) stocks cannot be in new_stocks because
+                        # they're filtered out at line above (not in day_prices),
+                        # so a plain assignment is safe and avoids any chance of
+                        # accidental double-allocation if a strategy ever returns
+                        # duplicates or the rebalance-sell logic changes.
+                        holdings[code] = shares
                         capital = round(capital - cost - comm, 2)
                         bought.append(code)
                         trades.append({
