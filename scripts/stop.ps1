@@ -1,7 +1,8 @@
 # Stop the backtest platform (Windows PowerShell)
 
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$PidFile   = Join-Path $ScriptDir "app.pid"
+# Project root is one level up from this script
+$RootDir = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
+$PidFile = Join-Path $RootDir "app.pid"
 
 function Stop-ByPid($procId) {
     $proc = Get-Process -Id $procId -ErrorAction SilentlyContinue

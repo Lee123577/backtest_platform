@@ -1,8 +1,9 @@
 #!/bin/bash
 # Stop the backtest platform (Linux/macOS)
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PID_FILE="$SCRIPT_DIR/app.pid"
+# Project root is one level up from this script
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PID_FILE="$ROOT_DIR/app.pid"
 
 stop_by_pid() {
     local PID=$1
