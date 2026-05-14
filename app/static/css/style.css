@@ -1,18 +1,18 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  --bg: #0d1117;
-  --bg2: #161b22;
-  --bg3: #1c2128;
-  --border: #30363d;
-  --txt: #e6edf3;
-  --txt2: #8b949e;
-  --accent: #58a6ff;
-  --green: #3fb950;
-  --red: #f85149;
-  --warn: #d29922;
-  --up: #ef5350;
-  --down: #26a69a;
+  --bg:     #ffffff;
+  --bg2:    #f6f8fa;
+  --bg3:    #f0f2f5;
+  --border: #d0d7de;
+  --txt:    #24292f;
+  --txt2:   #57606a;
+  --accent: #0969da;
+  --green:  #1a7f37;
+  --red:    #cf222e;
+  --warn:   #9a6700;
+  --up:     #cf222e;
+  --down:   #1a7f37;
 }
 
 body {
@@ -25,7 +25,7 @@ body {
 
 /* ── Header ── */
 header {
-  background: var(--bg2);
+  background: var(--bg);
   border-bottom: 1px solid var(--border);
   padding: 0 24px;
   height: 54px;
@@ -35,6 +35,7 @@ header {
   position: sticky;
   top: 0;
   z-index: 200;
+  box-shadow: 0 1px 3px rgba(27,31,36,.06);
 }
 header h1 { font-size: 18px; font-weight: 700; color: var(--accent); letter-spacing: .5px; }
 
@@ -50,15 +51,15 @@ header h1 { font-size: 18px; font-weight: 700; color: var(--accent); letter-spac
   cursor: pointer;
   transition: all .15s;
 }
-.nav-btn.active { background: var(--accent); color: #0d1117; border-color: var(--accent); font-weight: 700; }
-.nav-btn:not(.active):hover { border-color: var(--accent); color: var(--accent); }
+.nav-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 700; }
+.nav-btn:not(.active):hover { border-color: var(--accent); color: var(--accent); background: rgba(9,105,218,.06); }
 
 .tip-badge {
   font-size: 11px;
   font-weight: 400;
   color: var(--warn);
-  background: rgba(210,153,34,.1);
-  border: 1px solid rgba(210,153,34,.3);
+  background: rgba(154,103,0,.08);
+  border: 1px solid rgba(154,103,0,.25);
   border-radius: 4px;
   padding: 2px 8px;
   margin-left: 8px;
@@ -75,10 +76,11 @@ main {
 }
 
 .panel {
-  background: var(--bg3);
+  background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 20px 24px;
+  box-shadow: 0 1px 4px rgba(27,31,36,.06);
 }
 .panel-title {
   font-size: 15px;
@@ -87,6 +89,7 @@ main {
   display: flex;
   align-items: center;
   gap: 8px;
+  color: var(--txt);
 }
 .panel-title span { color: var(--txt2); font-size: 13px; font-weight: 400; }
 
@@ -105,22 +108,23 @@ main {
 .form-group label {
   font-size: 11px;
   color: var(--txt2);
-  font-weight: 500;
+  font-weight: 600;
   text-transform: uppercase;
   letter-spacing: .4px;
 }
 input[type=text], input[type=date], input[type=number], select {
-  background: var(--bg2);
+  background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 6px;
   color: var(--txt);
   padding: 7px 10px;
   font-size: 13px;
   outline: none;
-  transition: border-color .15s;
+  transition: border-color .15s, box-shadow .15s;
 }
 input[type=text]:focus, input[type=date]:focus, input[type=number]:focus, select:focus {
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(9,105,218,.12);
 }
 .inline-group { display: flex; gap: 6px; align-items: flex-end; }
 .inline-group input { flex: 1; }
@@ -133,16 +137,16 @@ input[type=text]:focus, input[type=date]:focus, input[type=number]:focus, select
 }
 
 /* ── Buttons ── */
-.btn { border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600; padding: 7px 14px; transition: opacity .15s, background .15s; }
-.btn:disabled { opacity: .35; cursor: not-allowed; }
-.btn-accent { background: var(--accent); color: #0d1117; }
-.btn-accent:not(:disabled):hover { opacity: .85; }
+.btn { border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600; padding: 7px 14px; transition: opacity .15s, background .15s, box-shadow .15s; }
+.btn:disabled { opacity: .4; cursor: not-allowed; }
+.btn-accent { background: var(--accent); color: #fff; }
+.btn-accent:not(:disabled):hover { background: #0860ca; box-shadow: 0 2px 6px rgba(9,105,218,.3); }
 .btn-outline { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
-.btn-outline:hover { background: rgba(88,166,255,.1); }
-.btn-ghost { background: rgba(88,166,255,.08); color: var(--accent); border: 1px solid rgba(88,166,255,.25); }
-.btn-ghost:hover { background: rgba(88,166,255,.15); }
-.btn-danger { background: transparent; color: var(--red); border: 1px solid rgba(248,81,73,.3); }
-.btn-danger:hover { background: rgba(248,81,73,.1); }
+.btn-outline:hover { background: rgba(9,105,218,.06); }
+.btn-ghost { background: rgba(9,105,218,.06); color: var(--accent); border: 1px solid rgba(9,105,218,.2); }
+.btn-ghost:hover { background: rgba(9,105,218,.12); }
+.btn-danger { background: transparent; color: var(--red); border: 1px solid rgba(207,34,46,.25); }
+.btn-danger:hover { background: rgba(207,34,46,.06); }
 .btn-run { width: 100%; margin-top: 14px; padding: 10px; font-size: 14px; }
 
 /* ── Strategy panel ── */
@@ -166,18 +170,18 @@ input[type=text]:focus, input[type=date]:focus, input[type=number]:focus, select
   border-radius: 8px;
   padding: 12px;
   cursor: pointer;
-  transition: border-color .15s, transform .1s;
+  transition: border-color .15s, transform .1s, box-shadow .15s;
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
-.strategy-card:hover { border-color: var(--accent); transform: translateY(-1px); }
+.strategy-card:hover { border-color: var(--accent); transform: translateY(-1px); box-shadow: 0 3px 8px rgba(9,105,218,.1); }
 .strategy-card.selected-card {
   border-color: var(--accent);
-  background: rgba(88,166,255,.07);
-  box-shadow: 0 0 0 1px var(--accent);
+  background: rgba(9,105,218,.05);
+  box-shadow: 0 0 0 2px rgba(9,105,218,.2);
 }
-.sc-name { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+.sc-name { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px; color: var(--txt); }
 .sc-desc { font-size: 11px; color: var(--txt2); line-height: 1.4; }
 .sc-add { margin-top: 8px; font-size: 12px; padding: 4px 10px; }
 .sc-count-badge {
@@ -185,7 +189,7 @@ input[type=text]:focus, input[type=date]:focus, input[type=number]:focus, select
   align-items: center;
   justify-content: center;
   background: var(--accent);
-  color: #0d1117;
+  color: #fff;
   border-radius: 10px;
   padding: 0 6px;
   min-width: 18px;
@@ -204,6 +208,7 @@ input[type=text]:focus, input[type=date]:focus, input[type=number]:focus, select
   text-align: center;
   border: 1px dashed var(--border);
   border-radius: 8px;
+  background: var(--bg2);
 }
 .instance-card {
   background: var(--bg2);
@@ -217,7 +222,7 @@ input[type=text]:focus, input[type=date]:focus, input[type=number]:focus, select
   gap: 8px;
   padding: 9px 12px;
   border-bottom: 1px solid var(--border);
-  background: rgba(88,166,255,.04);
+  background: rgba(9,105,218,.04);
 }
 .instance-label-input {
   flex: 1;
@@ -270,16 +275,17 @@ table.metrics-tbl {
   border: 1px solid var(--border);
   white-space: nowrap;
 }
-.metrics-tbl th.bm-col { color: #aaa; font-style: italic; }
+.metrics-tbl th.bm-col { color: var(--txt2); font-style: italic; }
 .metrics-tbl td {
   padding: 8px 16px;
   text-align: center;
   border: 1px solid var(--border);
   white-space: nowrap;
+  background: var(--bg);
 }
-.metrics-tbl td.row-label { text-align: left; color: var(--txt2); font-size: 12px; }
-.val-pos { color: #ff6b6b; font-weight: 600; }   /* profit — Chinese red */
-.val-neg { color: #51cf66; font-weight: 600; }   /* loss — Chinese green */
+.metrics-tbl td.row-label { text-align: left; color: var(--txt2); font-size: 12px; background: var(--bg2); }
+.val-pos { color: var(--up); font-weight: 600; }
+.val-neg { color: var(--down); font-weight: 600; }
 .val-warn { color: var(--warn); font-weight: 600; }
 .val-neutral { color: var(--txt2); }
 
@@ -296,7 +302,7 @@ table.metrics-tbl {
 /* ── Trades ── */
 .trades-tabs { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
 .tab-btn {
-  background: transparent;
+  background: var(--bg2);
   border: 1px solid var(--border);
   border-radius: 6px;
   color: var(--txt2);
@@ -305,7 +311,7 @@ table.metrics-tbl {
   cursor: pointer;
   transition: all .15s;
 }
-.tab-btn.active { border-color: var(--accent); color: var(--accent); background: rgba(88,166,255,.08); }
+.tab-btn.active { border-color: var(--accent); color: var(--accent); background: rgba(9,105,218,.07); }
 .trade-panel { display: none; }
 .trade-panel.active { display: block; }
 .trades-scroll { overflow-x: auto; max-height: 360px; overflow-y: auto; }
@@ -329,17 +335,19 @@ table.trades-tbl {
   padding: 6px 12px;
   text-align: center;
   border: 1px solid var(--border);
+  background: var(--bg);
 }
-.trades-tbl tr.buy-row td { background: rgba(239,83,80,.04); }
-.trades-tbl tr.sell-row td { background: rgba(38,166,154,.04); }
-.badge-buy { background: rgba(239,83,80,.15); color: #ef5350; border-radius: 4px; padding: 2px 8px; font-weight: 600; }
-.badge-sell { background: rgba(38,166,154,.15); color: #26a69a; border-radius: 4px; padding: 2px 8px; font-weight: 600; }
+.trades-tbl tr.buy-row td { background: rgba(207,34,46,.04); }
+.trades-tbl tr.sell-row td { background: rgba(26,127,55,.04); }
+.badge-buy { background: rgba(207,34,46,.1); color: var(--up); border-radius: 4px; padding: 2px 8px; font-weight: 600; }
+.badge-sell { background: rgba(26,127,55,.1); color: var(--down); border-radius: 4px; padding: 2px 8px; font-weight: 600; }
 .no-trade { color: var(--txt2); font-size: 13px; padding: 20px; text-align: center; }
 
 /* ── Loading overlay ── */
 #loading {
   position: fixed; inset: 0;
-  background: rgba(0,0,0,.65);
+  background: rgba(255,255,255,.75);
+  backdrop-filter: blur(2px);
   display: none;
   align-items: center;
   justify-content: center;
@@ -348,7 +356,7 @@ table.trades-tbl {
 .loader-box { text-align: center; }
 .spinner {
   width: 44px; height: 44px;
-  border: 4px solid rgba(88,166,255,.2);
+  border: 4px solid rgba(9,105,218,.15);
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin .7s linear infinite;
@@ -360,7 +368,7 @@ table.trades-tbl {
 #progressBar { margin-top: 14px; width: 260px; text-align: center; }
 .pb-track {
   width: 100%; height: 6px;
-  background: rgba(88,166,255,.15);
+  background: rgba(9,105,218,.12);
   border-radius: 3px;
   overflow: hidden;
   margin-bottom: 6px;
@@ -376,8 +384,8 @@ table.trades-tbl {
 
 /* ── Error box ── */
 .error-box {
-  background: rgba(248,81,73,.08);
-  border: 1px solid rgba(248,81,73,.3);
+  background: rgba(207,34,46,.06);
+  border: 1px solid rgba(207,34,46,.25);
   border-radius: 8px;
   color: var(--red);
   padding: 10px 14px;
@@ -400,7 +408,7 @@ hr.divider { border: none; border-top: 1px solid var(--border); margin: 16px 0; 
   align-items: center;
   gap: 8px;
   padding: 9px 12px;
-  background: rgba(88,166,255,.06);
+  background: rgba(9,105,218,.05);
   border-bottom: 1px solid var(--border);
 }
 .portfolio-instance-title { flex: 1; font-size: 13px; font-weight: 600; color: var(--accent); }
@@ -418,10 +426,10 @@ table.holdings-tbl { width: 100%; border-collapse: collapse; font-size: 12px; mi
   background: var(--bg2); padding: 6px 10px; color: var(--txt2);
   border: 1px solid var(--border); font-size: 11px; position: sticky; top: 0;
 }
-.holdings-tbl td { padding: 5px 10px; border: 1px solid var(--border); font-size: 12px; }
+.holdings-tbl td { padding: 5px 10px; border: 1px solid var(--border); font-size: 12px; background: var(--bg); }
 .stock-chip {
   display: inline-block;
-  background: rgba(88,166,255,.12);
+  background: rgba(9,105,218,.08);
   color: var(--accent);
   border-radius: 4px;
   padding: 1px 6px; margin: 1px; font-size: 11px;
