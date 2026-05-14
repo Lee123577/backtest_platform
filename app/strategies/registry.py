@@ -22,6 +22,10 @@ from .rsi_strategy import RSIStrategy
 from .macd_strategy import MACDStrategy
 from .bollinger_strategy import BollingerBandsStrategy
 from .kdj_strategy import KDJStrategy
+from .donchian_strategy import DonchianStrategy
+from .cci_strategy import CCIStrategy
+from .williams_strategy import WilliamsRStrategy
+from .triple_ma_strategy import TripleMAStrategy
 
 STRATEGY_REGISTRY: Dict[str, Type[BaseStrategy]] = {
     "ma_cross": MACrossStrategy,
@@ -29,6 +33,10 @@ STRATEGY_REGISTRY: Dict[str, Type[BaseStrategy]] = {
     "macd": MACDStrategy,
     "bollinger": BollingerBandsStrategy,
     "kdj": KDJStrategy,
+    "donchian": DonchianStrategy,
+    "cci": CCIStrategy,
+    "williams_r": WilliamsRStrategy,
+    "triple_ma": TripleMAStrategy,
 }
 
 # ── Portfolio / universe-selection strategies ─────────────────────────────────
