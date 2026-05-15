@@ -250,15 +250,77 @@ def import_stock_info(conn, resume: bool):
 
 # ── Step 2: stock_kline ──────────────────────────────────────────────────────
 
+_bs_logged_in = False
+
+
+def _bs_login():
+    """baostock 全局登录（只登录一次）。"""
+    global _bs_logged_in
+    if _bs_logged_in:
+        return True
+    try:
+        import baostock as bs
+        result = bs.login()
+        if result.error_code == "0":
+            _bs_logged_in = True
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _baostock_kline(code: str, start: str, end: str) -> pd.DataFrame:
+    """
+    baostock 数据源 — 走 TCP 协议，服务器环境不会被封。
+    adjustflag='2' 对应前复权(qfq)。
+    """
+    import baostock as bs
+
+    if not _bs_login():
+        raise RuntimeError("baostock 登录失败")
+
+    if code.startswith(("6", "9")):
+        bs_code = f"sh.{code}"
+    elif code.startswith(("4", "8")):
+        bs_code = f"bj.{code}"
+    else:
+        bs_code = f"sz.{code}"
+
+    rs = bs.query_history_k_data_plus(
+        bs_code,
+        "date,open,high,low,close,volume,amount,turn,pctChg",
+        start_date=start,
+        end_date=end,
+        frequency="d",
+        adjustflag="2",
+    )
+    data = []
+    while rs.error_code == "0" and rs.next():
+        data.append(rs.get_row_data())
+
+    if not data:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(data, columns=rs.fields)
+    df["date"] = pd.to_datetime(df["date"])
+    for col in ["open", "high", "low", "close", "volume", "amount", "turn", "pctChg"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    df = df.rename(columns={"turn": "turnover", "pctChg": "pct_change"})
+    return df
+
+
 def _fetch_kline_one(code: str) -> tuple[str, pd.DataFrame | None]:
     """
-    下载单只股票前复权K线，走完整6级降级链：
-    东方财富(无代理) → 东方财富(系统代理) → 新浪(无代理) → 新浪(系统代理)
-    → 腾讯(无代理) → 腾讯(系统代理)
-    服务器 IP 被东方财富封时自动切换到新浪/腾讯。
+    下载单只股票前复权K线，降级顺序：
+    1. baostock（TCP，服务器首选，不受 IP 封锁影响）
+    2. 东方财富(无代理) / 东方财富(系统代理)
+    3. 新浪(无代理) / 新浪(系统代理)
+    4. 腾讯(无代理) / 腾讯(系统代理)
     """
     from app.data.feed import _sina_kline, _tencent_kline
     callers = [
+        lambda: _baostock_kline(code, START_DATE_DASH, END_DATE_DASH),
         lambda: _remove_proxy(_akshare_kline, code, START_DATE_DASH, END_DATE_DASH, "qfq"),
         lambda: _akshare_kline(code, START_DATE_DASH, END_DATE_DASH, "qfq"),
         lambda: _remove_proxy(_sina_kline, code, START_DATE_DASH, END_DATE_DASH, "qfq"),
