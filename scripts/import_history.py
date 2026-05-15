@@ -36,7 +36,11 @@ import os
 # ── 项目根路径 ──────────────────────────────────────────────────────────────
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
-load_dotenv(ROOT / ".env")
+load_dotenv(ROOT / ".env", override=True)
+
+# 复用项目已有的降级工具
+from app.data.market_data import get_universe_snapshot, _call_no_proxy
+from app.data.feed import _akshare_kline, _remove_proxy
 
 # ── 日志配置 ────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -112,20 +116,16 @@ def import_stock_info(conn, resume: bool):
                 log.info("stock_info 已有数据，跳过（--resume）")
                 return
 
+    # 复用 market_data 的4级降级链（xuangu → akshare无代理 → akshare系统代理 → cffi）
     try:
-        df = ak.stock_zh_a_spot_em()
+        df = get_universe_snapshot()
     except Exception as e:
-        log.error(f"获取全市场快照失败: {e}")
+        log.error(f"获取全市场快照失败（已尝试4种方式）: {e}")
         return
 
-    col_map = {
-        "代码": "code", "名称": "name",
-        "总市值": "market_cap", "流通市值": "circ_market_cap",
-    }
-    df = df.rename(columns=col_map)
     df["code"] = df["code"].astype(str).str.zfill(6)
     df["market"] = df["code"].apply(
-        lambda c: "SH" if c.startswith(("6", "9", "688")) else
+        lambda c: "SH" if c.startswith(("6", "9")) else
                   "BJ" if c.startswith(("4", "8")) else "SZ"
     )
 
@@ -150,55 +150,52 @@ def import_stock_info(conn, resume: bool):
 # ── Step 2: stock_kline ──────────────────────────────────────────────────────
 
 def _fetch_kline_one(code: str) -> tuple[str, pd.DataFrame | None]:
-    """下载单只股票前复权K线，带重试。"""
+    """下载单只股票前复权K线，带无代理/系统代理两级重试。"""
+    callers = [
+        lambda: _remove_proxy(_akshare_kline, code, START_DATE_DASH, END_DATE_DASH, "qfq"),
+        lambda: _akshare_kline(code, START_DATE_DASH, END_DATE_DASH, "qfq"),
+    ]
     for attempt in range(RETRY):
-        try:
-            raw = ak.stock_zh_a_hist(
-                symbol=code, period="daily",
-                start_date=START_DATE, end_date=END_DATE,
-                adjust="qfq",
-            )
-            if raw is None or raw.empty:
-                return code, None
-            col_map = {
-                "日期": "date", "开盘": "open", "收盘": "close",
-                "最高": "high", "最低": "low", "成交量": "volume",
-                "成交额": "amount", "涨跌幅": "pct_change", "换手率": "turnover",
-                "振幅": "amplitude",
-            }
-            df = raw.rename(columns=col_map)
-            df = df[[c for c in col_map.values() if c in df.columns]].copy()
-            df["date"] = pd.to_datetime(df["date"])
-            return code, df
-        except Exception as e:
-            if attempt < RETRY - 1:
-                time.sleep(RETRY_WAIT)
-            else:
-                return code, None
+        for caller in callers:
+            try:
+                df = caller()
+                if df is not None and not df.empty:
+                    return code, df
+            except Exception:
+                continue
+        if attempt < RETRY - 1:
+            time.sleep(RETRY_WAIT)
     return code, None
 
 
 def _get_daily_snap() -> dict:
-    """获取全市场当日估值快照 {code: {market_cap, circ_market_cap, pe_ttm, pb}}。"""
+    """获取全市场当日估值快照，复用4级降级链。"""
     try:
-        df = ak.stock_zh_a_spot_em()
-        col_map = {
-            "代码": "code", "总市值": "mc", "流通市值": "cmc",
-            "市盈率-动态": "pe", "市净率": "pb",
-        }
-        df = df.rename(columns=col_map)
-        df["code"] = df["code"].astype(str).str.zfill(6)
+        df = get_universe_snapshot()
+        # get_universe_snapshot 返回 code/name/price/market_cap
+        # 需要额外字段时再补充调用
         result = {}
         for _, r in df.iterrows():
-            result[r["code"]] = {
-                "mc": r.get("mc"),
-                "cmc": r.get("cmc"),
-                "pe": r.get("pe"),
-                "pb": r.get("pb"),
+            code = str(r.get("code", "")).zfill(6)
+            result[code] = {
+                "mc":  _safe_val(r.get("market_cap")),
+                "cmc": None,  # xuangu API 不含流通市值，历史导入时留空
+                "pe":  None,
+                "pb":  None,
             }
         return result
     except Exception:
         return {}
+
+
+def _safe_val(v):
+    if v is None:
+        return None
+    try:
+        f = float(v)
+        return None if pd.isna(f) else f
+    except (TypeError, ValueError):
+        return None
 
 
 def import_stock_kline(conn, resume: bool):
