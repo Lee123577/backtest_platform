@@ -32,6 +32,7 @@ def run_portfolio_backtest(
     min_commission: float = 5.0,
     stamp_tax_rate: float = 0.001,
     slippage_rate: float = 0.0001,
+    hist_market_caps: Dict[str, Dict[str, float]] = None,  # {code: {date_str: market_cap}}
 ) -> Dict[str, Any]:
 
     hold_days: int = int(strategy.params.get("hold_days", 5))
@@ -112,9 +113,30 @@ def run_portfolio_backtest(
                     kept[code] = shares  # suspended; carry over
             holdings = kept
 
+            # ── 构建当日 ref_data（优先使用历史真实市值）──────────────────
+            date_str = str(date.date())
+            if hist_market_caps:
+                # 用数据库里当日真实市值替换 ref_data 中的近似值
+                mc_today = {
+                    code: caps[date_str]
+                    for code, caps in hist_market_caps.items()
+                    if date_str in caps
+                }
+                if mc_today:
+                    ref_data_today = ref_data.copy()
+                    ref_data_today["market_cap"] = ref_data_today["code"].map(
+                        lambda c: mc_today.get(c, ref_data_today.loc[
+                            ref_data_today["code"] == c, "market_cap"
+                        ].iloc[0] if (ref_data_today["code"] == c).any() else None)
+                    )
+                else:
+                    ref_data_today = ref_data
+            else:
+                ref_data_today = ref_data
+
             # ── Let strategy choose new stocks ──────────────────────────────
             new_stocks = strategy.select_stocks(
-                date, close_for_selection, ref_data, rolling_prices
+                date, close_for_selection, ref_data_today, rolling_prices
             )
             # Only keep codes that actually traded today
             new_stocks = [s for s in new_stocks if s in day_prices]

@@ -28,6 +28,7 @@ from .data.data_loader import get_kline_data, get_stock_name, normalize_code
 from .data.feed import CACHE_DIR
 from .data.market_data import (
     download_universe_history,
+    get_historical_market_caps,
     get_index_history,
     get_universe_stocks,
 )
@@ -280,7 +281,14 @@ async def api_portfolio_backtest(req: PortfolioBacktestRequest):
 
         yield _sse({"type": "progress", "msg": "正在运行回测策略…", "pct": 92})
 
-        # ── Step 3: Run backtest ─────────────────────────────────────────────
+        # ── Step 3: 读取历史真实市值（数据库有数据时替代近似推算）──────────
+        codes = list(price_data.keys())
+        hist_market_caps = await loop.run_in_executor(
+            None,
+            lambda: get_historical_market_caps(codes, req.start_date, req.end_date),
+        )
+
+        # ── Step 4: Run backtest ─────────────────────────────────────────────
         try:
             result = await loop.run_in_executor(
                 None,
@@ -290,6 +298,7 @@ async def api_portfolio_backtest(req: PortfolioBacktestRequest):
                     strategy=strategy,
                     initial_capital=req.initial_capital,
                     slippage_rate=req.slippage_rate,
+                    hist_market_caps=hist_market_caps or None,
                 ),
             )
         except Exception as e:

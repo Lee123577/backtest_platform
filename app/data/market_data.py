@@ -19,7 +19,7 @@ import akshare as ak
 import pandas as pd
 import requests as _req
 
-from .data_loader import CACHE_DIR, get_kline_data
+from .data_loader import CACHE_DIR, _get_pool, get_kline_data
 from .feed import atomic_to_csv, get_feed
 
 SNAP_CACHE = CACHE_DIR / f"universe_snapshot_{Date.today().strftime('%Y%m%d')}.csv"
@@ -341,3 +341,51 @@ def get_index_history(
 ) -> Optional[pd.DataFrame]:
     """Fetch daily history for a broad index (e.g. 000905 = CSI 500)."""
     return get_feed().get_index_history(symbol, start_date, end_date)
+
+
+def get_historical_market_caps(
+    codes: List[str], start_date: str, end_date: str
+) -> Dict[str, Dict[str, float]]:
+    """
+    从 stock_kline 表读取历史市值，返回 {code: {date_str: market_cap(亿元)}}。
+
+    用于组合策略回测时替代近似估算，确保每个调仓日使用真实历史市值。
+    若数据库不可用或数据不存在，返回空字典（由调用方降级处理）。
+    """
+    if not codes:
+        return {}
+
+    conn = _get_pool()
+    if conn is None:
+        return {}
+
+    try:
+        conn.ping(reconnect=True)
+        # 分批查询避免 IN 子句过长
+        result: Dict[str, Dict[str, float]] = {}
+        batch_size = 200
+        for i in range(0, len(codes), batch_size):
+            batch = codes[i: i + batch_size]
+            placeholders = ",".join(["%s"] * len(batch))
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT code,
+                           DATE_FORMAT(trade_date, '%%Y-%%m-%%d') AS trade_date,
+                           market_cap
+                    FROM stock_kline
+                    WHERE code IN ({placeholders})
+                      AND trade_date BETWEEN %s AND %s
+                      AND market_cap IS NOT NULL
+                    ORDER BY code, trade_date
+                    """,
+                    (*batch, start_date, end_date),
+                )
+                for row in cur.fetchall():
+                    code = row["code"]
+                    if code not in result:
+                        result[code] = {}
+                    result[code][row["trade_date"]] = float(row["market_cap"])
+        return result
+    except Exception:
+        return {}

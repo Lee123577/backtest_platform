@@ -1,0 +1,655 @@
+"""
+全量历史数据导入脚本
+====================
+将 2010-01-01 至今的所有 A 股历史数据写入 back_test 数据库。
+
+导入顺序：
+  1. stock_info        — 股票基础信息
+  2. stock_kline       — 日K线 + 每日估值（前复权）
+  3. stock_finance     — 季报财务核心指标
+  4. stock_dividend    — 分红配股历史
+  5. index_daily       — 主要指数行情
+  6. index_constituent — 指数成分股
+  7. north_fund_flow   — 北向资金
+
+运行方式：
+  python scripts/import_history.py              # 全量导入
+  python scripts/import_history.py --step kline # 只导入某一步
+  python scripts/import_history.py --resume     # 跳过已有数据（断点续传）
+
+注意：首次全量导入预计耗时 6~12 小时，请保持网络稳定。
+"""
+import argparse
+import logging
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import date, datetime
+from pathlib import Path
+
+import akshare as ak
+import pandas as pd
+import pymysql
+from dotenv import load_dotenv
+import os
+
+# ── 项目根路径 ──────────────────────────────────────────────────────────────
+ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(ROOT))
+load_dotenv(ROOT / ".env")
+
+# ── 日志配置 ────────────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(ROOT / "scripts" / "import_history.log", encoding="utf-8"),
+    ],
+)
+log = logging.getLogger(__name__)
+
+# ── 常量 ────────────────────────────────────────────────────────────────────
+START_DATE = "20100101"
+END_DATE = date.today().strftime("%Y%m%d")
+START_DATE_DASH = "2010-01-01"
+END_DATE_DASH = date.today().strftime("%Y-%m-%d")
+BATCH_SIZE = 500          # 每批写入行数
+MAX_WORKERS = 5           # 并发下载线程数
+RETRY = 3                 # 单只股票最大重试次数
+RETRY_WAIT = 3            # 重试等待秒数
+
+# 主要指数列表
+MAJOR_INDICES = [
+    ("000001", "上证指数"),
+    ("000300", "沪深300"),
+    ("000905", "中证500"),
+    ("000852", "中证1000"),
+    ("000016", "上证50"),
+    ("399001", "深证成指"),
+    ("399006", "创业板指"),
+    ("399303", "国证2000"),
+    ("000688", "科创50"),
+]
+
+
+# ── 数据库连接 ───────────────────────────────────────────────────────────────
+
+def get_conn():
+    return pymysql.connect(
+        host=os.getenv("MYSQL_HOST", "localhost"),
+        port=int(os.getenv("MYSQL_PORT", "3306")),
+        user=os.getenv("MYSQL_USER", "root"),
+        password=os.getenv("MYSQL_PASSWORD", ""),
+        database=os.getenv("MYSQL_DATABASE", "back_test"),
+        charset="utf8mb4",
+        autocommit=False,
+    )
+
+
+def batch_insert(conn, sql: str, rows: list):
+    """分批写入，避免单次提交过大。"""
+    if not rows:
+        return 0
+    total = 0
+    with conn.cursor() as cur:
+        for i in range(0, len(rows), BATCH_SIZE):
+            chunk = rows[i: i + BATCH_SIZE]
+            cur.executemany(sql, chunk)
+            total += len(chunk)
+    conn.commit()
+    return total
+
+
+# ── Step 1: stock_info ───────────────────────────────────────────────────────
+
+def import_stock_info(conn, resume: bool):
+    log.info("=== Step 1: stock_info ===")
+    if resume:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM stock_info")
+            if cur.fetchone()[0] > 0:
+                log.info("stock_info 已有数据，跳过（--resume）")
+                return
+
+    try:
+        df = ak.stock_zh_a_spot_em()
+    except Exception as e:
+        log.error(f"获取全市场快照失败: {e}")
+        return
+
+    col_map = {
+        "代码": "code", "名称": "name",
+        "总市值": "market_cap", "流通市值": "circ_market_cap",
+    }
+    df = df.rename(columns=col_map)
+    df["code"] = df["code"].astype(str).str.zfill(6)
+    df["market"] = df["code"].apply(
+        lambda c: "SH" if c.startswith(("6", "9", "688")) else
+                  "BJ" if c.startswith(("4", "8")) else "SZ"
+    )
+
+    rows = []
+    for _, r in df.iterrows():
+        rows.append((
+            r["code"],
+            str(r.get("name", ""))[:20],
+            r.get("market", ""),
+        ))
+
+    sql = """
+        INSERT INTO stock_info (code, name, market)
+        VALUES (%s, %s, %s)
+        ON DUPLICATE KEY UPDATE name=VALUES(name), market=VALUES(market),
+                                updated_at=CURRENT_TIMESTAMP
+    """
+    n = batch_insert(conn, sql, rows)
+    log.info(f"stock_info 写入 {n} 条")
+
+
+# ── Step 2: stock_kline ──────────────────────────────────────────────────────
+
+def _fetch_kline_one(code: str) -> tuple[str, pd.DataFrame | None]:
+    """下载单只股票前复权K线，带重试。"""
+    for attempt in range(RETRY):
+        try:
+            raw = ak.stock_zh_a_hist(
+                symbol=code, period="daily",
+                start_date=START_DATE, end_date=END_DATE,
+                adjust="qfq",
+            )
+            if raw is None or raw.empty:
+                return code, None
+            col_map = {
+                "日期": "date", "开盘": "open", "收盘": "close",
+                "最高": "high", "最低": "low", "成交量": "volume",
+                "成交额": "amount", "涨跌幅": "pct_change", "换手率": "turnover",
+                "振幅": "amplitude",
+            }
+            df = raw.rename(columns=col_map)
+            df = df[[c for c in col_map.values() if c in df.columns]].copy()
+            df["date"] = pd.to_datetime(df["date"])
+            return code, df
+        except Exception as e:
+            if attempt < RETRY - 1:
+                time.sleep(RETRY_WAIT)
+            else:
+                return code, None
+    return code, None
+
+
+def _get_daily_snap() -> dict:
+    """获取全市场当日估值快照 {code: {market_cap, circ_market_cap, pe_ttm, pb}}。"""
+    try:
+        df = ak.stock_zh_a_spot_em()
+        col_map = {
+            "代码": "code", "总市值": "mc", "流通市值": "cmc",
+            "市盈率-动态": "pe", "市净率": "pb",
+        }
+        df = df.rename(columns=col_map)
+        df["code"] = df["code"].astype(str).str.zfill(6)
+        result = {}
+        for _, r in df.iterrows():
+            result[r["code"]] = {
+                "mc": r.get("mc"),
+                "cmc": r.get("cmc"),
+                "pe": r.get("pe"),
+                "pb": r.get("pb"),
+            }
+        return result
+    except Exception:
+        return {}
+
+
+def import_stock_kline(conn, resume: bool):
+    log.info("=== Step 2: stock_kline ===")
+
+    # 获取股票列表
+    with conn.cursor() as cur:
+        cur.execute("SELECT code FROM stock_info ORDER BY code")
+        all_codes = [r[0] for r in cur.fetchall()]
+
+    if not all_codes:
+        log.warning("stock_info 为空，请先运行 Step 1")
+        return
+
+    # 断点续传：找出已有数据的股票
+    done_codes = set()
+    if resume:
+        with conn.cursor() as cur:
+            cur.execute("SELECT DISTINCT code FROM stock_kline")
+            done_codes = {r[0] for r in cur.fetchall()}
+        log.info(f"断点续传：已完成 {len(done_codes)}/{len(all_codes)} 只")
+
+    codes = [c for c in all_codes if c not in done_codes]
+    if not codes:
+        log.info("stock_kline 已全部导入，跳过")
+        return
+
+    # 当日估值快照（仅用于最新一行，历史估值从每日快照积累）
+    snap = _get_daily_snap()
+    today_str = date.today().strftime("%Y-%m-%d")
+
+    sql = """
+        INSERT INTO stock_kline
+            (code, trade_date, open, high, low, close, volume,
+             amount, turnover, pct_change, market_cap, circ_market_cap, pe_ttm, pb)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        ON DUPLICATE KEY UPDATE
+            open=VALUES(open), high=VALUES(high), low=VALUES(low),
+            close=VALUES(close), volume=VALUES(volume), amount=VALUES(amount),
+            turnover=VALUES(turnover), pct_change=VALUES(pct_change),
+            market_cap=VALUES(market_cap), circ_market_cap=VALUES(circ_market_cap),
+            pe_ttm=VALUES(pe_ttm), pb=VALUES(pb)
+    """
+
+    total_done = len(done_codes)
+    total = len(all_codes)
+    failed = []
+
+    def _process(code):
+        _, df = _fetch_kline_one(code)
+        if df is None or df.empty:
+            return code, []
+        info = snap.get(code, {})
+        rows = []
+        for _, r in df.iterrows():
+            date_str = r["date"].strftime("%Y-%m-%d")
+            # 估值数据只填最新一天（历史估值靠 daily_update 每天积累）
+            mc = info.get("mc") if date_str == today_str else None
+            cmc = info.get("cmc") if date_str == today_str else None
+            pe = info.get("pe") if date_str == today_str else None
+            pb_val = info.get("pb") if date_str == today_str else None
+            rows.append((
+                code, date_str,
+                _safe(r, "open"), _safe(r, "high"),
+                _safe(r, "low"), _safe(r, "close"),
+                _safe_int(r, "volume"),
+                _safe(r, "amount"), _safe(r, "turnover"),
+                _safe(r, "pct_change"),
+                mc, cmc, pe, pb_val,
+            ))
+        return code, rows
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as exe:
+        futures = {exe.submit(_process, c): c for c in codes}
+        for fut in as_completed(futures):
+            code = futures[fut]
+            try:
+                _, rows = fut.result()
+                if rows:
+                    batch_insert(conn, sql, rows)
+                    total_done += 1
+                else:
+                    failed.append(code)
+                    total_done += 1
+            except Exception as e:
+                log.warning(f"{code} 写入失败: {e}")
+                failed.append(code)
+                total_done += 1
+
+            if total_done % 100 == 0 or total_done == total:
+                log.info(f"stock_kline 进度: {total_done}/{total}")
+
+    if failed:
+        log.warning(f"以下 {len(failed)} 只股票获取失败: {failed[:20]}...")
+    log.info(f"stock_kline 导入完成，失败 {len(failed)} 只")
+
+
+def _safe(row, col):
+    v = row.get(col)
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_int(row, col):
+    v = row.get(col)
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return 0
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return 0
+
+
+# ── Step 3: stock_finance ────────────────────────────────────────────────────
+
+def import_stock_finance(conn, resume: bool):
+    log.info("=== Step 3: stock_finance ===")
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT code FROM stock_info ORDER BY code")
+        all_codes = [r[0] for r in cur.fetchall()]
+
+    done_codes = set()
+    if resume:
+        with conn.cursor() as cur:
+            cur.execute("SELECT DISTINCT code FROM stock_finance")
+            done_codes = {r[0] for r in cur.fetchall()}
+
+    codes = [c for c in all_codes if c not in done_codes]
+    if not codes:
+        log.info("stock_finance 已全部导入，跳过")
+        return
+
+    sql = """
+        INSERT INTO stock_finance
+            (code, report_date, report_type, revenue, net_profit,
+             eps, bvps, debt_ratio, op_cash_flow)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        ON DUPLICATE KEY UPDATE
+            revenue=VALUES(revenue), net_profit=VALUES(net_profit),
+            eps=VALUES(eps), bvps=VALUES(bvps),
+            debt_ratio=VALUES(debt_ratio), op_cash_flow=VALUES(op_cash_flow)
+    """
+
+    total = len(codes)
+    done = 0
+    failed = []
+
+    for code in codes:
+        try:
+            df = ak.stock_financial_abstract_ths(symbol=code, indicator="按报告期")
+            if df is None or df.empty:
+                failed.append(code)
+                continue
+
+            rows = []
+            for _, r in df.iterrows():
+                try:
+                    rd = pd.to_datetime(str(r.get("报告期", ""))).strftime("%Y-%m-%d")
+                except Exception:
+                    continue
+                if rd < "2010-01-01":
+                    continue
+                rows.append((
+                    code, rd, _guess_report_type(rd),
+                    _safe(r, "营业总收入"),
+                    _safe(r, "净利润"),
+                    _safe(r, "基本每股收益"),
+                    _safe(r, "每股净资产"),
+                    _safe(r, "资产负债率"),
+                    _safe(r, "经营活动产生的现金流量净额"),
+                ))
+
+            if rows:
+                batch_insert(conn, sql, rows)
+
+            done += 1
+            if done % 200 == 0 or done == total:
+                log.info(f"stock_finance 进度: {done}/{total}")
+            time.sleep(0.1)
+
+        except Exception as e:
+            log.warning(f"stock_finance {code} 失败: {e}")
+            failed.append(code)
+            done += 1
+
+    log.info(f"stock_finance 完成，失败 {len(failed)} 只")
+
+
+def _guess_report_type(date_str: str) -> str:
+    m = date_str[5:7]
+    return {"03": "Q1", "06": "Q2", "09": "Q3", "12": "ANN"}.get(m, "ANN")
+
+
+# ── Step 4: stock_dividend ───────────────────────────────────────────────────
+
+def import_stock_dividend(conn, resume: bool):
+    log.info("=== Step 4: stock_dividend ===")
+
+    if resume:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM stock_dividend")
+            if cur.fetchone()[0] > 0:
+                log.info("stock_dividend 已有数据，跳过")
+                return
+
+    try:
+        df = ak.stock_dividend_cninfo(symbol="全部")
+        if df is None or df.empty:
+            log.warning("stock_dividend 数据为空")
+            return
+    except Exception as e:
+        log.error(f"获取分红数据失败: {e}")
+        return
+
+    col_map = {
+        "证券代码": "code", "公告日期": "announce_date",
+        "股权登记日": "record_date", "除权除息日": "pay_date",
+        "每股派息(税前)(元)": "div_ps",
+        "每10股送股(股)": "bonus",
+        "每10股转增(股)": "allot",
+        "配股价格(元)": "allot_price",
+    }
+    df = df.rename(columns=col_map)
+    df["code"] = df["code"].astype(str).str.zfill(6)
+
+    def _to_date(v):
+        try:
+            return pd.to_datetime(str(v)).strftime("%Y-%m-%d") if pd.notna(v) else None
+        except Exception:
+            return None
+
+    rows = []
+    for _, r in df.iterrows():
+        pay = _to_date(r.get("pay_date"))
+        if pay and pay < "2010-01-01":
+            continue
+        rows.append((
+            r["code"],
+            _to_date(r.get("announce_date")),
+            _to_date(r.get("record_date")),
+            pay,
+            _safe(r, "div_ps"),
+            _safe(r, "bonus"),
+            _safe(r, "allot"),
+            _safe(r, "allot_price"),
+        ))
+
+    sql = """
+        INSERT INTO stock_dividend
+            (code, announce_date, record_date, pay_date,
+             dividend_per_share, bonus_ratio, allotment_ratio, allotment_price)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+    """
+    n = batch_insert(conn, sql, rows)
+    log.info(f"stock_dividend 写入 {n} 条")
+
+
+# ── Step 5: index_daily ──────────────────────────────────────────────────────
+
+def import_index_daily(conn, resume: bool):
+    log.info("=== Step 5: index_daily ===")
+
+    sql = """
+        INSERT INTO index_daily
+            (index_code, trade_date, open, high, low, close, volume, amount, pct_change)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        ON DUPLICATE KEY UPDATE
+            open=VALUES(open), high=VALUES(high), low=VALUES(low),
+            close=VALUES(close), volume=VALUES(volume),
+            amount=VALUES(amount), pct_change=VALUES(pct_change)
+    """
+
+    for idx_code, idx_name in MAJOR_INDICES:
+        if resume:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT COUNT(*) FROM index_daily WHERE index_code=%s", (idx_code,)
+                )
+                if cur.fetchone()[0] > 0:
+                    log.info(f"index_daily {idx_name}({idx_code}) 已有数据，跳过")
+                    continue
+
+        try:
+            raw = ak.index_zh_a_hist(
+                symbol=idx_code, period="daily",
+                start_date=START_DATE, end_date=END_DATE,
+            )
+            if raw is None or raw.empty:
+                log.warning(f"{idx_name} 数据为空")
+                continue
+
+            col_map = {
+                "日期": "date", "开盘": "open", "收盘": "close",
+                "最高": "high", "最低": "low", "成交量": "volume",
+                "成交额": "amount", "涨跌幅": "pct_change",
+            }
+            raw = raw.rename(columns=col_map)
+            rows = []
+            for _, r in raw.iterrows():
+                rows.append((
+                    idx_code,
+                    pd.to_datetime(r["date"]).strftime("%Y-%m-%d"),
+                    _safe(r, "open"), _safe(r, "high"),
+                    _safe(r, "low"), _safe(r, "close"),
+                    _safe_int(r, "volume"), _safe(r, "amount"),
+                    _safe(r, "pct_change"),
+                ))
+            batch_insert(conn, sql, rows)
+            log.info(f"index_daily {idx_name}({idx_code}) 写入 {len(rows)} 条")
+            time.sleep(0.5)
+
+        except Exception as e:
+            log.error(f"index_daily {idx_name} 失败: {e}")
+
+
+# ── Step 6: index_constituent ────────────────────────────────────────────────
+
+def import_index_constituent(conn, resume: bool):
+    log.info("=== Step 6: index_constituent ===")
+
+    target_indices = [
+        ("000300", "399300"),  # 沪深300（CSI300）
+        ("000905", "000905"),  # 中证500
+        ("000852", "000852"),  # 中证1000
+        ("000016", "000016"),  # 上证50
+    ]
+
+    sql = """
+        INSERT INTO index_constituent (index_code, code, in_date, weight)
+        VALUES (%s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE weight=VALUES(weight)
+    """
+
+    today_str = date.today().strftime("%Y-%m-%d")
+
+    for idx_code, query_code in target_indices:
+        if resume:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT COUNT(*) FROM index_constituent WHERE index_code=%s",
+                    (idx_code,),
+                )
+                if cur.fetchone()[0] > 0:
+                    log.info(f"index_constituent {idx_code} 已有数据，跳过")
+                    continue
+
+        try:
+            df = ak.index_stock_cons_weight_csindex(symbol=query_code)
+            if df is None or df.empty:
+                continue
+            rows = []
+            for _, r in df.iterrows():
+                code = str(r.get("成分券代码", "")).zfill(6)
+                weight = _safe(r, "权重")
+                rows.append((idx_code, code, today_str, weight))
+            batch_insert(conn, sql, rows)
+            log.info(f"index_constituent {idx_code} 写入 {len(rows)} 条")
+            time.sleep(0.5)
+        except Exception as e:
+            log.error(f"index_constituent {idx_code} 失败: {e}")
+
+
+# ── Step 7: north_fund_flow ──────────────────────────────────────────────────
+
+def import_north_fund_flow(conn, resume: bool):
+    log.info("=== Step 7: north_fund_flow ===")
+
+    if resume:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM north_fund_flow")
+            if cur.fetchone()[0] > 0:
+                log.info("north_fund_flow 已有数据，跳过")
+                return
+
+    try:
+        df = ak.stock_hsgt_north_net_flow_in_em(symbol="北向资金")
+        if df is None or df.empty:
+            log.warning("north_fund_flow 数据为空")
+            return
+    except Exception as e:
+        log.error(f"获取北向资金失败: {e}")
+        return
+
+    sql = """
+        INSERT INTO north_fund_flow (trade_date, north_net_inflow)
+        VALUES (%s, %s)
+        ON DUPLICATE KEY UPDATE north_net_inflow=VALUES(north_net_inflow)
+    """
+    rows = []
+    for _, r in df.iterrows():
+        try:
+            td = pd.to_datetime(r.iloc[0]).strftime("%Y-%m-%d")
+            val = float(r.iloc[1]) if pd.notna(r.iloc[1]) else None
+            rows.append((td, val))
+        except Exception:
+            continue
+
+    n = batch_insert(conn, sql, rows)
+    log.info(f"north_fund_flow 写入 {n} 条")
+
+
+# ── 主入口 ───────────────────────────────────────────────────────────────────
+
+STEPS = {
+    "info":        import_stock_info,
+    "kline":       import_stock_kline,
+    "finance":     import_stock_finance,
+    "dividend":    import_stock_dividend,
+    "index":       import_index_daily,
+    "constituent": import_index_constituent,
+    "north":       import_north_fund_flow,
+}
+
+
+def main():
+    parser = argparse.ArgumentParser(description="全量历史数据导入")
+    parser.add_argument(
+        "--step", choices=list(STEPS.keys()),
+        help="只执行某一步（默认全部）",
+    )
+    parser.add_argument(
+        "--resume", action="store_true",
+        help="断点续传：跳过已有数据的股票",
+    )
+    args = parser.parse_args()
+
+    conn = get_conn()
+    start_time = datetime.now()
+    log.info(f"开始导入，时间: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    log.info(f"数据范围: {START_DATE_DASH} ~ {END_DATE_DASH}")
+    log.info(f"断点续传: {'开启' if args.resume else '关闭'}")
+
+    try:
+        if args.step:
+            STEPS[args.step](conn, args.resume)
+        else:
+            for name, fn in STEPS.items():
+                fn(conn, args.resume)
+
+        elapsed = (datetime.now() - start_time).total_seconds() / 60
+        log.info(f"全部完成，耗时 {elapsed:.1f} 分钟")
+    except KeyboardInterrupt:
+        log.info("用户中断，已保存已完成部分。使用 --resume 可从断点继续。")
+    finally:
+        conn.close()
+
+
+if __name__ == "__main__":
+    main()
