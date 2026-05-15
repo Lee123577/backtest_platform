@@ -251,10 +251,20 @@ def import_stock_info(conn, resume: bool):
 # ── Step 2: stock_kline ──────────────────────────────────────────────────────
 
 def _fetch_kline_one(code: str) -> tuple[str, pd.DataFrame | None]:
-    """下载单只股票前复权K线，带无代理/系统代理两级重试。"""
+    """
+    下载单只股票前复权K线，走完整6级降级链：
+    东方财富(无代理) → 东方财富(系统代理) → 新浪(无代理) → 新浪(系统代理)
+    → 腾讯(无代理) → 腾讯(系统代理)
+    服务器 IP 被东方财富封时自动切换到新浪/腾讯。
+    """
+    from app.data.feed import _sina_kline, _tencent_kline
     callers = [
         lambda: _remove_proxy(_akshare_kline, code, START_DATE_DASH, END_DATE_DASH, "qfq"),
         lambda: _akshare_kline(code, START_DATE_DASH, END_DATE_DASH, "qfq"),
+        lambda: _remove_proxy(_sina_kline, code, START_DATE_DASH, END_DATE_DASH, "qfq"),
+        lambda: _sina_kline(code, START_DATE_DASH, END_DATE_DASH, "qfq"),
+        lambda: _remove_proxy(_tencent_kline, code, START_DATE_DASH, END_DATE_DASH, "qfq"),
+        lambda: _tencent_kline(code, START_DATE_DASH, END_DATE_DASH, "qfq"),
     ]
     for attempt in range(RETRY):
         for caller in callers:
