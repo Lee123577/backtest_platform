@@ -79,6 +79,107 @@ MAJOR_INDICES = [
 
 # ── 数据库连接 ───────────────────────────────────────────────────────────────
 
+def init_tables(conn):
+    """建表（如不存在），确保服务器首次运行时自动初始化。"""
+    ddl_list = [
+        """CREATE TABLE IF NOT EXISTS stock_info (
+            code          CHAR(6)      NOT NULL PRIMARY KEY,
+            name          VARCHAR(20)  NOT NULL,
+            market        VARCHAR(4)   COMMENT 'SH/SZ/BJ',
+            industry_sw1  VARCHAR(30),
+            industry_sw2  VARCHAR(30),
+            list_date     DATE,
+            delist_date   DATE,
+            is_st         TINYINT      NOT NULL DEFAULT 0,
+            total_share   BIGINT,
+            circ_share    BIGINT,
+            updated_at    DATETIME     DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='股票基础信息'""",
+
+        """CREATE TABLE IF NOT EXISTS stock_kline (
+            code            CHAR(6)        NOT NULL,
+            trade_date      DATE           NOT NULL,
+            open            DECIMAL(10,3)  NOT NULL,
+            high            DECIMAL(10,3)  NOT NULL,
+            low             DECIMAL(10,3)  NOT NULL,
+            close           DECIMAL(10,3)  NOT NULL,
+            volume          BIGINT         NOT NULL,
+            amount          DECIMAL(18,2),
+            turnover        DECIMAL(8,4),
+            pct_change      DECIMAL(8,4),
+            market_cap      DECIMAL(18,4),
+            circ_market_cap DECIMAL(18,4),
+            pe_ttm          DECIMAL(12,4),
+            pb              DECIMAL(10,4),
+            PRIMARY KEY (code, trade_date),
+            INDEX idx_trade_date (trade_date),
+            INDEX idx_market_cap (trade_date, market_cap)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='日K线+估值（前复权）'""",
+
+        """CREATE TABLE IF NOT EXISTS stock_finance (
+            code            CHAR(6)        NOT NULL,
+            report_date     DATE           NOT NULL,
+            report_type     VARCHAR(4),
+            revenue         DECIMAL(20,2),
+            net_profit      DECIMAL(20,2),
+            eps             DECIMAL(10,4),
+            bvps            DECIMAL(10,4),
+            debt_ratio      DECIMAL(10,4),
+            op_cash_flow    DECIMAL(20,2),
+            PRIMARY KEY (code, report_date)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='季报/年报财务核心指标'""",
+
+        """CREATE TABLE IF NOT EXISTS stock_dividend (
+            id                 INT AUTO_INCREMENT PRIMARY KEY,
+            code               CHAR(6)       NOT NULL,
+            announce_date      DATE,
+            record_date        DATE,
+            pay_date           DATE,
+            dividend_per_share DECIMAL(10,4),
+            bonus_ratio        DECIMAL(10,4),
+            allotment_ratio    DECIMAL(10,4),
+            allotment_price    DECIMAL(10,3),
+            INDEX idx_code_date (code, pay_date)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='分红配股历史'""",
+
+        """CREATE TABLE IF NOT EXISTS index_daily (
+            index_code  VARCHAR(8)     NOT NULL,
+            trade_date  DATE           NOT NULL,
+            open        DECIMAL(10,3),
+            high        DECIMAL(10,3),
+            low         DECIMAL(10,3),
+            close       DECIMAL(10,3),
+            volume      BIGINT,
+            amount      DECIMAL(18,2),
+            pct_change  DECIMAL(8,4),
+            PRIMARY KEY (index_code, trade_date)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='主要指数日行情'""",
+
+        """CREATE TABLE IF NOT EXISTS index_constituent (
+            index_code  VARCHAR(8)   NOT NULL,
+            code        CHAR(6)      NOT NULL,
+            in_date     DATE         NOT NULL,
+            out_date    DATE,
+            weight      DECIMAL(8,4),
+            PRIMARY KEY (index_code, code, in_date)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='指数成分股'""",
+
+        """CREATE TABLE IF NOT EXISTS north_fund_flow (
+            trade_date        DATE          NOT NULL PRIMARY KEY,
+            north_net_inflow  DECIMAL(12,2),
+            sh_net_inflow     DECIMAL(12,2),
+            sz_net_inflow     DECIMAL(12,2),
+            north_total_hold  DECIMAL(16,2),
+            south_net_inflow  DECIMAL(12,2)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='北向资金每日流向'""",
+    ]
+    with conn.cursor() as cur:
+        for ddl in ddl_list:
+            cur.execute(ddl)
+    conn.commit()
+    log.info("数据库表初始化完成")
+
+
 def get_conn():
     return pymysql.connect(
         host=os.getenv("MYSQL_HOST", "localhost"),
@@ -628,6 +729,7 @@ def main():
     args = parser.parse_args()
 
     conn = get_conn()
+    init_tables(conn)   # 确保表存在（服务器首次运行自动建表）
     start_time = datetime.now()
     log.info(f"开始导入，时间: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
     log.info(f"数据范围: {START_DATE_DASH} ~ {END_DATE_DASH}")
