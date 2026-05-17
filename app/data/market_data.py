@@ -7,6 +7,7 @@ Connection strategy (four-attempt fallback chain):
   Attempt 3 — akshare with system proxy      (covers must-use-proxy environments)
   Attempt 4 — direct eastmoney push API via curl_cffi Chrome impersonation (last resort)
 """
+import logging
 import os
 import time
 import urllib.request
@@ -21,6 +22,8 @@ import requests as _req
 
 from .data_loader import CACHE_DIR, _get_pool, get_kline_data
 from .feed import atomic_to_csv, get_feed
+
+logger = logging.getLogger(__name__)
 
 SNAP_CACHE = CACHE_DIR / f"universe_snapshot_{Date.today().strftime('%Y%m%d')}.csv"
 
@@ -227,21 +230,89 @@ def _parse_akshare_raw(raw: pd.DataFrame) -> pd.DataFrame:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+def _query_universe_from_db() -> pd.DataFrame | None:
+    """
+    从 stock_kline（最新交易日数据）+ stock_info（股票名称）查询全市场快照。
+    返回 {code, name, price, market_cap(亿元)}，数据库不可用或为空时返回 None。
+
+    分两阶段查询：
+      1. 优先查带 market_cap 的完整数据
+      2. 如最新交易日的 market_cap 为空（daily_update 未运行），降级到不含 market_cap 的查询
+    """
+    conn = _get_pool()
+    if conn is None:
+        logger.warning("数据库连接不可用，跳过数据库查询")
+        return None
+    conn.ping(reconnect=True)
+
+    # ── Attempt A: 查带 market_cap 的完整数据 ────────────────────────────────
+    # 注意: market_cap 在 DB 中已为亿元（import_history 写入时已除 1e8）
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT k.code, i.name, k.close AS price,
+                   k.market_cap AS market_cap
+            FROM stock_kline k
+            JOIN stock_info i ON k.code = i.code
+            WHERE k.trade_date = (SELECT MAX(trade_date) FROM stock_kline)
+              AND k.market_cap IS NOT NULL
+            ORDER BY k.code
+        """)
+        rows = cur.fetchall()
+    if rows:
+        df = pd.DataFrame(rows)
+        df["code"] = df["code"].astype(str).str.zfill(6)
+        logger.info("数据库查询成功: %d 只股票 (含market_cap)", len(df))
+        return df
+
+    # ── Attempt B: 降级到不含 market_cap（daily_update 未运行时）─────────────
+    logger.warning("最新交易日无 market_cap 数据，降级到不含 market_cap 的查询")
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT k.code, i.name, k.close AS price,
+                   NULL AS market_cap
+            FROM stock_kline k
+            JOIN stock_info i ON k.code = i.code
+            WHERE k.trade_date = (SELECT MAX(trade_date) FROM stock_kline)
+            ORDER BY k.code
+        """)
+        rows = cur.fetchall()
+    if not rows:
+        logger.warning("数据库 stock_kline 表无任何数据")
+        return None
+    df = pd.DataFrame(rows)
+    df["code"] = df["code"].astype(str).str.zfill(6)
+    logger.info("数据库查询成功: %d 只股票 (不含market_cap，将使用比例估算)", len(df))
+    return df
+
+
 def get_universe_snapshot() -> pd.DataFrame:
     """
     All A-share stocks with current price and total market cap (亿元).
     Cached once per calendar day.
 
-    Four-attempt fallback chain (ordered from most to least reliable):
+    Five-attempt fallback chain (database first, then remote APIs):
+      0. MySQL stock_kline + stock_info — latest trading day snapshot
       1. data.eastmoney.com xuangu API — different host, bypasses push2 blocks
       2. akshare + proxy disabled      — urllib + requests.utils both patched
       3. akshare + system proxy        — for environments that legitimately need proxy
       4. curl_cffi + Chrome TLS        — last-resort bot-detection bypass
     """
+    errors: list = []
+
+    # ── Attempt 0: 查询数据库（stock_kline + stock_info）─────────────────────────
+    # 优先走数据库，确保已导入历史数据后不依赖外部API和本地缓存
+    try:
+        df = _query_universe_from_db()
+        if df is not None and not df.empty:
+            atomic_to_csv(df, SNAP_CACHE)
+            return df
+        errors.append("[方式0 数据库] 数据为空")
+    except Exception as exc:
+        errors.append(f"[方式0 数据库] {exc}")
+
+    # ── Attempt 0.5: 本地CSV缓存（数据库无数据时使用已有缓存）────────────────────
     if SNAP_CACHE.exists():
         return pd.read_csv(SNAP_CACHE, dtype={"code": str})
-
-    errors: list = []
 
     # ── Attempt 1: xuangu API (data.eastmoney.com, reliable) ──────────────────
     try:
@@ -272,16 +343,40 @@ def get_universe_snapshot() -> pd.DataFrame:
         errors.append(f"[方式3 akshare系统代理] {exc}")
 
     # ── Attempt 4: curl_cffi Chrome TLS 模拟 ──────────────────────────────────
-    try:
-        df = _fetch_via_cffi()
-        atomic_to_csv(df, SNAP_CACHE)
-        return df
-    except Exception as exc:
-        errors.append(f"[方式4 curl_cffi] {exc}")
+    # NOTE: curl_cffi loads Chromium's network stack. On Windows the C-level
+    # PartitionAlloc FATAL crash (partition_address_space.cc) kills the entire
+    # process and cannot be caught by Python try/except. Run in a subprocess.
+    import subprocess as _sp, sys as _sys, pickle as _pl, tempfile as _tf
+    with _tf.NamedTemporaryFile(suffix=".pkl", delete=False) as _tmp:
+        _tmp.close()
+        _scr = (
+            "from app.data.market_data import _fetch_via_cffi\n"
+            "import pickle\n"
+            "try:\n"
+            "  df = _fetch_via_cffi()\n"
+            "  pickle.dump(df, open('{}','wb'))\n"
+            "except Exception as e:\n"
+            "  pickle.dump(e, open('{}','wb'))\n"
+        ).format(_tmp.name, _tmp.name)
+        try:
+            _sp.run([_sys.executable, "-c", _scr], capture_output=True, timeout=60)
+            obj = _pl.load(open(_tmp.name, "rb"))
+            if isinstance(obj, pd.DataFrame) and not obj.empty:
+                atomic_to_csv(obj, SNAP_CACHE)
+                return obj
+            elif isinstance(obj, Exception):
+                errors.append(f"[方式4 curl_cffi] {obj}")
+            else:
+                errors.append("[方式4 curl_cffi] 子进程返回意外数据")
+        except Exception as exc:
+            errors.append(f"[方式4 curl_cffi] {exc}")
+        finally:
+            _os = __import__("os")
+            _os.unlink(_tmp.name)
 
     detail = "\n".join(f"  {e}" for e in errors)
     raise ConnectionError(
-        f"获取全市场行情数据失败，已尝试4种方式：\n{detail}\n\n"
+        f"获取全市场行情数据失败（已尝试4种方式）：\n{detail}\n\n"
         f"排查建议：\n"
         f"  1. 确认东方财富可访问：curl https://data.eastmoney.com\n"
         f"  2. 如使用代理软件（Clash/V2Ray），尝试暂时关闭或开启TUN模式\n"

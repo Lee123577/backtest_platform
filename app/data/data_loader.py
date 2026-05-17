@@ -1,3 +1,5 @@
+import logging
+import threading
 from pathlib import Path
 
 import pandas as pd
@@ -5,21 +7,26 @@ import pandas as pd
 from .feed import get_feed
 from ..config import settings
 
+logger = logging.getLogger(__name__)
+
 CACHE_DIR = Path(__file__).parent.parent.parent / "data" / "cache"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-# 数据库可用时全局复用连接池（懒初始化）
-_db_pool = None
+# 每个线程独立数据库连接（ThreadPoolExecutor 多线程共享单连接会导致协议错乱）
+_db_local = threading.local()
 
 
 def _get_pool():
-    global _db_pool
-    if _db_pool is not None:
-        return _db_pool
+    """获取当前线程的数据库连接，线程安全，无需加锁。"""
     try:
+        conn = getattr(_db_local, "conn", None)
+        if conn is not None:
+            conn.ping(reconnect=True)
+            return conn
+
         from pymysql.cursors import DictCursor
         import pymysql
-        _db_pool = pymysql.connect(
+        conn = pymysql.connect(
             host=settings.MYSQL_HOST,
             port=settings.MYSQL_PORT,
             user=settings.MYSQL_USER,
@@ -29,8 +36,14 @@ def _get_pool():
             cursorclass=DictCursor,
             autocommit=True,
         )
-        return _db_pool
-    except Exception:
+        _db_local.conn = conn
+        return conn
+    except Exception as e:
+        logger.error("数据库连接失败(host=%s db=%s): %s", settings.MYSQL_HOST, settings.MYSQL_DATABASE, e)
+        try:
+            _db_local.conn = None
+        except AttributeError:
+            pass
         return None
 
 
@@ -67,6 +80,13 @@ def _query_kline_from_db(
             return None
 
         df = pd.DataFrame(rows)
+        # pymysql 将 MySQL DECIMAL 列读为 decimal.Decimal，需转为 float64 避免与 float 混合运算出错
+        numeric_cols = ["open", "high", "low", "close", "volume", "amount",
+                        "turnover", "pct_change", "market_cap", "circ_market_cap",
+                        "pe_ttm", "pb"]
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
         df["date"] = pd.to_datetime(df["date"])
         return df
 
