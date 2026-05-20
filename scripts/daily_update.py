@@ -619,26 +619,48 @@ def is_trading_day(target_date: date) -> bool:
     return target_date.weekday() < 5
 
 
-def main():
-    parser = argparse.ArgumentParser(description="每日增量更新")
-    parser.add_argument("--date", help="指定更新日期 YYYY-MM-DD（默认今日）")
-    args = parser.parse_args()
+def _find_missing_kline_dates(conn, today: date, lookback_days: int = 30) -> list[date]:
+    """
+    扫描 [today - lookback_days, today] 窗口内所有工作日，
+    找出 stock_kline 中完全没有数据的日期（空洞），按升序返回。
+    节假日 akshare 会返回空，update_kline 会安全跳过，无副作用。
+    """
+    window_start = today - timedelta(days=lookback_days)
+    # 窗口内所有工作日
+    expected: set[date] = set()
+    cur = window_start
+    while cur <= today:
+        if is_trading_day(cur):
+            expected.add(cur)
+        cur += timedelta(days=1)
 
-    if args.date:
-        trade_date = args.date
-        target = date.fromisoformat(trade_date)
-    else:
-        # 默认更新今日；如果今天是周末则更新上一个周五
-        target = date.today()
-        while not is_trading_day(target):
-            target -= timedelta(days=1)
-        trade_date = target.strftime("%Y-%m-%d")
+    # 已有数据的日期
+    try:
+        with conn.cursor() as cur_db:
+            cur_db.execute(
+                "SELECT DISTINCT trade_date FROM stock_kline "
+                "WHERE trade_date >= %s AND trade_date <= %s",
+                (window_start.strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")),
+            )
+            rows = cur_db.fetchall()
+        have: set[date] = set()
+        for r in rows:
+            val = r[0]
+            if isinstance(val, date):
+                have.add(val)
+            else:
+                have.add(date.fromisoformat(str(val)))
+    except Exception as e:
+        log.warning(f"查询已有 kline 日期失败: {e}")
+        have = set()
 
-    log.info(f"每日更新开始，目标日期: {trade_date}")
-    conn = get_conn()
-    # 每个 step 用独立 try，单个失败不影响后续；最后汇总失败步骤
+    missing = sorted(expected - have)
+    return missing
+
+
+def _run_for_date(conn, trade_date: str) -> list[str]:
+    """对单个交易日跑全部更新步骤，返回失败步骤列表。"""
     steps = [
-        ("stock_info",        lambda: update_stock_info(conn)),
         ("stock_kline",       lambda: update_kline(conn, trade_date)),
         ("index_daily",       lambda: update_index_daily(conn, trade_date)),
         ("north_fund_flow",   lambda: update_north_fund_flow(conn, trade_date)),
@@ -648,20 +670,65 @@ def main():
         ("index_constituent", lambda: update_index_constituent(conn, trade_date)),
     ]
     failed = []
+    for name, fn in steps:
+        try:
+            fn()
+        except Exception as e:
+            log.error(f"[{trade_date}] 步骤 {name} 失败: {e}", exc_info=True)
+            failed.append(name)
+    return failed
+
+
+def main():
+    parser = argparse.ArgumentParser(description="每日增量更新")
+    parser.add_argument("--date", help="指定更新日期 YYYY-MM-DD（默认自动补齐到今日）")
+    args = parser.parse_args()
+
+    conn = get_conn()
+    all_failed = []
+
     try:
-        for name, fn in steps:
-            try:
-                fn()
-            except Exception as e:
-                log.error(f"步骤 {name} 失败: {e}", exc_info=True)
-                failed.append(name)
-        if failed:
-            log.warning(f"每日更新完成（含失败步骤）: {failed}")
+        if args.date:
+            # 指定了日期：只跑那一天
+            dates_to_run = [date.fromisoformat(args.date)]
         else:
-            log.info("每日更新完成")
+            # 未指定日期：扫描近 30 天内所有缺失工作日，自动补齐
+            today = date.today()
+            while not is_trading_day(today):
+                today -= timedelta(days=1)
+
+            dates_to_run = _find_missing_kline_dates(conn, today, lookback_days=30)
+            if not dates_to_run:
+                log.info("stock_kline 近 30 天无缺失，只更新 stock_info")
+            else:
+                log.info(f"检测到 {len(dates_to_run)} 个缺失交易日: "
+                         f"{[d.strftime('%Y-%m-%d') for d in dates_to_run]}")
+
+        # stock_info 只跑一次（当天最新状态）
+        log.info("更新 stock_info（ST/名称）…")
+        try:
+            update_stock_info(conn)
+        except Exception as e:
+            log.error(f"步骤 stock_info 失败: {e}", exc_info=True)
+            all_failed.append("stock_info")
+
+        # 逐日补录 kline / index / 资金流等
+        for d in dates_to_run:
+            trade_date = d.strftime("%Y-%m-%d")
+            log.info(f"── 开始更新 {trade_date} ──")
+            failed = _run_for_date(conn, trade_date)
+            if failed:
+                all_failed.extend([f"{trade_date}/{s}" for s in failed])
+
     finally:
         conn.close()
-    sys.exit(1 if failed else 0)
+
+    if all_failed:
+        log.warning(f"每日更新完成（含失败步骤）: {all_failed}")
+        sys.exit(1)
+    else:
+        log.info("每日更新全部完成")
+        sys.exit(0)
 
 
 if __name__ == "__main__":
