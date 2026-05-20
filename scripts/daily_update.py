@@ -29,7 +29,7 @@ import os
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
-load_dotenv(ROOT / ".env")
+load_dotenv(ROOT / ".env", override=True)
 
 logging.basicConfig(
     level=logging.INFO,
