@@ -36,6 +36,9 @@ def run_portfolio_backtest(
 ) -> Dict[str, Any]:
 
     hold_days: int = int(strategy.params.get("hold_days", 5))
+    # 止损阈值（百分比），0 或缺省视为关闭
+    stop_loss_pct: float = float(strategy.params.get("stop_loss_pct", 0) or 0)
+    stop_loss_ratio: float = stop_loss_pct / 100.0
 
     # ── Build sorted trading-day index ───────────────────────────────────────
     all_dates = sorted(set(
@@ -61,6 +64,8 @@ def run_portfolio_backtest(
     # ── Simulation ────────────────────────────────────────────────────────────
     capital = float(initial_capital)
     holdings: Dict[str, int] = {}          # {code: shares held}
+    # {code: 平均买入价（含滑点，未含手续费）} — 用于止损判断
+    buy_prices: Dict[str, float] = {}
     trades: List[dict] = []
     equity_curve: List[dict] = []
     holdings_log: List[dict] = []
@@ -109,6 +114,7 @@ def run_portfolio_backtest(
                         "commission": round(comm + tax, 2),
                         "capital": capital,
                     })
+                    buy_prices.pop(code, None)
                 elif shares > 0:
                     kept[code] = shares  # suspended; carry over
             holdings = kept
@@ -161,6 +167,7 @@ def run_portfolio_backtest(
                         # accidental double-allocation if a strategy ever returns
                         # duplicates or the rebalance-sell logic changes.
                         holdings[code] = shares
+                        buy_prices[code] = buy_price
                         capital = round(capital - cost - comm, 2)
                         bought.append(code)
                         trades.append({
@@ -175,6 +182,35 @@ def run_portfolio_backtest(
                         })
                 if bought:
                     holdings_log.append({"date": str(date.date()), "stocks": bought})
+
+        # ── 止损：当日收盘相对买入价跌幅达到阈值即按收盘价卖出 ────────────
+        if stop_loss_ratio > 0 and holdings:
+            for code in list(holdings.keys()):
+                shares = holdings[code]
+                if shares <= 0 or code not in day_prices or code not in buy_prices:
+                    continue
+                close_px = day_prices[code]["close"]
+                cost_px = buy_prices[code]
+                if cost_px <= 0:
+                    continue
+                if (close_px - cost_px) / cost_px <= -stop_loss_ratio:
+                    sell_price = close_px * (1 - slippage_rate)
+                    revenue = shares * sell_price
+                    comm = max(revenue * commission_rate, min_commission)
+                    tax = revenue * stamp_tax_rate
+                    capital = round(capital + revenue - comm - tax, 2)
+                    trades.append({
+                        "date": str(date.date()),
+                        "type": "止损卖出",
+                        "code": code,
+                        "price": round(sell_price, 3),
+                        "shares": shares,
+                        "amount": round(revenue, 2),
+                        "commission": round(comm + tax, 2),
+                        "capital": capital,
+                    })
+                    del holdings[code]
+                    buy_prices.pop(code, None)
 
         # ── Daily equity at CLOSE ─────────────────────────────────────────────
         # For suspended stocks, fall back to last known close so the equity
@@ -252,7 +288,7 @@ def run_portfolio_backtest(
     for t in trades:
         if t["type"] == "买入":
             code_buy_prices[t["code"]].append(t["price"])
-        elif t["type"] == "卖出":
+        elif t["type"] in ("卖出", "止损卖出"):
             buys = code_buy_prices.get(t["code"], [])
             if buys:
                 if t["price"] > buys.pop(0):

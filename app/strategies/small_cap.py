@@ -41,6 +41,10 @@ class SmallCapStrategy(PortfolioBaseStrategy):
             "default": 5, "min": 1, "max": 60,
             "description": "持仓天数（交易日）", "type": "int",
         },
+        "stop_loss_pct": {
+            "default": 10, "min": 0, "max": 50,
+            "description": "止损阈值（%），亏损达到该比例立即卖出，0=不止损", "type": "float",
+        },
     }
 
     def select_stocks(
