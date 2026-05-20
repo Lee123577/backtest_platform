@@ -265,13 +265,49 @@ def update_index_daily(conn, trade_date: str):
 # ── 4. 更新 north_fund_flow ──────────────────────────────────────────────────
 
 def update_north_fund_flow(conn, trade_date: str):
+    """
+    更新北向资金净流入。akshare 接口多次改名，按优先级尝试：
+      1. stock_hsgt_hist_em(symbol='北向资金')      — 当前主用接口
+      2. stock_hsgt_fund_flow_summary_em()          — 当日摘要兜底
+      3. stock_hsgt_north_net_flow_in_em(...)       — 旧接口（已废弃，仅兼容）
+    """
     log.info(f"更新 north_fund_flow: {trade_date}")
-    try:
-        df = ak.stock_hsgt_north_net_flow_in_em(symbol="北向资金")
-        if df is None or df.empty:
-            return
-    except Exception as e:
-        log.error(f"北向资金获取失败: {e}")
+    df = None
+
+    callers = [
+        ("stock_hsgt_hist_em",
+         lambda: ak.stock_hsgt_hist_em(symbol="北向资金")),
+        ("stock_hsgt_fund_flow_summary_em",
+         lambda: ak.stock_hsgt_fund_flow_summary_em()),
+        ("stock_hsgt_north_net_flow_in_em",
+         lambda: ak.stock_hsgt_north_net_flow_in_em(symbol="北向资金")),
+    ]
+    last_err = None
+    for name, fn in callers:
+        if not hasattr(ak, name.split("__")[0] if "__" in name else name):
+            continue
+        try:
+            df = fn()
+            if df is not None and not df.empty:
+                log.info(f"北向资金: 使用 akshare.{name}")
+                break
+        except Exception as e:
+            last_err = e
+            df = None
+
+    if df is None or df.empty:
+        log.error(f"北向资金所有接口均失败: {last_err}")
+        return
+
+    # 字段名兼容（不同接口列名不同）
+    col_date = next((c for c in df.columns
+                     if "日期" in str(c) or str(c).lower() == "date"), df.columns[0])
+    col_flow = next((c for c in df.columns
+                     if ("净" in str(c) and ("流入" in str(c) or "买入" in str(c)))
+                     or "当日资金流入" in str(c)),
+                    df.columns[1] if len(df.columns) > 1 else None)
+    if col_flow is None:
+        log.error(f"北向资金: 无法识别金额列，columns={list(df.columns)}")
         return
 
     sql = """
@@ -282,16 +318,244 @@ def update_north_fund_flow(conn, trade_date: str):
     rows = []
     for _, r in df.iterrows():
         try:
-            td = pd.to_datetime(r.iloc[0]).strftime("%Y-%m-%d")
+            td = pd.to_datetime(r[col_date]).strftime("%Y-%m-%d")
             if td != trade_date:
                 continue
-            val = float(r.iloc[1]) if pd.notna(r.iloc[1]) else None
+            val = r[col_flow]
+            val = float(val) if pd.notna(val) else None
             rows.append((td, val))
         except Exception:
             continue
 
     n = batch_insert(conn, sql, rows)
     log.info(f"north_fund_flow 写入 {n} 条")
+
+
+# ── 5. 更新 stock_finance（季报，按季度补抓） ────────────────────────────────
+
+def _guess_report_type(date_str: str) -> str:
+    m = date_str[5:7]
+    return {"03": "Q1", "06": "Q2", "09": "Q3", "12": "ANN"}.get(m, "ANN")
+
+
+def _quarter_ends(today: date, look_back: int = 4) -> list:
+    """返回 ≤ today 的最近 look_back 个季度末（降序）。"""
+    qs = []
+    y = today.year
+    for yr in (y, y - 1):
+        for m, d in [(12, 31), (9, 30), (6, 30), (3, 31)]:
+            qe = date(yr, m, d)
+            if qe <= today:
+                qs.append(qe)
+    return qs[:look_back]
+
+
+def update_stock_finance(conn, trade_date: str):
+    """
+    每日检查最近 4 个季度的财报覆盖率：若某季度覆盖 < 80%，触发批量补抓。
+    用 ak.stock_yjbb_em 批量接口（一次返回全市场某季度数据），比逐只快几十倍。
+    季报披露期外此函数基本是 no-op（一次 SQL 计数）。
+    """
+    log.info(f"检查 stock_finance: {trade_date}")
+    target = date.fromisoformat(trade_date)
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM stock_info")
+        total_stocks = cur.fetchone()[0] or 0
+
+    if total_stocks == 0:
+        log.warning("stock_info 为空，跳过 stock_finance 更新")
+        return
+
+    sql = """
+        INSERT INTO stock_finance
+            (code, report_date, report_type, revenue, net_profit,
+             eps, bvps, debt_ratio, op_cash_flow)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        ON DUPLICATE KEY UPDATE
+            revenue=VALUES(revenue), net_profit=VALUES(net_profit),
+            eps=VALUES(eps), bvps=VALUES(bvps),
+            debt_ratio=VALUES(debt_ratio), op_cash_flow=VALUES(op_cash_flow)
+    """
+
+    for qe in _quarter_ends(target, look_back=4):
+        qe_str = qe.strftime("%Y-%m-%d")
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) FROM stock_finance WHERE report_date=%s",
+                (qe_str,),
+            )
+            have = cur.fetchone()[0] or 0
+        coverage = have / total_stocks
+        if coverage >= 0.8:
+            log.info(f"stock_finance {qe_str} 已覆盖 {have}/{total_stocks}（{coverage:.0%}），跳过")
+            continue
+
+        log.info(f"stock_finance {qe_str} 仅 {have}/{total_stocks}（{coverage:.0%}），开始批量补抓")
+        try:
+            df = ak.stock_yjbb_em(date=qe.strftime("%Y%m%d"))
+        except Exception as e:
+            log.warning(f"stock_yjbb_em {qe_str} 失败: {e}")
+            continue
+        if df is None or df.empty:
+            log.info(f"{qe_str} 该季报尚未发布，跳过")
+            continue
+
+        # 字段映射（akshare 不同版本字段名略有差异，尽量兼容）
+        col_revenue = next((c for c in df.columns if "营业总收入" in c or "营业收入" in c), None)
+        col_profit  = next((c for c in df.columns if "净利润" in c), None)
+        col_eps     = next((c for c in df.columns if "每股收益" in c), None)
+        col_bvps    = next((c for c in df.columns if "每股净资产" in c), None)
+        col_debt    = next((c for c in df.columns if "资产负债率" in c), None)
+        col_cash    = next((c for c in df.columns if "经营" in c and "现金" in c), None)
+
+        rows = []
+        for _, r in df.iterrows():
+            try:
+                code = str(r.get("股票代码", r.get("代码", ""))).zfill(6)
+                if len(code) != 6:
+                    continue
+                rows.append((
+                    code, qe_str, _guess_report_type(qe_str),
+                    _safe(r, col_revenue) if col_revenue else None,
+                    _safe(r, col_profit)  if col_profit  else None,
+                    _safe(r, col_eps)     if col_eps     else None,
+                    _safe(r, col_bvps)    if col_bvps    else None,
+                    _safe(r, col_debt)    if col_debt    else None,
+                    _safe(r, col_cash)    if col_cash    else None,
+                ))
+            except Exception:
+                continue
+
+        n = batch_insert(conn, sql, rows)
+        log.info(f"stock_finance {qe_str} 写入 {n} 条")
+        time.sleep(1)
+
+
+# ── 6. 更新 stock_dividend（分红，每周一拉最近90天） ────────────────────────
+
+def update_stock_dividend(conn, trade_date: str):
+    """
+    每周一执行：拉取 cninfo 全市场分红表，
+    只保留 announce_date 在最近 90 天内的新增记录，去重写入。
+    其他工作日跳过（分红公告变化频率低，每天跑没必要）。
+    """
+    target = date.fromisoformat(trade_date)
+    if target.weekday() != 0:
+        log.info(f"stock_dividend: 非周一（{target}），跳过")
+        return
+
+    log.info(f"更新 stock_dividend: {trade_date}")
+    try:
+        df = ak.stock_dividend_cninfo(symbol="全部")
+        if df is None or df.empty:
+            log.warning("stock_dividend 数据为空")
+            return
+    except Exception as e:
+        log.error(f"获取分红失败: {e}")
+        return
+
+    col_map = {
+        "证券代码": "code", "公告日期": "announce_date",
+        "股权登记日": "record_date", "除权除息日": "pay_date",
+        "每股派息(税前)(元)": "div_ps",
+        "每10股送股(股)": "bonus",
+        "每10股转增(股)": "allot",
+        "配股价格(元)": "allot_price",
+    }
+    df = df.rename(columns=col_map)
+    df["code"] = df["code"].astype(str).str.zfill(6)
+
+    def _to_date_str(v):
+        try:
+            return pd.to_datetime(str(v)).strftime("%Y-%m-%d") if pd.notna(v) else None
+        except Exception:
+            return None
+
+    cutoff = (target - timedelta(days=90)).strftime("%Y-%m-%d")
+
+    rows = []
+    for _, r in df.iterrows():
+        ann = _to_date_str(r.get("announce_date"))
+        if not ann or ann < cutoff:
+            continue
+        rows.append((
+            r["code"],
+            ann,
+            _to_date_str(r.get("record_date")),
+            _to_date_str(r.get("pay_date")),
+            _safe(r, "div_ps"),
+            _safe(r, "bonus"),
+            _safe(r, "allot"),
+            _safe(r, "allot_price"),
+        ))
+
+    if not rows:
+        log.info("stock_dividend 最近 90 天无新增记录")
+        return
+
+    # 先删除最近 90 天的旧记录避免重复（表无 UNIQUE KEY）
+    with conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM stock_dividend WHERE announce_date >= %s", (cutoff,)
+        )
+    conn.commit()
+
+    sql = """
+        INSERT INTO stock_dividend
+            (code, announce_date, record_date, pay_date,
+             dividend_per_share, bonus_ratio, allotment_ratio, allotment_price)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+    """
+    n = batch_insert(conn, sql, rows)
+    log.info(f"stock_dividend 写入 {n} 条（最近 90 天）")
+
+
+# ── 7. 更新 index_constituent（指数成分，每月初拉一次） ────────────────────
+
+def update_index_constituent(conn, trade_date: str):
+    """
+    每月前 5 个交易日执行一次：刷新主要指数当前成分及权重。
+    沪深 300/500/1000/上证 50 通常每年 6 月、12 月调整，但每月刷新一次便于回测。
+    """
+    target = date.fromisoformat(trade_date)
+    if target.day > 5:
+        log.info(f"index_constituent: 非月初（day={target.day}），跳过")
+        return
+
+    log.info(f"更新 index_constituent: {trade_date}")
+    target_indices = [
+        ("000300", "399300"),  # 沪深 300
+        ("000905", "000905"),  # 中证 500
+        ("000852", "000852"),  # 中证 1000
+        ("000016", "000016"),  # 上证 50
+    ]
+
+    sql = """
+        INSERT INTO index_constituent (index_code, code, in_date, weight)
+        VALUES (%s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE weight=VALUES(weight)
+    """
+
+    for idx_code, query_code in target_indices:
+        try:
+            df = ak.index_stock_cons_weight_csindex(symbol=query_code)
+            if df is None or df.empty:
+                log.warning(f"index_constituent {idx_code} 数据为空")
+                continue
+            rows = []
+            for _, r in df.iterrows():
+                code = str(r.get("成分券代码", "")).zfill(6)
+                if len(code) != 6:
+                    continue
+                rows.append((
+                    idx_code, code, trade_date, _safe(r, "权重")
+                ))
+            n = batch_insert(conn, sql, rows)
+            log.info(f"index_constituent {idx_code} 写入 {n} 条")
+            time.sleep(0.5)
+        except Exception as e:
+            log.error(f"index_constituent {idx_code} 失败: {e}")
 
 
 # ── 主入口 ───────────────────────────────────────────────────────────────────
@@ -318,14 +582,32 @@ def main():
 
     log.info(f"每日更新开始，目标日期: {trade_date}")
     conn = get_conn()
+    # 每个 step 用独立 try，单个失败不影响后续；最后汇总失败步骤
+    steps = [
+        ("stock_info",        lambda: update_stock_info(conn)),
+        ("stock_kline",       lambda: update_kline(conn, trade_date)),
+        ("index_daily",       lambda: update_index_daily(conn, trade_date)),
+        ("north_fund_flow",   lambda: update_north_fund_flow(conn, trade_date)),
+        # 以下三项采用智能频率（季报披露期/周一/月初才真正抓取）
+        ("stock_finance",     lambda: update_stock_finance(conn, trade_date)),
+        ("stock_dividend",    lambda: update_stock_dividend(conn, trade_date)),
+        ("index_constituent", lambda: update_index_constituent(conn, trade_date)),
+    ]
+    failed = []
     try:
-        update_stock_info(conn)
-        update_kline(conn, trade_date)
-        update_index_daily(conn, trade_date)
-        update_north_fund_flow(conn, trade_date)
-        log.info("每日更新完成")
+        for name, fn in steps:
+            try:
+                fn()
+            except Exception as e:
+                log.error(f"步骤 {name} 失败: {e}", exc_info=True)
+                failed.append(name)
+        if failed:
+            log.warning(f"每日更新完成（含失败步骤）: {failed}")
+        else:
+            log.info("每日更新完成")
     finally:
         conn.close()
+    sys.exit(1 if failed else 0)
 
 
 if __name__ == "__main__":
