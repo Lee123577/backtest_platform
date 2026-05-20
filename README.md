@@ -16,6 +16,7 @@ K线图：ECharts 蜡烛图 + 成交量子图，买卖信号标注
 pip install -r requirements.txt
 python run.py
 浏览器访问 http://127.0.0.1:8000**
+<img width="1757" height="780" alt="image" src="https://github.com/user-attachments/assets/2a29dd7c-ba0f-4e6e-aef8-46b9b420b9d0" />
 
 内置策略
 单股信号策略
