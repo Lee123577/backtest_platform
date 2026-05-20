@@ -91,24 +91,68 @@ def _safe_int(row, col):
 
 # ── 1. 更新 stock_kline ──────────────────────────────────────────────────────
 
+def _get_valuation_snap() -> dict:
+    """
+    返回 {code: {mc, cmc, pe, pb}}，市值单位为**亿元**（与 import_history 一致）。
+    降级链：
+      1. akshare(无代理) — 含完整 mc/cmc/pe/pb
+      2. akshare(系统代理)
+      3. get_universe_snapshot() — 4 级降级总开关，仅保证 mc
+    """
+    from app.data.market_data import _call_no_proxy, get_universe_snapshot
+
+    snap: dict = {}
+
+    for label, fn in [
+        ("无代理", lambda: _call_no_proxy(ak.stock_zh_a_spot_em)),
+        ("系统代理", lambda: ak.stock_zh_a_spot_em()),
+    ]:
+        try:
+            df = fn()
+            if df is None or df.empty:
+                continue
+            df["代码"] = df["代码"].astype(str).str.zfill(6)
+            for _, r in df.iterrows():
+                mc_yuan  = _safe(r, "总市值")
+                cmc_yuan = _safe(r, "流通市值")
+                snap[r["代码"]] = {
+                    # akshare 原始单位为元 → 转亿元保持与 import_history.py 一致
+                    "mc":  mc_yuan / 1e8  if mc_yuan  is not None else None,
+                    "cmc": cmc_yuan / 1e8 if cmc_yuan is not None else None,
+                    "pe":  _safe(r, "市盈率-动态"),
+                    "pb":  _safe(r, "市净率"),
+                }
+            log.info(f"估值快照: akshare-{label} 成功 ({len(snap)} 只)")
+            return snap
+        except Exception as e:
+            log.warning(f"估值快照 akshare-{label} 失败: {e}")
+            time.sleep(1)
+
+    # 兜底：调 get_universe_snapshot（内置 xuangu + akshare 双代理 + curl_cffi 4 级降级）
+    try:
+        df = get_universe_snapshot()
+        for _, r in df.iterrows():
+            code = str(r.get("code", "")).zfill(6)
+            if len(code) != 6:
+                continue
+            snap[code] = {
+                # get_universe_snapshot 的 market_cap 已经是亿元
+                "mc":  float(r["market_cap"]) if r.get("market_cap") is not None else None,
+                "cmc": None, "pe": None, "pb": None,
+            }
+        log.info(f"估值快照: get_universe_snapshot 兜底成功 ({len(snap)} 只，无 cmc/pe/pb)")
+    except Exception as e:
+        log.error(f"估值快照所有源均失败: {e}")
+
+    return snap
+
+
 def update_kline(conn, trade_date: str):
     log.info(f"更新 stock_kline: {trade_date}")
     date_nodash = trade_date.replace("-", "")
 
-    # 获取全市场估值快照
-    snap = {}
-    try:
-        spot = ak.stock_zh_a_spot_em()
-        spot["代码"] = spot["代码"].astype(str).str.zfill(6)
-        for _, r in spot.iterrows():
-            snap[r["代码"]] = {
-                "mc":  _safe(r, "总市值"),
-                "cmc": _safe(r, "流通市值"),
-                "pe":  _safe(r, "市盈率-动态"),
-                "pb":  _safe(r, "市净率"),
-            }
-    except Exception as e:
-        log.warning(f"获取估值快照失败: {e}")
+    # 获取全市场估值快照（含多级降级）
+    snap = _get_valuation_snap()
 
     # 获取全部股票代码
     with conn.cursor() as cur:
@@ -191,23 +235,33 @@ def update_kline(conn, trade_date: str):
 # ── 2. 更新 stock_info（ST/名称变更）────────────────────────────────────────
 
 def update_stock_info(conn):
+    """
+    更新 stock_info。复用 get_universe_snapshot 的 4 级降级链，
+    服务器 IP 被 push2 节点拦截时仍可通过 xuangu / curl_cffi 拿到数据。
+    """
     log.info("更新 stock_info")
+    from app.data.market_data import get_universe_snapshot
     try:
-        df = ak.stock_zh_a_spot_em()
+        df = get_universe_snapshot()
     except Exception as e:
         log.error(f"获取股票列表失败: {e}")
         return
 
-    df["代码"] = df["代码"].astype(str).str.zfill(6)
+    if df is None or df.empty:
+        log.warning("stock_info 数据为空")
+        return
+
+    df["code"] = df["code"].astype(str).str.zfill(6)
     sql = """
         INSERT INTO stock_info (code, name, market)
         VALUES (%s, %s, %s)
-        ON DUPLICATE KEY UPDATE name=VALUES(name), updated_at=CURRENT_TIMESTAMP
+        ON DUPLICATE KEY UPDATE name=VALUES(name), market=VALUES(market),
+                                updated_at=CURRENT_TIMESTAMP
     """
     rows = []
     for _, r in df.iterrows():
-        code = r["代码"]
-        name = str(r.get("名称", ""))[:20]
+        code = r["code"]
+        name = str(r.get("name", ""))[:20]
         market = "SH" if code.startswith(("6", "9")) else \
                  "BJ" if code.startswith(("4", "8")) else "SZ"
         rows.append((code, name, market))
