@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>小市值策略 · 实盘观察</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="stylesheet" href="/static/css/paper_trading.css">
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+</head>
+<body>
+
+<header>
+  <h1>📈 A股量化回测平台</h1>
+  <nav class="header-nav">
+    <a class="nav-btn" href="/" style="text-decoration:none;display:inline-flex;align-items:center;">单股策略</a>
+    <a class="nav-btn" href="/" style="text-decoration:none;display:inline-flex;align-items:center;">选股策略</a>
+    <button class="nav-btn active">实盘观察</button>
+  </nav>
+</header>
+
+<main>
+
+  <!-- 1. 账户摘要 -->
+  <div class="panel">
+    <div class="panel-title">
+      小市值策略 · 模拟账户
+      <span class="tip-badge">仅产出建议，未真实下单 · 仅主板（科创/创业/北交所被过滤）</span>
+    </div>
+    <div class="summary-grid" id="summaryGrid">
+      <div class="sum-card"><div class="sum-label">初始资金</div><div class="sum-val" id="sumCapital">—</div></div>
+      <div class="sum-card"><div class="sum-label">当前总值</div><div class="sum-val" id="sumTotal">—</div></div>
+      <div class="sum-card"><div class="sum-label">累计收益</div><div class="sum-val" id="sumCumRet">—</div></div>
+      <div class="sum-card"><div class="sum-label">持仓市值</div><div class="sum-val" id="sumPos">—</div></div>
+      <div class="sum-card"><div class="sum-label">现金</div><div class="sum-val" id="sumCash">—</div></div>
+      <div class="sum-card"><div class="sum-label">最近运行</div><div class="sum-val" id="sumLastRun">—</div></div>
+    </div>
+    <div class="empty-banner" id="emptyBanner" style="display:none">
+      尚未运行过策略。请在服务器上执行：
+      <code>python scripts/daily_signal.py</code>
+    </div>
+  </div>
+
+  <!-- 2. 收益曲线 -->
+  <div class="panel">
+    <div class="panel-title">净值曲线 <span>策略 vs 上证综指（基准）</span></div>
+    <div class="chart-wrap-sm" id="equityChart"></div>
+  </div>
+
+  <!-- 3. 当前持仓 -->
+  <div class="panel">
+    <div class="panel-title">当前建议持仓</div>
+    <div id="holdingsWrap">
+      <div class="no-data">暂无持仓</div>
+    </div>
+  </div>
+
+  <!-- 4. 历史运行记录 -->
+  <div class="panel">
+    <div class="panel-title">历史运行记录 <span id="runsHint"></span></div>
+    <div id="runsWrap">
+      <div class="no-data">暂无记录</div>
+    </div>
+  </div>
+
+</main>
+
+<!-- 运行详情弹窗 -->
+<div id="runDetailModal" class="modal" style="display:none">
+  <div class="modal-mask" onclick="closeRunDetail()"></div>
+  <div class="modal-body">
+    <div class="modal-head">
+      <div class="modal-title" id="modalTitle">运行详情</div>
+      <button class="modal-close" onclick="closeRunDetail()">×</button>
+    </div>
+    <div class="modal-content" id="modalContent">加载中…</div>
+  </div>
+</div>
+
+<script src="/static/js/paper_trading.js"></script>
+</body>
+</html>

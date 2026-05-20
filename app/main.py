@@ -34,6 +34,7 @@ from .data.market_data import (
 )
 from .engine.backtest import calc_benchmark, run_backtest
 from .engine.portfolio_backtest import run_portfolio_backtest
+from .paper_trading import db as paper_db
 from .strategies.registry import (
     get_portfolio_strategy,
     get_strategy,
@@ -49,6 +50,110 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 @app.get("/")
 async def root():
     return FileResponse(str(STATIC_DIR / "index.html"))
+
+
+@app.get("/paper_trading")
+async def paper_trading_page():
+    return FileResponse(str(STATIC_DIR / "paper_trading.html"))
+
+
+# ── Paper trading (实盘信号观察) ──────────────────────────────────────────────
+
+def _json_safe(rows):
+    """把 DECIMAL/date/datetime 等转成 JSON 可序列化的类型。"""
+    import datetime as _dt
+    import decimal
+    out = []
+    for r in rows:
+        d = {}
+        for k, v in r.items():
+            if isinstance(v, decimal.Decimal):
+                d[k] = float(v)
+            elif isinstance(v, (_dt.date, _dt.datetime)):
+                d[k] = v.isoformat() if isinstance(v, _dt.datetime) else str(v)
+            else:
+                d[k] = v
+        out.append(d)
+    return out
+
+
+@app.get("/api/paper_trading/account")
+async def api_paper_account():
+    """返回账户摘要 + 当前持仓（含浮盈）+ 最近一次运行概览。"""
+    try:
+        paper_db.ensure_tables()
+    except Exception as e:
+        return {"account": None, "holdings": [], "latest_run": None,
+                "error": f"数据库未就绪：{e}"}
+
+    account = paper_db.get_account()
+    holdings = paper_db.get_latest_holdings_with_prices()
+    runs = paper_db.list_runs(limit=1)
+    latest = runs[0] if runs else None
+
+    # 持仓加浮盈字段
+    holdings_out = []
+    for h in holdings:
+        buy_px = float(h["buy_price"]) if h.get("buy_price") else 0.0
+        last = float(h["last_close"]) if h.get("last_close") else buy_px
+        shares = int(h["shares"]) if h.get("shares") else 0
+        market_value = last * shares
+        cost = float(h["cost"]) if h.get("cost") else 0.0
+        pnl = market_value - cost
+        pnl_pct = (pnl / cost) if cost > 0 else 0.0
+        holdings_out.append({
+            "code": h["code"],
+            "name": h.get("name") or "",
+            "shares": shares,
+            "buy_price": buy_px,
+            "buy_date": str(h["buy_date"]) if h.get("buy_date") else None,
+            "cost": round(cost, 2),
+            "last_close": last,
+            "market_value": round(market_value, 2),
+            "pnl": round(pnl, 2),
+            "pnl_pct": round(pnl_pct * 100, 2),
+        })
+
+    return {
+        "account": _json_safe([account])[0] if account else None,
+        "holdings": holdings_out,
+        "latest_run": _json_safe([latest])[0] if latest else None,
+    }
+
+
+@app.get("/api/paper_trading/runs")
+async def api_paper_runs(limit: int = 30):
+    try:
+        paper_db.ensure_tables()
+    except Exception:
+        return []
+    runs = paper_db.list_runs(limit=max(1, min(limit, 200)))
+    return _json_safe(runs)
+
+
+@app.get("/api/paper_trading/run/{run_id}")
+async def api_paper_run_detail(run_id: int):
+    try:
+        paper_db.ensure_tables()
+    except Exception as e:
+        raise HTTPException(500, f"数据库未就绪：{e}")
+    run = paper_db.get_run(run_id)
+    if run is None:
+        raise HTTPException(404, "运行记录不存在")
+    positions = run.pop("positions", [])
+    run_json = _json_safe([run])[0]
+    run_json["positions"] = _json_safe(positions)
+    return run_json
+
+
+@app.get("/api/paper_trading/equity")
+async def api_paper_equity(start: Optional[str] = None, end: Optional[str] = None):
+    try:
+        paper_db.ensure_tables()
+    except Exception:
+        return {"data": []}
+    rows = paper_db.get_equity_curve(start=start, end=end)
+    return {"data": _json_safe(rows)}
 
 
 # ── Strategy list ─────────────────────────────────────────────────────────────
