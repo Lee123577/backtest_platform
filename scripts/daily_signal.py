@@ -66,6 +66,9 @@ def main():
     p.add_argument("--dry-run", action="store_true", help="只打印不落库")
     p.add_argument("--reset", action="store_true",
                    help="清空模拟账户/持仓/历史记录后再跑（不可恢复）")
+    p.add_argument("--single", action="store_true",
+                   help="只跑一天（不补缺失日）。默认会从 paper_signal_run "
+                        "最大 run_date 补到最新交易日，更适合 cron 使用。")
     args = p.parse_args()
 
     if args.reset:
@@ -79,21 +82,47 @@ def main():
                 cur.execute(f"TRUNCATE TABLE {tbl}")
         log.warning("已清空 paper_trading 全部数据，准备重新初始化")
 
-    from app.paper_trading.runner import run_once
+    from app.paper_trading.runner import run_once, run_catch_up
 
     target = _Date.fromisoformat(args.date) if args.date else None
     allow = tuple(s.strip() for s in args.allow.split(",") if s.strip())
+    # 指定 --date 或 --single → 单日模式；其余情况默认补跑（适合 cron）
+    catch_up_mode = (target is None) and (not args.single)
 
     log.info("=" * 60)
     log.info("小市值策略每日信号生成")
     log.info(
-        "目标日期=%s | 资金=%.0f | 市值=%.0f~%.0f亿 | 持仓=%d只 | 调仓=%d天 | "
+        "模式=%s | 资金=%.0f | 市值=%.0f~%.0f亿 | 持仓=%d只 | 调仓=%d天 | "
         "止损=%.1f%% | 板块=%s | dry_run=%s",
-        target or "(最新)", args.capital, args.cap_min, args.cap_max,
+        "补跑" if catch_up_mode else f"单日({target or '最新'})",
+        args.capital, args.cap_min, args.cap_max,
         args.stock_num, args.hold_days, args.stop_loss, allow, args.dry_run,
     )
 
     try:
+        if catch_up_mode:
+            results = run_catch_up(
+                initial_capital=args.capital,
+                cap_min=args.cap_min, cap_max=args.cap_max,
+                stock_num=args.stock_num, hold_days=args.hold_days,
+                stop_loss_pct=args.stop_loss,
+                allow_boards=allow, dry_run=args.dry_run,
+            )
+            if not results:
+                log.info("✓ 已是最新，无新交易日需要补跑")
+            else:
+                log.info("✓ 补跑完成，共 %d 个交易日", len(results))
+                for r in results:
+                    log.info(
+                        "  %s: rebalance=%s universe=%d selected=%d 止损=%d "
+                        "total=%.2f cum=%.4f",
+                        r.run_date, r.is_rebalance, r.universe_size,
+                        len(r.selected), len(r.stop_loss_codes),
+                        r.total_value, 0.0 if r.total_value == 0
+                        else (r.total_value - args.capital) / args.capital,
+                    )
+            return
+
         result = run_once(
             initial_capital=args.capital,
             cap_min=args.cap_min,

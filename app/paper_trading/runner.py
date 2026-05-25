@@ -87,6 +87,32 @@ def _previous_trade_date(before: _Date) -> Optional[_Date]:
     return row["td"] if row and row["td"] else None
 
 
+def _trading_dates_after(after: _Date) -> List[_Date]:
+    """大于指定日期、有 market_cap 的所有交易日，升序返回。"""
+    conn = _get_pool()
+    if conn is None:
+        return []
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT DISTINCT trade_date FROM stock_kline "
+            "WHERE trade_date > %s AND market_cap IS NOT NULL "
+            "ORDER BY trade_date",
+            (after,),
+        )
+        return [r["trade_date"] for r in cur.fetchall()]
+
+
+def _last_run_date() -> Optional[_Date]:
+    """paper_signal_run 里最大的 run_date；表空时返回 None。"""
+    conn = _get_pool()
+    if conn is None:
+        return None
+    with conn.cursor() as cur:
+        cur.execute("SELECT MAX(run_date) AS d FROM paper_signal_run")
+        row = cur.fetchone()
+    return row["d"] if row and row["d"] else None
+
+
 def _load_universe_snapshot(
     trade_date: _Date,
     cap_min: float,
@@ -538,6 +564,60 @@ def run_once(
     result.cash = round(cash, 2)
     result.position_value = round(pos_value, 2)
     return result
+
+
+def run_catch_up(
+    initial_capital: float = 90_000.0,
+    cap_min: float = 20.0,
+    cap_max: float = 30.0,
+    stock_num: int = 3,
+    hold_days: int = 5,
+    stop_loss_pct: float = 10.0,
+    allow_boards: Tuple[str, ...] = ("main",),
+    dry_run: bool = False,
+) -> List[RunResult]:
+    """
+    补跑：从 paper_signal_run 的最大 run_date 之后，到 stock_kline 最新
+    market_cap 完整的交易日之间，逐日调 run_once。这样即便 cron 漏跑、
+    或 daily_update 某天估值快照失败、或两次运行之间隔了多个交易日，
+    下一次跑就能自动追上，不会再停在一个旧日期上。
+
+    - paper_signal_run 为空：只跑最新可用交易日（首次初始化）
+    - 否则：跑 (last_run, latest] 范围内每个有 market_cap 的交易日
+    """
+    db.ensure_tables()
+
+    latest = _latest_trade_date()
+    if latest is None:
+        raise RuntimeError("stock_kline 表无 market_cap 数据，请先运行 daily_update")
+
+    last_run = _last_run_date()
+    if last_run is None:
+        dates = [latest]
+        logger.info("paper_signal_run 为空，首次运行 → 仅跑最新交易日 %s", latest)
+    else:
+        dates = _trading_dates_after(last_run)
+        if not dates:
+            logger.info("已是最新（last_run=%s, latest=%s），无需补跑",
+                        last_run, latest)
+            return []
+        logger.info("补跑 %d 个交易日：%s ... %s",
+                    len(dates), dates[0], dates[-1])
+
+    results: List[RunResult] = []
+    for d in dates:
+        logger.info("─── 运行 %s ───", d)
+        r = run_once(
+            initial_capital=initial_capital,
+            cap_min=cap_min, cap_max=cap_max,
+            stock_num=stock_num, hold_days=hold_days,
+            stop_loss_pct=stop_loss_pct,
+            allow_boards=allow_boards,
+            target_date=d,
+            dry_run=dry_run,
+        )
+        results.append(r)
+    return results
 
 
 def _build_notes(is_rebalance: bool, r: RunResult) -> str:
