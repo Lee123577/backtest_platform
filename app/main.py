@@ -43,7 +43,7 @@ from .strategies.registry import (
 
 app = FastAPI(title="A股量化回测平台", version="1.2.0")
 
-# 访问日志中间件 —— 异步写入 myweb.user_visit_log
+# 访问日志中间件 —— 异步写入 back_test.user_visit_log
 from .visit_log import VisitLogMiddleware  # noqa: E402
 app.add_middleware(VisitLogMiddleware)
 

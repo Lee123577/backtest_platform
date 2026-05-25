@@ -2,7 +2,7 @@
 =====================
 
 每个请求结束后，把访问者 IP、UA、referer、路径、方法、状态码等信息
-异步写入 ``myweb.user_visit_log`` 表。
+异步写入 ``back_test.user_visit_log`` 表。
 
 设计要点
 --------
@@ -91,9 +91,8 @@ def _parse_ua(ua: Optional[str]) -> Tuple[Optional[str], Optional[str], Optional
 
 # ─────────────────────────── 写入逻辑 ───────────────────────────
 
-# 该项目的 _get_pool() 默认连 back_test 库，所以表名要全限定
 _INSERT_SQL = """
-INSERT INTO myweb.user_visit_log
+INSERT INTO back_test.user_visit_log
     (ip, user_agent, referer, request_path, request_method,
      status_code, device_type, os, browser)
 VALUES (%(ip)s, %(ua)s, %(ref)s, %(path)s, %(method)s,
@@ -117,7 +116,7 @@ def _insert_log_sync(payload: dict) -> None:
 # ─────────────────────────── 中间件本体 ─────────────────────────
 
 class VisitLogMiddleware(BaseHTTPMiddleware):
-    """记录每个请求的访问信息到 ``myweb.user_visit_log``。"""
+    """记录每个请求的访问信息到 ``back_test.user_visit_log``。"""
 
     async def dispatch(self, request: Request, call_next):
         response: Response = await call_next(request)

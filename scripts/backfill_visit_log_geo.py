@@ -1,5 +1,5 @@
 """
-回填 myweb.user_visit_log 的地理位置字段
+回填 back_test.user_visit_log 的地理位置字段
 =========================================
 
 扫描 ``country IS NULL`` 的行，用 ip2region 离线 xdb 查询出
@@ -125,7 +125,7 @@ def backfill(xdb_path: Path, limit: Optional[int], batch_size: int = 500) -> Non
 
     # 统计待处理行数
     with conn.cursor() as cur:
-        cur.execute("SELECT COUNT(*) AS n FROM myweb.user_visit_log WHERE country IS NULL")
+        cur.execute("SELECT COUNT(*) AS n FROM back_test.user_visit_log WHERE country IS NULL")
         total_pending = int(cur.fetchone()["n"])
     logger.info("待回填行数: %d", total_pending)
 
@@ -147,7 +147,7 @@ def backfill(xdb_path: Path, limit: Optional[int], batch_size: int = 500) -> Non
         # 注意：UPDATE 后下次 SELECT WHERE country IS NULL 自动跳过本次行，无需 offset
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, ip FROM myweb.user_visit_log "
+                "SELECT id, ip FROM back_test.user_visit_log "
                 "WHERE country IS NULL "
                 "ORDER BY id LIMIT %s",
                 (take,),
@@ -190,7 +190,7 @@ def backfill(xdb_path: Path, limit: Optional[int], batch_size: int = 500) -> Non
 
         with conn.cursor() as cur:
             cur.executemany(
-                "UPDATE myweb.user_visit_log "
+                "UPDATE back_test.user_visit_log "
                 "SET country=%s, region=%s, city=%s, isp=%s "
                 "WHERE id=%s",
                 updates,
