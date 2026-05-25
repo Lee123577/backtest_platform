@@ -16,9 +16,23 @@ const fmtPrice = (v) => {
 };
 
 let equityChart;
+const REALTIME_REFRESH_MS = 30_000;  // 持仓/账户 30s 拉一次实时价
+let _realtimeTimer = null;
 
 async function load() {
   await Promise.all([loadAccount(), loadEquity(), loadRuns()]);
+  // 启动持仓表的轮询刷新；equity / runs 是历史快照，不用刷
+  if (_realtimeTimer) clearInterval(_realtimeTimer);
+  _realtimeTimer = setInterval(loadAccount, REALTIME_REFRESH_MS);
+  // 切到后台标签时停掉，回到前台再启动 —— 不浪费请求
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      if (_realtimeTimer) { clearInterval(_realtimeTimer); _realtimeTimer = null; }
+    } else if (!_realtimeTimer) {
+      loadAccount();
+      _realtimeTimer = setInterval(loadAccount, REALTIME_REFRESH_MS);
+    }
+  });
 }
 
 // ── 账户摘要 + 当前持仓 ─────────────────────────────────────────────────────
@@ -29,9 +43,19 @@ async function loadAccount() {
     const data = await res.json();
     renderSummary(data);
     renderHoldings(data.holdings || []);
+    _setUpdatedAt(data.realtime_count || 0);
   } catch (e) {
     console.error(e);
   }
+}
+
+function _setUpdatedAt(realtimeCount) {
+  const el = document.getElementById('sumUpdatedAt');
+  if (!el) return;
+  const ts = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+  el.textContent = realtimeCount > 0
+    ? `更新于 ${ts}（实时 ${realtimeCount} 只）`
+    : `更新于 ${ts}（行情未取到，显示数据库收盘价）`;
 }
 
 function renderSummary(data) {
@@ -78,13 +102,16 @@ function renderHoldings(holdings) {
   }
   const rows = holdings.map(h => {
     const pnlCls = h.pnl >= 0 ? 'val-pos' : 'val-neg';
+    const liveBadge = h.is_realtime
+      ? ' <span style="font-size:10px;color:#0a7d33;background:#e6f4ea;padding:1px 5px;border-radius:3px;">实时</span>'
+      : ' <span style="font-size:10px;color:#9a6700;background:#fff8c5;padding:1px 5px;border-radius:3px;">收盘</span>';
     return `
       <tr>
         <td class="code-cell">${h.code}</td>
         <td>${h.name || ''}</td>
         <td>${h.shares}</td>
         <td>${fmtPrice(h.buy_price)}</td>
-        <td>${fmtPrice(h.last_close)}</td>
+        <td>${fmtPrice(h.last_close)}${liveBadge}</td>
         <td>¥${fmtMoney(h.market_value)}</td>
         <td>¥${fmtMoney(h.cost)}</td>
         <td class="${pnlCls}">¥${fmtMoney(h.pnl)}</td>

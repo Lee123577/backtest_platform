@@ -32,6 +32,7 @@ from .data.market_data import (
     get_index_history,
     get_universe_stocks,
 )
+from .data.realtime import get_realtime_prices
 from .engine.backtest import calc_benchmark, run_backtest
 from .engine.portfolio_backtest import run_portfolio_backtest
 from .paper_trading import db as paper_db
@@ -83,7 +84,14 @@ def _json_safe(rows):
 
 @app.get("/api/paper_trading/account")
 async def api_paper_account():
-    """返回账户摘要 + 当前持仓（含浮盈）+ 最近一次运行概览。"""
+    """
+    返回账户摘要 + 当前持仓（含浮盈）+ 最近一次运行概览。
+
+    优先用实时行情（xuangu API）作为"最新价"：
+      实时价 > 数据库最新收盘价 > 买入价
+    顶部"总值/持仓市值/累计收益"也按实时价重算 —— 而不是用上次 daily_signal
+    跑完时落库的快照，避免开盘后 / 当天涨跌后页面不更新。
+    """
     try:
         paper_db.ensure_tables()
     except Exception as e:
@@ -95,33 +103,68 @@ async def api_paper_account():
     runs = paper_db.list_runs(limit=1)
     latest = runs[0] if runs else None
 
+    # ── 实时价（线程池里跑，因为 requests 是同步的）───────────────────────
+    codes = [h["code"] for h in holdings if h.get("code")]
+    realtime: Dict[str, float] = {}
+    if codes:
+        loop = asyncio.get_event_loop()
+        try:
+            realtime = await loop.run_in_executor(
+                None, lambda: get_realtime_prices(codes)
+            )
+        except Exception:
+            realtime = {}
+
     # 持仓加浮盈字段
     holdings_out = []
+    total_pos_value = 0.0
+    cash_from_account = float(account["cash"]) if account and account.get("cash") is not None else 0.0
+    initial_capital = (float(account["initial_capital"])
+                       if account and account.get("initial_capital") is not None else 0.0)
+
     for h in holdings:
+        code = h["code"]
         buy_px = float(h["buy_price"]) if h.get("buy_price") else 0.0
-        last = float(h["last_close"]) if h.get("last_close") else buy_px
+        db_close = float(h["last_close"]) if h.get("last_close") else 0.0
+        # 实时优先，没有实时就用数据库收盘价，再没有就退到买入价
+        last = realtime.get(code) or db_close or buy_px
         shares = int(h["shares"]) if h.get("shares") else 0
         market_value = last * shares
         cost = float(h["cost"]) if h.get("cost") else 0.0
         pnl = market_value - cost
         pnl_pct = (pnl / cost) if cost > 0 else 0.0
+        total_pos_value += market_value
         holdings_out.append({
-            "code": h["code"],
+            "code": code,
             "name": h.get("name") or "",
             "shares": shares,
             "buy_price": buy_px,
             "buy_date": str(h["buy_date"]) if h.get("buy_date") else None,
             "cost": round(cost, 2),
-            "last_close": last,
+            "last_close": round(last, 3),
+            "is_realtime": code in realtime,
             "market_value": round(market_value, 2),
             "pnl": round(pnl, 2),
             "pnl_pct": round(pnl_pct * 100, 2),
         })
 
+    # ── 顶部摘要：用实时价重算总值/收益（覆盖最近一次 run 的 DB 快照）────
+    latest_out = _json_safe([latest])[0] if latest else None
+    if latest_out is not None and (realtime or holdings_out):
+        total_value = cash_from_account + total_pos_value
+        latest_out["total_value"] = round(total_value, 2)
+        latest_out["position_value"] = round(total_pos_value, 2)
+        latest_out["cash"] = round(cash_from_account, 2)
+        if initial_capital > 0:
+            latest_out["cum_return"] = round(
+                (total_value - initial_capital) / initial_capital, 6
+            )
+
     return {
         "account": _json_safe([account])[0] if account else None,
         "holdings": holdings_out,
-        "latest_run": _json_safe([latest])[0] if latest else None,
+        "latest_run": latest_out,
+        "realtime_count": len(realtime),
     }
 
 
