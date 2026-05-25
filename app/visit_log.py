@@ -8,6 +8,8 @@
 --------
 * IP 取值优先级： X-Forwarded-For 首段 > X-Real-IP > request.client.host
 * UA 用轻量正则解析出 device_type / os / browser，避免引入第三方依赖
+* 地理位置：启动时一次性加载 ip2region xdb 到内存，每条日志同步查询
+  country/region/city/isp 后入库（内存查询，无网络，微秒级）
 * 静态资源、favicon、robots 等不入库，防止数据爆炸
 * DB 写入跑在线程池（pymysql 是同步驱动），不阻塞事件循环
 * 任何异常都吞掉并打日志，绝不影响业务请求
@@ -15,8 +17,10 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 import re
+from pathlib import Path
 from typing import Optional, Tuple
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -26,6 +30,79 @@ from starlette.responses import Response
 from .data.data_loader import _get_pool
 
 logger = logging.getLogger(__name__)
+
+
+# ─────────────────────────── 地理位置查询 ───────────────────────────
+# 启动时一次性把 ip2region xdb 加载到内存（content 模式，线程安全），
+# 每次请求做纯内存查询，耗时微秒级，无需再依赖事后回填脚本。
+_XDB_PATH = Path(__file__).resolve().parent.parent / "data" / "ip2region_v4.xdb"
+_LAN = "内网"
+_UNKNOWN = "Unknown"
+_searcher = None  # 模块级单例；xdb 缺失时保持 None，geo 字段写 NULL
+
+try:
+    import ip2region.util as _ip_util
+    import ip2region.searcher as _ip_xdb
+
+    if _XDB_PATH.exists():
+        _buf = _ip_util.load_content_from_file(str(_XDB_PATH))
+        _searcher = _ip_xdb.new_with_buffer(_ip_util.IPv4, _buf)
+        logger.info("ip2region xdb 已加载: %s", _XDB_PATH)
+    else:
+        logger.warning("ip2region xdb 文件不存在，geo 字段将留空: %s", _XDB_PATH)
+except Exception as e:
+    logger.warning("ip2region 初始化失败，geo 字段将留空: %s", e)
+
+
+def _is_private_ip(ip: str) -> bool:
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return (
+        addr.is_private or addr.is_loopback or addr.is_link_local
+        or addr.is_multicast or addr.is_reserved or addr.is_unspecified
+    )
+
+
+def _lookup_geo(ip: str) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
+    """
+    根据 IP 返回 (country, region, city, isp)。
+      - searcher 未初始化 → 全 None（保持兼容回填脚本）
+      - 内网/保留地址      → ('内网', None, None, None)
+      - 无效 IP / 查询异常 → ('Unknown', None, None, None)
+      - ip2region 返回的 "0" 段视为缺失
+    """
+    if not ip or ip == "unknown":
+        return _UNKNOWN, None, None, None
+    if _is_private_ip(ip):
+        return _LAN, None, None, None
+    if _searcher is None:
+        return None, None, None, None
+
+    try:
+        raw = _searcher.search(ip)
+    except Exception as e:
+        logger.debug("ip2region 查询失败 ip=%s: %s", ip, e)
+        return _UNKNOWN, None, None, None
+
+    if not raw:
+        return _UNKNOWN, None, None, None
+
+    parts = raw.split("|")
+    while len(parts) < 5:
+        parts.append("0")
+
+    def _norm(v: str) -> Optional[str]:
+        v = (v or "").strip()
+        return None if v in ("", "0") else v
+
+    country, region, city, isp = _norm(parts[0]), _norm(parts[1]), _norm(parts[2]), _norm(parts[3])
+    if country and country.lower() == "reserved":
+        return _LAN, None, None, None
+    if country is None:
+        return _UNKNOWN, None, None, None
+    return country, region, city, isp
 
 # ─────────────────────────── 过滤规则 ───────────────────────────
 
@@ -94,9 +171,11 @@ def _parse_ua(ua: Optional[str]) -> Tuple[Optional[str], Optional[str], Optional
 _INSERT_SQL = """
 INSERT INTO back_test.user_visit_log
     (ip, user_agent, referer, request_path, request_method,
-     status_code, device_type, os, browser)
+     status_code, device_type, os, browser,
+     country, region, city, isp)
 VALUES (%(ip)s, %(ua)s, %(ref)s, %(path)s, %(method)s,
-        %(status)s, %(device)s, %(os)s, %(browser)s)
+        %(status)s, %(device)s, %(os)s, %(browser)s,
+        %(country)s, %(region)s, %(city)s, %(isp)s)
 """
 
 
@@ -128,8 +207,10 @@ class VisitLogMiddleware(BaseHTTPMiddleware):
 
             ua = request.headers.get("user-agent") or None
             device, os_name, browser = _parse_ua(ua)
+            ip = _client_ip(request)[:45]
+            country, region, city, isp = _lookup_geo(ip)
             payload = {
-                "ip":      _client_ip(request)[:45],
+                "ip":      ip,
                 "ua":      (ua[:500] if ua else None),
                 "ref":     (request.headers.get("referer") or "")[:1024] or None,
                 "path":    path[:1024],
@@ -138,6 +219,10 @@ class VisitLogMiddleware(BaseHTTPMiddleware):
                 "device":  device,
                 "os":      os_name,
                 "browser": browser,
+                "country": (country[:64] if country else None),
+                "region":  (region[:64] if region else None),
+                "city":    (city[:64] if city else None),
+                "isp":     (isp[:128] if isp else None),
             }
 
             # 丢到线程池，不阻塞响应发送
