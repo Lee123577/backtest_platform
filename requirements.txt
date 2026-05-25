@@ -12,6 +12,9 @@ python-multipart>=0.0.6
 akshare>=1.12.0
 curl_cffi>=0.6.0          # fallback TLS impersonation for akshare market snapshot
 
+# Access-log IP geo lookup (offline xdb, no network)
+py-ip2region>=3.0.4        # import name: ip2region; uses data/ip2region_v4.xdb
+
 # Optional data sources (install whichever you use)
 # tqsdk>=3.6.0            # 天勤量化: pip install tqsdk
 # rqdatac                 # 米矿 rqdata: contact RiceQuant for licence
