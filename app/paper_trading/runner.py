@@ -62,20 +62,25 @@ class RunResult:
 # ── 数据查询 ─────────────────────────────────────────────────────────────────
 
 def _latest_trade_date() -> Optional[_Date]:
+    """最新一个 market_cap 已写入的交易日 —— 跳过估值快照失败导致的残缺日。"""
     conn = _get_pool()
     if conn is None:
         return None
     with conn.cursor() as cur:
-        cur.execute("SELECT MAX(trade_date) AS td FROM stock_kline")
+        cur.execute(
+            "SELECT MAX(trade_date) AS td FROM stock_kline WHERE market_cap IS NOT NULL"
+        )
         row = cur.fetchone()
     return row["td"] if row and row["td"] else None
 
 
 def _previous_trade_date(before: _Date) -> Optional[_Date]:
+    """指定日期之前最近一个 market_cap 完整的交易日。"""
     conn = _get_pool()
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT MAX(trade_date) AS td FROM stock_kline WHERE trade_date < %s",
+            "SELECT MAX(trade_date) AS td FROM stock_kline "
+            "WHERE trade_date < %s AND market_cap IS NOT NULL",
             (before,),
         )
         row = cur.fetchone()

@@ -247,25 +247,37 @@ def _query_universe_from_db() -> pd.DataFrame | None:
 
     # ── Attempt A: 查带 market_cap 的完整数据 ────────────────────────────────
     # 注意: market_cap 在 DB 中已为亿元（import_history 写入时已除 1e8）
+    # 内层 MAX 只看有 market_cap 的日子，避免被"残缺日"（K线已写入但估值快照
+    # 抓取失败 → market_cap 全 NULL）卡住，自动回退到最近一个完整快照日。
     with conn.cursor() as cur:
         cur.execute("""
-            SELECT k.code, i.name, k.close AS price,
-                   k.market_cap AS market_cap
-            FROM stock_kline k
-            JOIN stock_info i ON k.code = i.code
-            WHERE k.trade_date = (SELECT MAX(trade_date) FROM stock_kline)
-              AND k.market_cap IS NOT NULL
-            ORDER BY k.code
+            SELECT MAX(trade_date) AS snap_date
+            FROM stock_kline WHERE market_cap IS NOT NULL
         """)
-        rows = cur.fetchall()
-    if rows:
-        df = pd.DataFrame(rows)
-        df["code"] = df["code"].astype(str).str.zfill(6)
-        logger.info("数据库查询成功: %d 只股票 (含market_cap)", len(df))
-        return df
+        snap_row = cur.fetchone()
+    snap_date = snap_row and snap_row.get("snap_date")
 
-    # ── Attempt B: 降级到不含 market_cap（daily_update 未运行时）─────────────
-    logger.warning("最新交易日无 market_cap 数据，降级到不含 market_cap 的查询")
+    if snap_date is not None:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT k.code, i.name, k.close AS price,
+                       k.market_cap AS market_cap
+                FROM stock_kline k
+                JOIN stock_info i ON k.code = i.code
+                WHERE k.trade_date = %s
+                  AND k.market_cap IS NOT NULL
+                ORDER BY k.code
+            """, (snap_date,))
+            rows = cur.fetchall()
+        if rows:
+            df = pd.DataFrame(rows)
+            df["code"] = df["code"].astype(str).str.zfill(6)
+            logger.info("数据库查询成功: %d 只股票 (含market_cap, 快照日=%s)",
+                        len(df), snap_date)
+            return df
+
+    # ── Attempt B: 全表都没有 market_cap（daily_update 从未跑过估值快照）─────
+    logger.warning("stock_kline 全表无 market_cap 数据，降级到不含 market_cap 的查询")
     with conn.cursor() as cur:
         cur.execute("""
             SELECT k.code, i.name, k.close AS price,
