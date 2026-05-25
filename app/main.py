@@ -36,6 +36,9 @@ from .data.realtime import get_realtime_prices
 from .engine.backtest import calc_benchmark, run_backtest
 from .engine.portfolio_backtest import run_portfolio_backtest
 from .paper_trading import db as paper_db
+from .scheduler import db as scheduler_db
+from .scheduler import registry as scheduler_registry
+from .scheduler import runner as scheduler_runner
 from .strategies.registry import (
     get_portfolio_strategy,
     get_strategy,
@@ -192,6 +195,105 @@ async def api_paper_run_detail(run_id: int):
     run_json["positions"] = _json_safe(positions)
     return run_json
 
+
+# ── 定时任务监控 ──────────────────────────────────────────────────────────────
+
+@app.get("/api/tasks/summary")
+async def api_tasks_summary():
+    """每个任务的：注册信息 + 最近一次状态 + 近 30 天成功率 + 今天是否已成功。"""
+    try:
+        scheduler_db.ensure_table()
+    except Exception as e:
+        return {"tasks": [], "error": f"task_run_log 表未就绪：{e}"}
+
+    from datetime import date as _D
+    today = _D.today()
+
+    agg_map = {a["task_name"]: a for a in scheduler_db.summarize_by_task(30)}
+    out = []
+    for name, spec in scheduler_registry.TASKS.items():
+        a = agg_map.get(name, {})
+        total = int(a.get("recent_total", 0))
+        success = int(a.get("recent_success", 0))
+        out.append({
+            "task_name": name,
+            "description": spec.get("description", ""),
+            "schedule": spec.get("schedule", ""),
+            "depends_on": spec.get("depends_on"),
+            "timeout_sec": spec.get("timeout_sec"),
+            "last_started_at": _iso(a.get("last_started_at")),
+            "last_status": a.get("last_status"),
+            "last_duration_ms": a.get("last_duration_ms"),
+            "last_exit_code": a.get("last_exit_code"),
+            "last_error_msg": (a.get("last_error_msg") or "")[:500],
+            "recent_total": total,
+            "recent_success": success,
+            "recent_failed": int(a.get("recent_failed", 0)),
+            "success_rate": round(success / total, 3) if total > 0 else None,
+            "ran_today_success": scheduler_db.already_ran_today(name, today, "success"),
+        })
+    return {"tasks": out}
+
+
+@app.get("/api/tasks/runs")
+async def api_tasks_runs(task: Optional[str] = None, limit: int = 100):
+    try:
+        scheduler_db.ensure_table()
+    except Exception:
+        return {"runs": []}
+    rows = scheduler_db.list_recent_runs(task=task, limit=limit)
+    out = []
+    for r in rows:
+        out.append({
+            "id": r["id"],
+            "task_name": r["task_name"],
+            "scheduled_at": _iso(r["scheduled_at"]),
+            "started_at": _iso(r["started_at"]),
+            "finished_at": _iso(r["finished_at"]),
+            "duration_ms": r["duration_ms"],
+            "status": r["status"],
+            "exit_code": r["exit_code"],
+            "trigger_type": r["trigger_type"],
+            "stdout_tail": r.get("stdout_tail") or "",
+            "stderr_tail": r.get("stderr_tail") or "",
+            "error_msg": r.get("error_msg") or "",
+            "host": r.get("host"),
+        })
+    return {"runs": out}
+
+
+@app.post("/api/tasks/{name}/run")
+async def api_tasks_run(name: str):
+    """手动触发一个任务（异步在线程池里跑，调用方立即返回 started_at）。"""
+    if scheduler_registry.get_task(name) is None:
+        raise HTTPException(404, f"未知任务: {name}")
+
+    loop = asyncio.get_event_loop()
+    # subprocess 是阻塞的，丢到默认线程池，HTTP 调用立即返回
+    fut = loop.run_in_executor(None, lambda: scheduler_runner.run_one(name, "manual"))
+
+    # 我们不 await 这个 future — 立即返回。结果落库到 task_run_log，
+    # 前端轮询 /api/tasks/runs 拿到最新状态即可。
+    del fut
+    from datetime import datetime as _DT
+    return {"task": name, "trigger": "manual", "queued_at": _DT.now().isoformat()}
+
+
+def _iso(v):
+    """datetime → ISO 字符串，None → None。"""
+    if v is None:
+        return None
+    if hasattr(v, "isoformat"):
+        return v.isoformat()
+    return str(v)
+
+
+@app.get("/tasks", include_in_schema=False)
+async def page_tasks():
+    return FileResponse(STATIC_DIR / "tasks.html")
+
+
+# ── 旧分组：paper trading equity ──────────────────────────────────────────────
 
 @app.get("/api/paper_trading/equity")
 async def api_paper_equity(start: Optional[str] = None, end: Optional[str] = None):

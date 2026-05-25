@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>定时任务监控</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="stylesheet" href="/static/css/paper_trading.css">
+  <style>
+    .tasks-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 12px; margin-bottom: 16px; }
+    .task-card { background: #fff; border: 1px solid #d0d7de; border-radius: 6px; padding: 14px; }
+    .task-card .name { font-size: 15px; font-weight: 600; color: #1f2328; margin-bottom: 4px; }
+    .task-card .desc { font-size: 12px; color: #57606a; margin-bottom: 12px; }
+    .status-pill { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 600; }
+    .st-success { background: #dafbe1; color: #1a7f37; }
+    .st-failed, .st-timeout { background: #ffebe9; color: #cf222e; }
+    .st-running { background: #ddf4ff; color: #0969da; }
+    .st-skipped { background: #f6f8fa; color: #57606a; }
+    .st-none    { background: #f6f8fa; color: #8c959f; }
+    .kv-line { display: flex; justify-content: space-between; font-size: 12px; color: #57606a; padding: 3px 0; }
+    .kv-line .v { color: #1f2328; font-weight: 500; }
+    .rerun-btn { width: 100%; margin-top: 10px; padding: 6px; border: 1px solid #d0d7de; background: #f6f8fa; border-radius: 4px; cursor: pointer; font-size: 12px; color: #24292f; }
+    .rerun-btn:hover { background: #eaeef2; }
+    .rerun-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .filter-bar { margin-bottom: 10px; font-size: 13px; }
+    .filter-bar select { padding: 4px 8px; border: 1px solid #d0d7de; border-radius: 4px; margin-left: 6px; }
+    .tail-link { color: #0969da; cursor: pointer; font-size: 11px; }
+    .tail-pre { background: #f6f8fa; padding: 10px; border-radius: 4px; font-size: 11px; max-height: 400px; overflow: auto; white-space: pre-wrap; font-family: SFMono-Regular,Consolas,Liberation Mono,Menlo,monospace; }
+    .ran-today { font-size: 11px; padding: 1px 6px; border-radius: 3px; margin-left: 8px; }
+    .ran-yes { background: #dafbe1; color: #1a7f37; }
+    .ran-no  { background: #fff8c5; color: #9a6700; }
+    .updated-line { font-size: 12px; color: #57606a; text-align: right; margin-bottom: 8px; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>📈 A股量化回测平台</h1>
+  <nav class="header-nav">
+    <a class="nav-btn" href="/" style="text-decoration:none;">回测</a>
+    <a class="nav-btn" href="/paper_trading" style="text-decoration:none;">实盘观察</a>
+    <button class="nav-btn active">定时任务</button>
+  </nav>
+</header>
+
+<main>
+
+  <div class="panel">
+    <div class="panel-title">
+      定时任务总览
+      <span class="tip-badge">crontab 单条触发统一调度器，每 5 分钟唤醒一次</span>
+    </div>
+    <div class="updated-line" id="updatedAt">—</div>
+    <div class="tasks-grid" id="tasksGrid">
+      <div class="no-data">加载中…</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">运行明细 <span id="runsHint">（最近 100 次）</span></div>
+    <div class="filter-bar">
+      过滤：
+      <select id="taskFilter" onchange="loadRuns()">
+        <option value="">全部任务</option>
+      </select>
+    </div>
+    <div id="runsWrap"><div class="no-data">加载中…</div></div>
+  </div>
+
+</main>
+
+<!-- 详情弹窗：复用 paper_trading 的样式 -->
+<div id="runDetailModal" class="modal" style="display:none">
+  <div class="modal-box" style="max-width:900px">
+    <div class="modal-head">
+      <span id="modalTitle">运行详情</span>
+      <button class="modal-close" onclick="closeDetail()">×</button>
+    </div>
+    <div class="modal-body" id="modalContent">—</div>
+  </div>
+</div>
+
+<script src="/static/js/tasks.js"></script>
+</body>
+</html>
