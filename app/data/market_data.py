@@ -11,223 +11,36 @@ Connection strategy (five-attempt fallback chain):
 
 Each successful fetch (Attempt 0/1/2/3/4) is persisted into market_universe_snapshot,
 so future calls always have a fallback even when all live sources are unavailable.
+
+外部抓取逻辑已抽离到 `universe_fetcher.py`；本文件只保留**编排 + 持久化**职责。
 """
 import logging
-import os
 import time
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date as Date
 from typing import Any, Dict, List, Optional
 
 import akshare as ak
 import pandas as pd
-import requests as _req
 
 from .data_loader import _get_pool, get_kline_data
 from .feed import get_feed
+from .universe_fetcher import (
+    call_no_proxy,
+    fetch_via_akshare_no_proxy,
+    fetch_via_akshare_with_proxy,
+    fetch_via_xuangu,
+)
 
 logger = logging.getLogger(__name__)
 
-# Candidate push servers — used only for fallback methods
-_EM_PUSH_HOSTS = [
-    "push2.eastmoney.com",
-    "push2ex.eastmoney.com",
-    "8.push2.eastmoney.com",
-    "16.push2.eastmoney.com",
-]
-_EM_API_PATH = "/api/qt/clist/get"
-_EM_FS = "m:0 t:6,m:0 t:80,m:1 t:2,m:1 t:23,m:0 t:81 s:2048"   # all A-shares
-_EM_FIELDS = "f12,f14,f2,f20"   # code, name, price, total_market_cap
-_EM_UT = "bd1d9ddb04089700cf9c27f6f7426281"
-
-# Xuangu API (data.eastmoney.com — different host from push2, reliably accessible)
-_XUANGU_URL = "https://data.eastmoney.com/dataapi/xuangu/list"
-_XUANGU_FIELDS = "SECURITY_CODE,SECURITY_NAME_ABBR,NEW_PRICE,TOTAL_MARKET_CAP"
-
-
-# ── Method 1 (primary): data.eastmoney.com xuangu stock screener ──────────────
-
-def _fetch_via_xuangu() -> pd.DataFrame:
-    """
-    Fetch all A-share stocks with price and market cap from the eastmoney xuangu
-    (stock screener) API at data.eastmoney.com — a different host than push2,
-    accessible even when push2.eastmoney.com is blocked.
-    Paginates in batches of 1000 until all ~5500 stocks are collected.
-    """
-    session = _req.Session()
-    session.trust_env = False
-    session.headers.update({
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/124.0.0.0 Safari/537.36"
-        ),
-        "Referer": "https://data.eastmoney.com/xuangu/",
-        "Accept-Language": "zh-CN,zh;q=0.9",
-    })
-
-    records: list = []
-    ps = 1000
-    MAX_PAGES = 20  # safety cap (20 * 1000 = 20k stocks, well above A-share total)
-
-    for page in range(1, MAX_PAGES + 1):
-        params = {
-            "st": "TOTAL_MARKET_CAP",
-            "sr": -1,
-            "ps": ps,
-            "p": page,
-            "sty": _XUANGU_FIELDS,
-            "source": "SELECT_SECURITIES",
-            "client": "WEB",
-        }
-        resp = session.get(_XUANGU_URL, params=params, timeout=20)
-        resp.raise_for_status()
-        payload = resp.json()
-
-        result = payload.get("result") or {}
-        items = result.get("data") or []
-
-        for item in items:
-            try:
-                code = str(item.get("SECURITY_CODE", "")).zfill(6)
-                price = item.get("NEW_PRICE")
-                cap_yuan = item.get("TOTAL_MARKET_CAP")
-                name = str(item.get("SECURITY_NAME_ABBR", ""))
-                if (code and
-                        price not in (None, "-", "--") and
-                        cap_yuan not in (None, "-", "--")):
-                    records.append({
-                        "code": code,
-                        "name": name,
-                        "price": float(price),
-                        "market_cap": float(cap_yuan) / 1e8,
-                    })
-            except (TypeError, ValueError):
-                continue
-
-        if not result.get("nextpage") or not items or len(items) < ps:
-            break
-        time.sleep(0.15)
-
-    if not records:
-        raise RuntimeError("xuangu API 返回空数据")
-
-    return pd.DataFrame(records)
-
-
-# ── Method 4 (last resort): direct eastmoney push API via curl_cffi ───────────
-
-def _fetch_via_cffi() -> pd.DataFrame:
-    """Try each push host in turn with Chrome TLS impersonation."""
-    from curl_cffi import requests as cffi_req
-
-    headers = {
-        "Referer": "https://quote.eastmoney.com/center/gridlist.html",
-        "Accept-Language": "zh-CN,zh;q=0.9",
-    }
-
-    last_err: Exception = RuntimeError("no hosts tried")
-    for host in _EM_PUSH_HOSTS:
-        url = f"https://{host}{_EM_API_PATH}"
-        try:
-            records: list = []
-            pn, pz = 1, 1000
-            total: Optional[int] = None
-
-            while True:
-                params = {
-                    "pn": pn, "pz": pz, "po": 1, "np": 1,
-                    "ut": _EM_UT, "fltt": 2, "invt": 2, "fid": "f3",
-                    "fs": _EM_FS, "fields": _EM_FIELDS,
-                    "_": int(time.time() * 1000),
-                }
-                resp = cffi_req.get(
-                    url, params=params, headers=headers,
-                    impersonate="chrome110", timeout=20,
-                )
-                resp.raise_for_status()
-                payload = resp.json()
-
-                block = payload.get("data") or {}
-                if total is None:
-                    total = block.get("total", 0)
-
-                items = block.get("diff") or []
-                if not items:
-                    break
-
-                for item in items:
-                    try:
-                        code = str(item.get("f12", "")).zfill(6)
-                        price = item.get("f2")
-                        cap = item.get("f20")
-                        if code and price not in (None, "-", "--") and cap not in (None, "-", "--"):
-                            records.append({
-                                "code": code,
-                                "name": str(item.get("f14", "")),
-                                "price": float(price),
-                                "market_cap": float(cap) / 1e8,
-                            })
-                    except (TypeError, ValueError):
-                        continue
-
-                if len(records) >= (total or 0) or len(items) < pz:
-                    break
-                pn += 1
-                time.sleep(0.1)
-
-            if records:
-                return pd.DataFrame(records)
-            last_err = RuntimeError(f"{host} 返回空数据")
-        except Exception as exc:
-            last_err = exc
-            continue
-
-    raise RuntimeError(f"所有push节点均不可用: {last_err}")
-
-
-# ── Method 2/3: akshare with/without proxy ───────────────────────────────────
-
-def _call_no_proxy(func, *args, **kwargs):
-    """
-    Disable proxy for one call:
-      1. Remove proxy env vars from os.environ
-      2. Patch urllib.request.getproxies (used by urllib itself)
-      3. Patch requests.utils.getproxies (requests imports it at module load,
-         so patching urllib alone is NOT enough)
-    """
-    import requests.utils as _ru
-
-    proxy_vars = ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
-                  "ALL_PROXY", "all_proxy")
-    saved = {k: os.environ.pop(k, None) for k in proxy_vars}
-
-    orig_urllib = urllib.request.getproxies
-    urllib.request.getproxies = lambda: {}
-    orig_req = _ru.getproxies
-    _ru.getproxies = lambda: {}
-
-    try:
-        return func(*args, **kwargs)
-    finally:
-        urllib.request.getproxies = orig_urllib
-        _ru.getproxies = orig_req
-        for k, v in saved.items():
-            if v is not None:
-                os.environ[k] = v
-
-
-def _parse_akshare_raw(raw: pd.DataFrame) -> pd.DataFrame:
-    col_map = {"代码": "code", "名称": "name", "最新价": "price", "总市值": "market_cap_yuan"}
-    df = raw.rename(columns=col_map)
-    keep = [c for c in col_map.values() if c in df.columns]
-    df = df[keep].copy()
-    df["price"] = pd.to_numeric(df["price"], errors="coerce")
-    df["market_cap"] = pd.to_numeric(df["market_cap_yuan"], errors="coerce") / 1e8
-    df = df[df["price"] > 0].dropna(subset=["market_cap"])
-    df["code"] = df["code"].astype(str).str.zfill(6)
-    return df[["code", "name", "price", "market_cap"]].reset_index(drop=True)
+# 历史别名：外部脚本 / 子进程 script 字符串硬编码了下划线版本，保留向后兼容
+_call_no_proxy = call_no_proxy
+_fetch_via_xuangu = fetch_via_xuangu
+# `_fetch_via_cffi` 不在此模块定义，但 get_universe_snapshot 内部子进程脚本
+# 仍按 "from app.data.market_data import _fetch_via_cffi" 引用 —— 通过下面
+# 这一行让旧路径继续工作：
+from .universe_fetcher import fetch_via_cffi as _fetch_via_cffi  # noqa: F401
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -518,7 +331,7 @@ def get_universe_snapshot() -> pd.DataFrame:
 
     # ── Attempt 1: xuangu API (data.eastmoney.com, reliable) ──────────────────
     try:
-        df = _fetch_via_xuangu()
+        df = fetch_via_xuangu()
         _write_universe_to_db(df)       # 写入快照表，下次 0.5 直接命中
         return df
     except Exception as exc:
@@ -527,8 +340,7 @@ def get_universe_snapshot() -> pd.DataFrame:
 
     # ── Attempt 2: akshare，urllib + requests.utils 双重禁代理 ─────────────────
     try:
-        raw = _call_no_proxy(ak.stock_zh_a_spot_em)
-        df = _parse_akshare_raw(raw)
+        df = fetch_via_akshare_no_proxy()
         _write_universe_to_db(df)
         return df
     except Exception as exc:
@@ -537,8 +349,7 @@ def get_universe_snapshot() -> pd.DataFrame:
 
     # ── Attempt 3: akshare 走系统代理 ──────────────────────────────────────────
     try:
-        raw = ak.stock_zh_a_spot_em()
-        df = _parse_akshare_raw(raw)
+        df = fetch_via_akshare_with_proxy()
         _write_universe_to_db(df)
         return df
     except Exception as exc:

@@ -24,6 +24,7 @@ from datetime import date as _Date
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..data.data_loader import _get_pool
+from ..data.filters import is_allowed_board, is_st_name
 from ..strategies.small_cap import SmallCapStrategy
 from . import db
 
@@ -130,10 +131,10 @@ def _load_universe_snapshot(
         out: List[Dict[str, Any]] = []
         for r in rows_in:
             code = str(r["code"])
-            if not _is_allowed_board(code, allow_boards):
+            if not is_allowed_board(code, allow_boards):
                 continue
             name = (r.get("name") or "").strip()
-            if r.get("is_st") or _is_st_name(name):
+            if r.get("is_st") or is_st_name(name):
                 continue
             pct = r.get("pct_change")
             if pct is not None and float(pct) >= 9.8:
@@ -229,30 +230,6 @@ def _load_universe_snapshot(
     except Exception as exc:
         logger.error("[%s] market_universe_snapshot 降级失败: %s", trade_date, exc)
         return []
-
-
-def _is_st_name(name: str) -> bool:
-    """名称前缀法识别 ST / 退市预警类股票。"""
-    if not name:
-        return False
-    n = name.upper().replace(" ", "")
-    if "退" in name:           # 含 "退" 的均视为退市相关
-        return True
-    return n.startswith(("ST", "*ST", "SST", "S*ST"))
-
-
-def _is_allowed_board(code: str, allow_boards: Tuple[str, ...]) -> bool:
-    """allow_boards: ('main',) 仅主板；('main', 'gem') 含创业板；('main', 'star') 含科创板等"""
-    # 沪市主板 600/601/603/605；深市主板 000/001/002/003
-    if code.startswith(("600", "601", "603", "605", "000", "001", "002", "003")):
-        return "main" in allow_boards
-    if code.startswith(("300", "301")):
-        return "gem" in allow_boards
-    if code.startswith(("688", "689")):
-        return "star" in allow_boards
-    if code.startswith(("4", "8")):
-        return "bj" in allow_boards
-    return False
 
 
 def _get_day_prices(codes: List[str], trade_date: _Date) -> Dict[str, Dict[str, float]]:
