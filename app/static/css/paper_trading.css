@@ -31,6 +31,25 @@
 .sum-val.pos { color: var(--up); }
 .sum-val.neg { color: var(--down); }
 
+/* 下次调仓日卡片 */
+.sum-sub {
+  font-size: 11px;
+  color: var(--txt2);
+  margin-top: 3px;
+  font-weight: 500;
+}
+.sum-card.rebal-today {
+  border-color: #0a7d33;
+  background: rgba(10, 125, 51, .07);
+}
+.sum-card.rebal-today .sum-val { color: #0a7d33; }
+.sum-card.rebal-today .sum-sub { color: #0a7d33; font-weight: 700; }
+.sum-card.rebal-soon {
+  border-color: #9a6700;
+  background: rgba(154, 103, 0, .06);
+}
+.sum-card.rebal-soon .sum-sub { color: #9a6700; }
+
 .empty-banner {
   margin-top: 12px;
   padding: 12px 14px;

@@ -92,6 +92,8 @@ function renderSummary(data) {
     document.getElementById('sumPos').textContent = '—';
     document.getElementById('sumCash').textContent = '—';
     document.getElementById('sumLastRun').textContent = '—';
+    document.getElementById('sumNextRebal').textContent = '—';
+    document.getElementById('sumRebalSub').textContent = '';
     return;
   }
   banner.style.display = 'none';
@@ -112,6 +114,32 @@ function renderSummary(data) {
     document.getElementById('sumCumRet').textContent = '0.00%';
     document.getElementById('sumPos').textContent = '¥0.00';
     document.getElementById('sumLastRun').textContent = '尚未运行';
+  }
+
+  // ── 下次调仓日 ────────────────────────────────────────────────────────────
+  const nrd = data.next_rebalance_date;
+  const daysLeft = data.days_until_rebalance;
+  const rebalCard = document.getElementById('sumRebalCard');
+  const rebalVal  = document.getElementById('sumNextRebal');
+  const rebalSub  = document.getElementById('sumRebalSub');
+  if (nrd) {
+    rebalVal.textContent = nrd;
+    if (daysLeft === 0) {
+      rebalSub.textContent = '今天调仓 🎯';
+      rebalCard.classList.add('rebal-today');
+      rebalCard.classList.remove('rebal-soon');
+    } else if (daysLeft === 1) {
+      rebalSub.textContent = '明天调仓';
+      rebalCard.classList.add('rebal-soon');
+      rebalCard.classList.remove('rebal-today');
+    } else {
+      rebalSub.textContent = `还有 ${daysLeft} 个交易日`;
+      rebalCard.classList.remove('rebal-today', 'rebal-soon');
+    }
+  } else {
+    rebalVal.textContent = '—';
+    rebalSub.textContent = '';
+    rebalCard.classList.remove('rebal-today', 'rebal-soon');
   }
 }
 

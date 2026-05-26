@@ -52,6 +52,47 @@ from .strategies.registry import (
 app = FastAPI(title="A股量化回测平台", version="1.2.0")
 
 # 访问日志中间件 —— 异步写入 back_test.user_visit_log
+
+# ── 交易日历（模块级缓存，首次 API 调用时懒加载）──────────────────────────────
+_TRADE_DATE_LIST: list | None = None   # sorted list of datetime.date
+
+
+def _get_trade_date_list() -> list:
+    """返回 A 股全量交易日列表（升序 date 对象）。首次调用时加载，之后走缓存。"""
+    global _TRADE_DATE_LIST
+    if _TRADE_DATE_LIST is not None:
+        return _TRADE_DATE_LIST
+    try:
+        import akshare as ak
+        df = ak.tool_trade_date_hist_sina()
+        col = df.columns[0]
+        _TRADE_DATE_LIST = sorted(pd.to_datetime(df[col]).dt.date.tolist())
+    except Exception:
+        _TRADE_DATE_LIST = []
+    return _TRADE_DATE_LIST
+
+
+def _next_rebalance_date(last_rebalance: "_date", hold_days: int) -> "_date | None":
+    """
+    从上次调仓日向后数 hold_days 个交易日，返回下次调仓日。
+    例：last_rebalance=2026-05-26, hold_days=5 → 2026-06-02（跳过节假日）。
+    """
+    cal = _get_trade_date_list()
+    if not cal:
+        # 兜底：简单加工作日（忽略节假日，误差小）
+        from datetime import timedelta as _td
+        d = last_rebalance
+        count = 0
+        while count < hold_days:
+            d += _td(days=1)
+            if d.weekday() < 5:
+                count += 1
+        return d
+    # 在日历中找 last_rebalance 的位置，向后取第 hold_days 个
+    import bisect
+    idx = bisect.bisect_right(cal, last_rebalance)   # 第一个 > last_rebalance 的位置
+    target_idx = idx + hold_days - 1
+    return cal[target_idx] if target_idx < len(cal) else None
 from .visit_log import VisitLogMiddleware  # noqa: E402
 app.add_middleware(VisitLogMiddleware)
 
@@ -167,11 +208,44 @@ async def api_paper_account():
                 (total_value - initial_capital) / initial_capital, 6
             )
 
+    # ── 下次调仓日 ───────────────────────────────────────────────────────────
+    next_rb_date: str | None = None
+    days_until_rb: int | None = None
+    if account:
+        last_rb_raw = account.get("last_rebalance_date")
+        sp = account.get("strategy_params") or {}
+        if isinstance(sp, str):
+            try:
+                sp = json.loads(sp)
+            except Exception:
+                sp = {}
+        hold_days_val = int(sp.get("hold_days") or 5)
+        if last_rb_raw:
+            last_rb_date = (
+                _date.fromisoformat(str(last_rb_raw))
+                if not isinstance(last_rb_raw, _date) else last_rb_raw
+            )
+            nrd = _next_rebalance_date(last_rb_date, hold_days_val)
+            if nrd:
+                next_rb_date = str(nrd)
+                today_date = _date.today()
+                cal = _get_trade_date_list()
+                if cal:
+                    import bisect
+                    # count trading days from today (inclusive of today if trading) to nrd (exclusive)
+                    today_idx = bisect.bisect_left(cal, today_date)
+                    nrd_idx   = bisect.bisect_left(cal, nrd)
+                    days_until_rb = max(0, nrd_idx - today_idx)
+                else:
+                    days_until_rb = max(0, (nrd - today_date).days)
+
     return {
         "account": _json_safe([account])[0] if account else None,
         "holdings": holdings_out,
         "latest_run": latest_out,
         "realtime_count": len(realtime),
+        "next_rebalance_date": next_rb_date,
+        "days_until_rebalance": days_until_rb,
     }
 
 
