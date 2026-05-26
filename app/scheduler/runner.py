@@ -199,9 +199,56 @@ def run_due() -> List[dict]:
     return executed
 
 
+def precheck(name: str) -> dict:
+    """
+    手动触发前的同步前置检查。立即返回，不跑 subprocess。
+      - {"ok": True}                    可以执行
+      - {"ok": False, "reason": "..."}  不能执行（前端 alert 给用户看）
+
+    依赖未满足时**会写一条 status='skipped' 的 task_run_log**，这样：
+      - /tasks 页面历史明细里看得到"为什么没跑"
+      - 不会让前端误读到旧的失败记录、以为这次重跑挂了
+    """
+    spec = registry.get_task(name)
+    if spec is None:
+        return {"ok": False, "reason": f"未知任务: {name}"}
+
+    today = _Date.today()
+    dep = spec.get("depends_on")
+    if dep and not db.already_ran_today(dep, today, status="success"):
+        reason = f"依赖 {dep} 今天还没成功"
+        _record_skipped(name, reason)
+        return {"ok": False, "reason": reason}
+
+    return {"ok": True}
+
+
+def _record_skipped(name: str, reason: str) -> None:
+    """跳过时也写一条 task_run_log（status='skipped'），方便溯源。"""
+    spec = registry.get_task(name)
+    if spec is None:
+        return
+    db.ensure_table()
+    now = _DT.now()
+    sched_at = _today_scheduled_at(spec["schedule"], now.date())
+    run_id = db.insert_run(name, sched_at, now, "manual")
+    if run_id is not None:
+        db.mark_finished(
+            run_id,
+            status="skipped",
+            exit_code=None,
+            finished_at=now,
+            duration_ms=0,
+            error_msg=reason,
+        )
+    logger.info("[%s] 跳过：%s", name, reason)
+
+
 def run_one(name: str, trigger: str = "manual") -> dict:
     """
-    手动触发（API / 命令行）。仍然检查依赖，但跳过 schedule 时刻和"今天已跑过"。
+    手动触发（CLI 入口或不带 precheck 的调用）。同样会做依赖检查。
+    API 调用方推荐先调 precheck()，依赖不通则不要进这里 —— 否则会写两条
+    skipped 记录。
     """
     db.ensure_table()
     spec = registry.get_task(name)
@@ -211,8 +258,9 @@ def run_one(name: str, trigger: str = "manual") -> dict:
     today = _Date.today()
     dep = spec.get("depends_on")
     if dep and not db.already_ran_today(dep, today, status="success"):
-        return {"task": name, "status": "skipped",
-                "reason": f"依赖 {dep} 今天还没成功"}
+        reason = f"依赖 {dep} 今天还没成功"
+        _record_skipped(name, reason)
+        return {"task": name, "status": "skipped", "reason": reason}
 
     sched_at = _today_scheduled_at(spec["schedule"], today)
     status = _execute(name, sched_at, trigger)

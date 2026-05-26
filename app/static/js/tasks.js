@@ -164,12 +164,27 @@ function closeDetail() {
 async function triggerRun(name, btn) {
   if (!confirm(`确认要立即重跑 ${name} 吗？`)) return;
   btn.disabled = true;
-  btn.textContent = '已提交，运行中…';
+  btn.textContent = '提交中…';
   try {
     const res = await fetch(`/api/tasks/${encodeURIComponent(name)}/run`, { method: 'POST' });
     if (!res.ok) throw new Error(await res.text());
-    // 等几秒让任务跑起来，再刷一次
-    setTimeout(() => { loadSummary(); loadRuns(); btn.disabled = false; btn.textContent = '▶ 立即重跑'; }, 3000);
+    const data = await res.json();
+
+    if (data.status === 'skipped') {
+      // 依赖未满足等前置原因 —— 立即告诉用户为什么没跑
+      alert(`未执行：${data.reason}`);
+      btn.disabled = false;
+      btn.textContent = '▶ 立即重跑';
+      loadSummary(); loadRuns();   // 把这条 skipped 拉出来给用户看
+      return;
+    }
+
+    // 真的丢线程池跑了，等几秒再刷
+    btn.textContent = '运行中…';
+    setTimeout(() => {
+      loadSummary(); loadRuns();
+      btn.disabled = false; btn.textContent = '▶ 立即重跑';
+    }, 3000);
   } catch (e) {
     alert(`触发失败：${e.message || e}`);
     btn.disabled = false;

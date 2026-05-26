@@ -264,19 +264,27 @@ async def api_tasks_runs(task: Optional[str] = None, limit: int = 100):
 
 @app.post("/api/tasks/{name}/run")
 async def api_tasks_run(name: str):
-    """手动触发一个任务（异步在线程池里跑，调用方立即返回 started_at）。"""
+    """
+    手动触发一个任务。
+    流程：
+      1. precheck（同步）：依赖未满足 → 立刻返回 skipped + reason，并往
+         task_run_log 写一条 status='skipped' 的记录方便溯源
+      2. 通过检查 → 丢线程池跑 subprocess，HTTP 立即返回 queued
+         （前端会在几秒后刷新 /api/tasks/runs 拿到最新结果）
+    """
     if scheduler_registry.get_task(name) is None:
         raise HTTPException(404, f"未知任务: {name}")
 
-    loop = asyncio.get_event_loop()
-    # subprocess 是阻塞的，丢到默认线程池，HTTP 调用立即返回
-    fut = loop.run_in_executor(None, lambda: scheduler_runner.run_one(name, "manual"))
+    check = scheduler_runner.precheck(name)
+    if not check["ok"]:
+        # 注意：HTTP 200，不是 4xx —— 这是业务结果不是 API 错误
+        return {"task": name, "status": "skipped", "reason": check["reason"]}
 
-    # 我们不 await 这个 future — 立即返回。结果落库到 task_run_log，
-    # 前端轮询 /api/tasks/runs 拿到最新状态即可。
-    del fut
+    loop = asyncio.get_event_loop()
+    # subprocess 阻塞调用，丢线程池；不 await，立即返回
+    loop.run_in_executor(None, lambda: scheduler_runner.run_one(name, "manual"))
     from datetime import datetime as _DT
-    return {"task": name, "trigger": "manual", "queued_at": _DT.now().isoformat()}
+    return {"task": name, "status": "queued", "queued_at": _DT.now().isoformat()}
 
 
 def _iso(v):
