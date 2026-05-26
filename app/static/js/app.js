@@ -347,6 +347,11 @@ async function runBacktest() {
     renderResults(data.results, data.benchmark, `${data.stock_name || data.stock_code}  ${start} → ${end}`);
     equityChart?.resize();
 
+    // 资金不足警告（如 600519 这种 1393 元股 + 10w 资金 → 0 交易）
+    if (data.capital_warning) {
+      showError(data.capital_warning);
+    }
+
     scrollTo('resultsPanel');
   } catch (e) {
     showError(e.message);

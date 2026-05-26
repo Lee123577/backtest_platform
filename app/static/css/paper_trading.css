@@ -49,6 +49,12 @@
   background: rgba(154, 103, 0, .06);
 }
 .sum-card.rebal-soon .sum-sub { color: #9a6700; }
+.sum-card.rebal-overdue {
+  border-color: #cf222e;
+  background: rgba(207, 34, 46, .06);
+}
+.sum-card.rebal-overdue .sum-val { color: #cf222e; }
+.sum-card.rebal-overdue .sum-sub { color: #cf222e; font-weight: 700; }
 
 .empty-banner {
   margin-top: 12px;

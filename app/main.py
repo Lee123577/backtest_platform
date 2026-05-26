@@ -171,6 +171,7 @@ async def api_paper_account():
     # ── 下次调仓日 ───────────────────────────────────────────────────────────
     next_rb_date: str | None = None
     days_until_rb: int | None = None
+    rb_overdue_days: int = 0   # 已逾期天数（daily_signal 没跑、休假等情形）
     if account and account.get("last_rebalance_date"):
         # 复用 paper_db.get_strategy_params()，避免在两处重复处理 bytes/str/dict 三态
         sp = paper_db.get_strategy_params() or {}
@@ -183,7 +184,15 @@ async def api_paper_account():
         nrd = next_n_trading_days(last_rb_date, hold_days_val)
         if nrd:
             next_rb_date = str(nrd)
-            days_until_rb = count_trading_days(_date.today(), nrd)
+            today = _date.today()
+            if nrd >= today:
+                # 还没到/正好今天到
+                days_until_rb = count_trading_days(today, nrd)
+            else:
+                # 已经过了——daily_signal 没跑、或上次跑完恰好碰上长假
+                # 用 nrd 在前、today 在后的方向数交易日，给出逾期天数
+                days_until_rb = 0
+                rb_overdue_days = count_trading_days(nrd, today)
 
     return {
         "account": _json_safe([account])[0] if account else None,
@@ -192,6 +201,7 @@ async def api_paper_account():
         "realtime_count": len(realtime),
         "next_rebalance_date": next_rb_date,
         "days_until_rebalance": days_until_rb,
+        "rebalance_overdue_days": rb_overdue_days,
     }
 
 
@@ -596,6 +606,22 @@ async def api_backtest(req: BacktestRequest):
     if df.empty:
         raise HTTPException(status_code=400, detail="数据为空，请检查股票代码和日期范围")
 
+    # ── 资金充足性预检：A 股最小买入 100 股，资金低于"区间最低价×100"则无法成交 ──
+    # 不直接拦截（用户可能仍想看价格曲线），但把警告塞进结果里，避免"0% 收益 0 笔交易"
+    # 让人误以为是策略本身不出信号
+    capital_warning: str | None = None
+    if "low" in df.columns and len(df) > 0:
+        min_low = float(df["low"].min())
+        min_buy_cost = min_low * 100 * 1.0005  # 留一点手续费余量
+        if min_buy_cost > req.initial_capital:
+            stock_name = get_stock_name(code)
+            recommended = int((min_low * 100 * 1.01 // 1000 + 1) * 1000)  # 上取整到 1000
+            capital_warning = (
+                f"初始资金 ¥{req.initial_capital:,.0f} 不足以买入 1 手 {stock_name}（{code}）。"
+                f"区间内最低价 ¥{min_low:.2f}，单手 100 股最少需要 ¥{min_buy_cost:,.0f}。"
+                f"建议把初始资金调到 ¥{recommended:,} 以上再回测。"
+            )
+
     results = []
     for cfg in req.strategies:
         try:
@@ -632,6 +658,7 @@ async def api_backtest(req: BacktestRequest):
         "results": results,
         "benchmark": benchmark,
         "kline": kline,
+        "capital_warning": capital_warning,
     }
 
 

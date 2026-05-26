@@ -126,27 +126,29 @@ function renderSummary(data) {
   // ── 下次调仓日 ────────────────────────────────────────────────────────────
   const nrd = data.next_rebalance_date;
   const daysLeft = data.days_until_rebalance;
+  const overdue = Number(data.rebalance_overdue_days || 0);
   const rebalCard = document.getElementById('sumRebalCard');
   const rebalVal  = document.getElementById('sumNextRebal');
   const rebalSub  = document.getElementById('sumRebalSub');
+  rebalCard.classList.remove('rebal-today', 'rebal-soon', 'rebal-overdue');
   if (nrd) {
     rebalVal.textContent = nrd;
-    if (daysLeft === 0) {
+    if (overdue > 0) {
+      // daily_signal 几天没跑，或者刚好碰上长假。给出逾期提示
+      rebalSub.textContent = `已逾期 ${overdue} 个交易日，下次扫描会补仓`;
+      rebalCard.classList.add('rebal-overdue');
+    } else if (daysLeft === 0) {
       rebalSub.textContent = '今天调仓 🎯';
       rebalCard.classList.add('rebal-today');
-      rebalCard.classList.remove('rebal-soon');
     } else if (daysLeft === 1) {
       rebalSub.textContent = '明天调仓';
       rebalCard.classList.add('rebal-soon');
-      rebalCard.classList.remove('rebal-today');
     } else {
       rebalSub.textContent = `还有 ${daysLeft} 个交易日`;
-      rebalCard.classList.remove('rebal-today', 'rebal-soon');
     }
   } else {
     rebalVal.textContent = '—';
     rebalSub.textContent = '';
-    rebalCard.classList.remove('rebal-today', 'rebal-soon');
   }
 }
 
