@@ -17,20 +17,41 @@ const fmtPrice = (v) => {
 
 let equityChart;
 const REALTIME_REFRESH_MS = 30_000;  // 持仓/账户 30s 拉一次实时价
+const SCAN_REFRESH_MS = 60_000;       // 今日扫描状态 60s 拉一次
 let _realtimeTimer = null;
+let _scanTimer = null;
+let _allRuns = [];  // 缓存全量历史，供前端过滤
+
+// 全局权限状态：load() 时拉一次；admin=true 解锁所有写按钮
+let _adminInfo = { ip: '—', is_admin: false, whitelist_empty: false };
 
 async function load() {
-  await Promise.all([loadAccount(), loadEquity(), loadRuns()]);
-  // 启动持仓表的轮询刷新；equity / runs 是历史快照，不用刷
+  // 先拉权限，再并行加载其它数据 —— 让 UI 一开始就能正确禁用按钮
+  await loadAdminStatus();
+  await Promise.all([
+    loadAccount(), loadEquity(), loadRuns(), loadTrades(),
+    loadScanStatus(), loadParams(),
+  ]);
+  applyAdminGuards();
+  // 启动持仓表的轮询刷新；equity / runs / trades 是历史快照，不用频繁刷
   if (_realtimeTimer) clearInterval(_realtimeTimer);
   _realtimeTimer = setInterval(loadAccount, REALTIME_REFRESH_MS);
+  if (_scanTimer) clearInterval(_scanTimer);
+  _scanTimer = setInterval(loadScanStatus, SCAN_REFRESH_MS);
   // 切到后台标签时停掉，回到前台再启动 —— 不浪费请求
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
       if (_realtimeTimer) { clearInterval(_realtimeTimer); _realtimeTimer = null; }
-    } else if (!_realtimeTimer) {
-      loadAccount();
-      _realtimeTimer = setInterval(loadAccount, REALTIME_REFRESH_MS);
+      if (_scanTimer) { clearInterval(_scanTimer); _scanTimer = null; }
+    } else {
+      if (!_realtimeTimer) {
+        loadAccount();
+        _realtimeTimer = setInterval(loadAccount, REALTIME_REFRESH_MS);
+      }
+      if (!_scanTimer) {
+        loadScanStatus();
+        _scanTimer = setInterval(loadScanStatus, SCAN_REFRESH_MS);
+      }
     }
   });
 }
@@ -188,21 +209,35 @@ function renderEquityChart(data) {
 
 async function loadRuns() {
   try {
-    const res = await fetch('/api/paper_trading/runs?limit=60');
+    const res = await fetch('/api/paper_trading/runs?limit=120');
     const runs = await res.json();
-    renderRuns(runs || []);
+    _allRuns = runs || [];
+    renderRunsFiltered();
   } catch (e) {
     console.error(e);
   }
 }
 
+// 复选框切换：默认只看有交易的（调仓 / 止损 / 错误）
+function renderRunsFiltered() {
+  const hideHold = document.getElementById('hideHoldRuns')?.checked;
+  const list = hideHold
+    ? _allRuns.filter(r =>
+        r.is_rebalance || r.stop_loss_count > 0 || r.status === 'error')
+    : _allRuns;
+  renderRuns(list);
+}
+window.renderRunsFiltered = renderRunsFiltered;
+
 function renderRuns(runs) {
   const wrap = document.getElementById('runsWrap');
+  const total = _allRuns.length;
+  const shown = runs.length;
   document.getElementById('runsHint').textContent =
-    runs.length ? `（共 ${runs.length} 条，点击查看详情）` : '';
+    total ? `（显示 ${shown}/${total} 条，点击查看详情）` : '';
 
   if (!runs.length) {
-    wrap.innerHTML = '<div class="no-data">暂无记录</div>';
+    wrap.innerHTML = '<div class="no-data">无符合条件的记录</div>';
     return;
   }
   const rows = runs.map(r => {
@@ -239,6 +274,596 @@ function renderRuns(runs) {
       <tbody>${rows}</tbody>
     </table>`;
 }
+
+// ── 成交流水（仅真实买卖，配有实现盈亏）────────────────────────────────────
+
+async function loadTrades() {
+  try {
+    const res = await fetch('/api/paper_trading/trades?limit=300');
+    const { trades } = await res.json();
+    renderTrades(trades || []);
+  } catch (e) {
+    console.error(e);
+    document.getElementById('tradesWrap').innerHTML =
+      `<div class="no-data">加载失败：${e.message || e}</div>`;
+  }
+}
+
+function renderTrades(trades) {
+  const wrap = document.getElementById('tradesWrap');
+  const hint = document.getElementById('tradesHint');
+
+  if (!trades.length) {
+    wrap.innerHTML = '<div class="no-data">暂无成交记录</div>';
+    if (hint) hint.textContent = '每一笔买入 / 卖出 / 止损卖出';
+    return;
+  }
+
+  // 统计：胜负次数 / 累计已实现盈亏
+  let wins = 0, losses = 0, realized = 0;
+  trades.forEach(t => {
+    if (t.pnl !== null && t.pnl !== undefined) {
+      realized += Number(t.pnl);
+      if (t.pnl > 0) wins++;
+      else if (t.pnl < 0) losses++;
+    }
+  });
+  const winRate = (wins + losses) > 0
+    ? ((wins / (wins + losses)) * 100).toFixed(1) + '%'
+    : '—';
+  const realizedCls = realized >= 0 ? 'val-pos' : 'val-neg';
+  if (hint) {
+    hint.innerHTML = `共 ${trades.length} 笔　|　胜/负 ${wins}/${losses}　|　胜率 ${winRate}　|　已实现盈亏 <span class="${realizedCls}">¥${fmtMoney(realized)}</span>`;
+  }
+
+  const rows = trades.map(t => {
+    let tag;
+    if (t.action === '买入') tag = '<span class="badge-buy">买入</span>';
+    else if (t.action === '止损卖出') tag = '<span class="tag-stop">止损</span>';
+    else tag = '<span class="badge-sell">卖出</span>';
+
+    // 实现盈亏（只有卖出才有）
+    let pnlCell = '<span class="trade-pnl-empty">—</span>';
+    let pnlPctCell = '<span class="trade-pnl-empty">—</span>';
+    let buyInfoCell = '<span class="trade-pnl-empty">—</span>';
+    if (t.action !== '买入' && t.pnl !== null && t.pnl !== undefined) {
+      const cls = t.pnl >= 0 ? 'trade-pnl-pos' : 'trade-pnl-neg';
+      const sign = t.pnl >= 0 ? '+' : '';
+      pnlCell = `<span class="${cls}">${sign}¥${fmtMoney(t.pnl)}</span>`;
+      pnlPctCell = `<span class="${cls}">${fmtPct(t.pnl_pct)}</span>`;
+      buyInfoCell = `${fmtPrice(t.buy_price)}　<span style="color:#57606a;font-size:11px">(持${t.hold_days ?? '?'}天)</span>`;
+    }
+
+    return `
+      <tr class="row-link" onclick="showRunDetail(${t.run_id})">
+        <td>${t.run_date}</td>
+        <td>${tag}</td>
+        <td class="code-cell">${t.code}</td>
+        <td>${t.name || ''}</td>
+        <td>${fmtPrice(t.price)}</td>
+        <td>${t.shares || '—'}</td>
+        <td>¥${fmtMoney(t.amount)}</td>
+        <td>${buyInfoCell}</td>
+        <td>${pnlCell}</td>
+        <td>${pnlPctCell}</td>
+      </tr>`;
+  }).join('');
+
+  wrap.innerHTML = `
+    <table class="pt-tbl">
+      <thead><tr>
+        <th>日期</th><th>动作</th><th>代码</th><th>名称</th>
+        <th>成交价</th><th>股数</th><th>金额</th>
+        <th>买入价</th><th>实现盈亏</th><th>收益率</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+// ── 今日扫描状态 ────────────────────────────────────────────────────────────
+
+async function loadScanStatus() {
+  try {
+    const res = await fetch('/api/tasks/summary');
+    const { tasks } = await res.json();
+    const t = (tasks || []).find(x => x.task_name === 'daily_signal');
+    renderScanStatus(t);
+  } catch (e) {
+    console.error(e);
+    document.getElementById('scanChip').textContent = '状态未知';
+    document.getElementById('scanChip').className = 'scan-chip scan-chip-loading';
+  }
+}
+
+function renderScanStatus(t) {
+  const chip = document.getElementById('scanChip');
+  const btn = document.getElementById('scanBtn');
+  const hint = document.getElementById('scanHint');
+
+  if (!t) {
+    chip.textContent = '未注册';
+    chip.className = 'scan-chip scan-chip-loading';
+    btn.style.display = 'none';
+    hint.textContent = '';
+    return;
+  }
+
+  // 周末 → 非交易日
+  const now = new Date();
+  const dow = now.getDay();      // 0=日 6=六
+  const isWeekend = dow === 0 || dow === 6;
+  // 今天 17:30 阈值
+  const due = new Date(now); due.setHours(17, 30, 0, 0);
+  const beforeDue = now < due;
+
+  btn.style.display = 'none';
+  hint.textContent = '';
+
+  if (t.ran_today_success) {
+    chip.textContent = '✓ 今日已完成';
+    chip.className = 'scan-chip scan-chip-success';
+    hint.textContent = t.last_started_at ? `运行于 ${shortTime(t.last_started_at)}` : '';
+  } else if (isWeekend) {
+    chip.textContent = '· 非交易日';
+    chip.className = 'scan-chip scan-chip-weekend';
+    hint.textContent = '周末不扫描';
+  } else if (beforeDue) {
+    chip.textContent = '⏱ 等待 17:30 触发';
+    chip.className = 'scan-chip scan-chip-pending';
+    btn.style.display = '';   // 允许提前手动跑
+    btn.textContent = '立即扫描';
+    btn.disabled = false;
+  } else if (t.last_status === 'failed' || t.last_status === 'timeout') {
+    chip.textContent = `✗ ${t.last_status === 'timeout' ? '超时' : '失败'}`;
+    chip.className = 'scan-chip scan-chip-failed';
+    hint.textContent = (t.last_error_msg || '').slice(0, 80) || '点击右侧按钮重试';
+    btn.style.display = '';
+    btn.textContent = '重新扫描';
+    btn.disabled = false;
+  } else if (t.last_status === 'skipped') {
+    chip.textContent = '⊘ 已跳过';
+    chip.className = 'scan-chip scan-chip-skipped';
+    hint.textContent = (t.last_error_msg || '').slice(0, 80) || '依赖未满足';
+    btn.style.display = '';
+    btn.textContent = '重试';
+    btn.disabled = false;
+  } else {
+    chip.textContent = '? 待执行';
+    chip.className = 'scan-chip scan-chip-pending';
+    btn.style.display = '';
+    btn.textContent = '立即扫描';
+    btn.disabled = false;
+  }
+
+  // 末尾再叠一次 admin 守门：admin=false 强制锁住，不管 scan 流程怎么说
+  applyAdminGuards();
+}
+
+async function triggerScan() {
+  const btn = document.getElementById('scanBtn');
+  const hint = document.getElementById('scanHint');
+  btn.disabled = true;
+  btn.textContent = '触发中…';
+  try {
+    // 用 adminFetch：403 抛 Error，避免误显示"已加入队列"假象
+    const res = await adminFetch('/api/tasks/daily_signal/run', { method: 'POST' });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(d.detail || '触发失败');
+    }
+    const data = await res.json();
+    if (data.status === 'skipped') {
+      hint.textContent = `跳过：${data.reason || ''}`;
+      btn.disabled = false;
+      btn.textContent = '重试';
+      return;
+    }
+    hint.textContent = '已加入队列，约 30s 后刷新看结果';
+    // 几秒后拉一次摘要 + 成交流水
+    setTimeout(async () => {
+      await Promise.all([loadScanStatus(), loadAccount(), loadRuns(), loadTrades()]);
+    }, 8000);
+  } catch (e) {
+    hint.textContent = `触发失败：${e.message || e}`;
+    btn.disabled = false;
+    btn.textContent = '立即扫描';
+  }
+}
+
+function shortTime(iso) {
+  try {
+    const d = new Date(iso);
+    return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+  } catch { return iso; }
+}
+
+window.triggerScan = triggerScan;
+
+// ── 策略参数：读取 + 编辑 + 保存 ──────────────────────────────────────────────
+
+let _currentParams = null;  // 缓存当前服务端值，用于"取消"还原
+
+async function loadParams() {
+  try {
+    const res = await fetch('/api/paper_trading/strategy_params');
+    const data = await res.json();
+    _currentParams = data.params;
+    renderParamsBadge(data.params);
+    fillParamsForm(data.params);
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+function renderParamsBadge(p) {
+  // 顶部 tip-badge：把核心参数浓缩成一行，让用户随时知道当前用的是什么配置
+  const badge = document.getElementById('paramsBadge');
+  if (!badge || !p) return;
+  const boards = (p.allow_boards || []).map(b => ({
+    main: '主板', gem: '创业板', star: '科创板', bj: '北交所',
+  }[b] || b)).join('+');
+  const stop = Number(p.stop_loss_pct) > 0
+    ? `止损 ${p.stop_loss_pct}%` : '止损关闭';
+  badge.textContent =
+    `${boards} · 市值 ${p.cap_min}~${p.cap_max}亿 · ${p.stock_num}只 · ${p.hold_days}天调仓 · ${stop}`;
+}
+
+function fillParamsForm(p) {
+  if (!p) return;
+  document.getElementById('pCapMin').value = p.cap_min;
+  document.getElementById('pCapMax').value = p.cap_max;
+  document.getElementById('pStockNum').value = p.stock_num;
+  document.getElementById('pHoldDays').value = p.hold_days;
+  document.getElementById('pStopLoss').value = p.stop_loss_pct;
+  const boards = new Set(p.allow_boards || []);
+  document.getElementById('pBoardMain').checked = boards.has('main');
+  document.getElementById('pBoardGem').checked  = boards.has('gem');
+  document.getElementById('pBoardStar').checked = boards.has('star');
+  document.getElementById('pBoardBj').checked   = boards.has('bj');
+}
+
+function toggleParamsEditor() {
+  const ed = document.getElementById('paramsEditor');
+  const btn = document.getElementById('paramsToggleBtn');
+  if (ed.style.display === 'none') {
+    ed.style.display = '';
+    btn.classList.add('open');
+    btn.textContent = '⚙ 收起';
+    document.getElementById('paramsMsg').textContent = '';
+    document.getElementById('paramsMsg').className = 'params-msg';
+    // 首次打开时立即拉一次预览
+    refreshUniversePreview();
+    // 输入变化时 debounce 重拉
+    bindPreviewListeners();
+  } else {
+    ed.style.display = 'none';
+    btn.classList.remove('open');
+    btn.textContent = '⚙ 调整策略参数';
+  }
+}
+
+// ── 市值范围实时预览（避免"保存后才发现没股票"）────────────────────────────
+
+let _previewTimer = null;
+let _previewBound = false;
+
+function bindPreviewListeners() {
+  if (_previewBound) return;
+  ['pCapMin', 'pCapMax'].forEach(id => {
+    document.getElementById(id).addEventListener('input', () => {
+      if (_previewTimer) clearTimeout(_previewTimer);
+      _previewTimer = setTimeout(refreshUniversePreview, 400);
+    });
+  });
+  _previewBound = true;
+}
+
+async function refreshUniversePreview() {
+  const box = document.getElementById('universePreview');
+  const lo = Number(document.getElementById('pCapMin').value);
+  const hi = Number(document.getElementById('pCapMax').value);
+
+  if (!isFinite(lo) || !isFinite(hi) || lo < 0 || hi <= 0) {
+    box.innerHTML = '<span class="preview-loading">请输入有效市值范围</span>';
+    return;
+  }
+  if (lo >= hi) {
+    box.innerHTML = '<span class="preview-count empty">⚠ 市值下限必须小于上限</span>';
+    return;
+  }
+
+  box.innerHTML = '<span class="preview-loading">查询中…</span>';
+  try {
+    const res = await fetch(
+      `/api/paper_trading/universe_preview?cap_min=${lo}&cap_max=${hi}`
+    );
+    const s = await res.json();
+    renderUniversePreview(s, lo, hi);
+  } catch (e) {
+    box.innerHTML = `<span class="preview-count empty">预览失败：${e.message || e}</span>`;
+  }
+}
+
+function renderUniversePreview(s, lo, hi) {
+  const box = document.getElementById('universePreview');
+  if (!s || !s.total) {
+    box.innerHTML = `<span class="preview-count empty">⚠ 无法获取市值数据</span>
+                     <span class="preview-suggest">${s?.source || '请检查 daily_update 任务'}</span>`;
+    return;
+  }
+  const d = s.distribution;
+  const n = s.in_range ?? 0;
+  const cls = n > 0 ? 'ok' : 'empty';
+  const icon = n > 0 ? '✓' : '⚠';
+
+  let suggest = '';
+  if (n === 0 && d) {
+    const sLo = Math.max(1, Math.round(d.p25));
+    const sHi = Math.max(sLo + 5, Math.round(d.p50));
+    suggest = `<span class="preview-suggest">建议改成 ${sLo}~${sHi} 亿元附近</span>`;
+  }
+
+  let sampleLine = '';
+  if (n > 0 && s.sample && s.sample.length) {
+    const head = s.sample.slice(0, 5)
+      .map(x => `${x.code}(${x.market_cap}亿)`).join(' · ');
+    sampleLine = `<span class="preview-sample">示例: ${head}${n > 5 ? ' …' : ''}</span>`;
+  }
+
+  const distLine = d
+    ? `<span class="preview-dist">全市场 ${s.total} 只 · P25=${d.p25}亿 / 中位=${d.p50}亿 / P75=${d.p75}亿</span>`
+    : '';
+
+  box.innerHTML =
+    `<span class="preview-count ${cls}">${icon} ${lo}~${hi} 亿元内 ${n} 只股票</span>${distLine}${suggest}${sampleLine}`;
+}
+
+function cancelParamsEdit() {
+  if (_currentParams) fillParamsForm(_currentParams);
+  toggleParamsEditor();
+}
+
+async function saveParams() {
+  const msg = document.getElementById('paramsMsg');
+  const btn = document.getElementById('paramsSaveBtn');
+  msg.textContent = '';
+  msg.className = 'params-msg';
+
+  const boards = [];
+  if (document.getElementById('pBoardMain').checked) boards.push('main');
+  if (document.getElementById('pBoardGem').checked)  boards.push('gem');
+  if (document.getElementById('pBoardStar').checked) boards.push('star');
+  if (document.getElementById('pBoardBj').checked)   boards.push('bj');
+  if (boards.length === 0) {
+    msg.textContent = '至少选择一个板块';
+    msg.className = 'params-msg error';
+    return;
+  }
+
+  const payload = {
+    cap_min: Number(document.getElementById('pCapMin').value),
+    cap_max: Number(document.getElementById('pCapMax').value),
+    stock_num: parseInt(document.getElementById('pStockNum').value, 10),
+    hold_days: parseInt(document.getElementById('pHoldDays').value, 10),
+    stop_loss_pct: Number(document.getElementById('pStopLoss').value),
+    allow_boards: boards,
+  };
+
+  // 前端基础校验：避免一次明显错误也要往后跑
+  if (payload.cap_min >= payload.cap_max) {
+    msg.textContent = '市值下限必须小于上限';
+    msg.className = 'params-msg error';
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = '保存中…';
+  try {
+    const res = await fetch('/api/paper_trading/strategy_params', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      msg.textContent = data.detail || '保存失败';
+      msg.className = 'params-msg error';
+      return;
+    }
+    _currentParams = data.params;
+    renderParamsBadge(data.params);
+    msg.innerHTML = '✓ 已保存。下次扫描生效，或点 <a href="#" onclick="triggerScan();return false;" style="color:#0969da;">立即扫描</a>';
+    msg.className = 'params-msg ok';
+  } catch (e) {
+    msg.textContent = '保存失败：' + (e.message || e);
+    msg.className = 'params-msg error';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '保存';
+  }
+}
+
+window.toggleParamsEditor = toggleParamsEditor;
+window.cancelParamsEdit   = cancelParamsEdit;
+window.saveParams         = saveParams;
+
+// ── 管理员 IP 白名单：权限检测 + 控件禁用 + 增删管理 ─────────────────────────
+
+async function loadAdminStatus() {
+  try {
+    const res = await fetch('/api/admin/ip/me');
+    _adminInfo = await res.json();
+  } catch (e) {
+    console.error('admin status:', e);
+    _adminInfo = { ip: '—', is_admin: false, whitelist_empty: false };
+  }
+  renderAdminChip();
+}
+
+function renderAdminChip() {
+  const chip = document.getElementById('adminChip');
+  const mgmtBtn = document.getElementById('adminMgmtBtn');
+  if (!chip) return;
+  if (_adminInfo.is_admin) {
+    chip.textContent = `✓ 管理员 (${_adminInfo.ip})`;
+    chip.className = 'admin-chip admin-chip-admin';
+    chip.title = '你的 IP 在白名单中，可以编辑参数 / 触发任务';
+    if (mgmtBtn) mgmtBtn.style.display = '';
+  } else {
+    chip.textContent = `○ 只读 (${_adminInfo.ip})`;
+    chip.className = 'admin-chip admin-chip-guest';
+    chip.title = _adminInfo.whitelist_empty
+      ? '白名单为空。首次触发任何写操作的 IP 将被自动加入。'
+      : '你的 IP 不在白名单中，仅可浏览。需要修改请联系管理员添加 IP。';
+    if (mgmtBtn) mgmtBtn.style.display = 'none';
+  }
+}
+
+// 把所有写控件禁用 / 启用 —— admin=true 解锁，false 锁住并加 title 提示
+function applyAdminGuards() {
+  const lockTip = '你的 IP 不在白名单中，无法操作。请联系管理员将你的 IP 加入白名单。';
+  const targets = [
+    document.getElementById('paramsToggleBtn'),
+    document.getElementById('scanBtn'),
+  ];
+  for (const el of targets) {
+    if (!el) continue;
+    if (_adminInfo.is_admin) {
+      el.disabled = false;
+      el.removeAttribute('data-locked');
+      el.title = '';
+    } else {
+      el.disabled = true;
+      el.setAttribute('data-locked', '1');
+      el.title = lockTip;
+    }
+  }
+}
+
+// 包装 fetch，对 403 做统一处理（防止后端守门时前端还报谜之错）
+async function adminFetch(url, options) {
+  const res = await fetch(url, options);
+  if (res.status === 403) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || '权限不足（IP 不在白名单）');
+  }
+  return res;
+}
+
+// ── 管理弹窗 ────────────────────────────────────────────────────────────────
+
+async function openAdminModal() {
+  if (!_adminInfo.is_admin) return;
+  document.getElementById('adminModal').style.display = '';
+  document.getElementById('adminCurrent').textContent = `当前 IP：${_adminInfo.ip}（管理员）`;
+  document.getElementById('adminMsg').textContent = '';
+  document.getElementById('adminMsg').className = 'admin-msg';
+  document.getElementById('adminAddIp').value = '';
+  document.getElementById('adminAddNote').value = '';
+  await refreshAdminList();
+}
+
+function closeAdminModal() {
+  document.getElementById('adminModal').style.display = 'none';
+}
+
+async function refreshAdminList() {
+  const wrap = document.getElementById('adminList');
+  wrap.innerHTML = '加载中…';
+  try {
+    const res = await adminFetch('/api/admin/ip');
+    const data = await res.json();
+    renderAdminList(data);
+  } catch (e) {
+    wrap.innerHTML = `<div class="admin-msg error">加载失败：${e.message || e}</div>`;
+  }
+}
+
+function renderAdminList(data) {
+  const wrap = document.getElementById('adminList');
+  const ips = data.ips || [];
+  if (!ips.length) {
+    wrap.innerHTML = '<div class="no-data">白名单为空</div>';
+    return;
+  }
+  const onlyOne = ips.length <= 1;
+  wrap.innerHTML = ips.map(r => {
+    const isMe = r.ip === data.current_ip;
+    const cantDelete = isMe && onlyOne;
+    return `
+      <div class="admin-list-row ${isMe ? 'is-me' : ''}">
+        <span class="ip">${r.ip}${isMe ? ' (本机)' : ''}</span>
+        <span class="note">${r.note || '—'}</span>
+        <span class="meta">${r.created_by_ip || '—'} · ${(r.created_at || '').slice(0,16).replace('T',' ')}</span>
+        <button class="del-btn" onclick="deleteAdminIp('${r.ip}')"
+                ${cantDelete ? 'disabled title="不能删除最后一个白名单 IP"' : ''}>
+          删除
+        </button>
+      </div>`;
+  }).join('');
+}
+
+async function addAdminIp() {
+  const ip = document.getElementById('adminAddIp').value.trim();
+  const note = document.getElementById('adminAddNote').value.trim();
+  const msg = document.getElementById('adminMsg');
+  const btn = document.getElementById('adminAddBtn');
+  msg.textContent = ''; msg.className = 'admin-msg';
+  if (!ip) {
+    msg.textContent = '请输入 IP'; msg.className = 'admin-msg error';
+    return;
+  }
+  btn.disabled = true; btn.textContent = '添加中…';
+  try {
+    const res = await adminFetch('/api/admin/ip', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ip, note }),
+    });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(d.detail || '添加失败');
+    }
+    msg.textContent = `✓ 已添加 ${ip}`; msg.className = 'admin-msg ok';
+    document.getElementById('adminAddIp').value = '';
+    document.getElementById('adminAddNote').value = '';
+    await refreshAdminList();
+  } catch (e) {
+    msg.textContent = `失败：${e.message || e}`; msg.className = 'admin-msg error';
+  } finally {
+    btn.disabled = false; btn.textContent = '添加';
+  }
+}
+
+async function deleteAdminIp(ip) {
+  if (!confirm(`确定要从白名单删除 ${ip} 吗？删除后该 IP 将无法编辑参数 / 触发任务。`)) return;
+  const msg = document.getElementById('adminMsg');
+  msg.textContent = ''; msg.className = 'admin-msg';
+  try {
+    const res = await adminFetch(`/api/admin/ip/${encodeURIComponent(ip)}`, {
+      method: 'DELETE',
+    });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(d.detail || '删除失败');
+    }
+    msg.textContent = `✓ 已删除 ${ip}`; msg.className = 'admin-msg ok';
+    await refreshAdminList();
+    // 如果删的是自己，重新拉一次权限
+    if (ip === _adminInfo.ip) {
+      await loadAdminStatus();
+      applyAdminGuards();
+      closeAdminModal();
+    }
+  } catch (e) {
+    msg.textContent = `失败：${e.message || e}`; msg.className = 'admin-msg error';
+  }
+}
+
+window.openAdminModal  = openAdminModal;
+window.closeAdminModal = closeAdminModal;
+window.addAdminIp      = addAdminIp;
+window.deleteAdminIp   = deleteAdminIp;
 
 // ── 运行详情弹窗 ─────────────────────────────────────────────────────────────
 

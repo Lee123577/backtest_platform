@@ -26,8 +26,67 @@
   <div class="panel">
     <div class="panel-title">
       小市值策略 · 模拟账户
-      <span class="tip-badge">仅产出建议，未真实下单 · 仅主板（科创/创业/北交所被过滤）</span>
+      <span class="tip-badge" id="paramsBadge">仅产出建议，未真实下单</span>
+      <!-- 权限徽章：绿=admin，灰=只读 -->
+      <span class="admin-chip admin-chip-loading" id="adminChip" title="权限状态">检测中…</span>
+      <button class="params-toggle" id="adminMgmtBtn" onclick="openAdminModal()" style="display:none;margin-left:8px">🔑 管理白名单</button>
+      <button class="params-toggle" onclick="toggleParamsEditor()" id="paramsToggleBtn">⚙ 调整策略参数</button>
     </div>
+
+    <!-- 策略参数编辑器（默认收起）-->
+    <div class="params-editor" id="paramsEditor" style="display:none">
+      <div class="params-grid">
+        <div class="params-field">
+          <label>市值下限 <span class="unit">亿元</span></label>
+          <input type="number" id="pCapMin" step="0.5" min="0.1" max="10000">
+        </div>
+        <div class="params-field">
+          <label>市值上限 <span class="unit">亿元</span></label>
+          <input type="number" id="pCapMax" step="0.5" min="0.1" max="10000">
+        </div>
+        <div class="params-field params-field-full">
+          <!-- 市值范围实时预览：减少"保存后才发现没股票"的死循环 -->
+          <div class="universe-preview" id="universePreview">
+            <span class="preview-loading">输入市值范围后自动预览匹配数…</span>
+          </div>
+        </div>
+        <div class="params-field">
+          <label>持仓数量 <span class="unit">只</span></label>
+          <input type="number" id="pStockNum" step="1" min="1" max="20">
+        </div>
+        <div class="params-field">
+          <label>调仓周期 <span class="unit">天</span></label>
+          <input type="number" id="pHoldDays" step="1" min="1" max="120">
+        </div>
+        <div class="params-field">
+          <label>止损阈值 <span class="unit">% (0=关闭)</span></label>
+          <input type="number" id="pStopLoss" step="0.5" min="0" max="50">
+        </div>
+        <div class="params-field params-field-full">
+          <label>允许板块</label>
+          <div class="board-checkboxes">
+            <label><input type="checkbox" value="main"  id="pBoardMain"> 主板</label>
+            <label><input type="checkbox" value="gem"   id="pBoardGem"> 创业板</label>
+            <label><input type="checkbox" value="star"  id="pBoardStar"> 科创板</label>
+            <label><input type="checkbox" value="bj"    id="pBoardBj"> 北交所</label>
+          </div>
+        </div>
+      </div>
+      <div class="params-actions">
+        <span class="params-msg" id="paramsMsg"></span>
+        <button class="params-btn-cancel" onclick="cancelParamsEdit()">取消</button>
+        <button class="params-btn-save" onclick="saveParams()" id="paramsSaveBtn">保存</button>
+      </div>
+    </div>
+
+    <!-- 今日扫描状态 chip：让用户一眼知道今天的 daily_signal 跑没跑 -->
+    <div class="scan-status-bar">
+      <span class="scan-status-label">今日扫描：</span>
+      <span class="scan-chip scan-chip-loading" id="scanChip">检测中…</span>
+      <button class="scan-btn" id="scanBtn" onclick="triggerScan()" style="display:none">立即扫描</button>
+      <span class="scan-hint" id="scanHint"></span>
+    </div>
+
     <div class="summary-grid" id="summaryGrid">
       <div class="sum-card"><div class="sum-label">初始资金</div><div class="sum-val" id="sumCapital">—</div></div>
       <div class="sum-card"><div class="sum-label">当前总值</div><div class="sum-val" id="sumTotal">—</div></div>
@@ -58,9 +117,26 @@
     </div>
   </div>
 
-  <!-- 4. 历史运行记录 -->
+  <!-- 4. 成交流水（独立面板：只看真实买卖，配上每笔卖出的实现盈亏）-->
   <div class="panel">
-    <div class="panel-title">历史运行记录 <span id="runsHint"></span></div>
+    <div class="panel-title">
+      成交流水
+      <span class="tip-badge" id="tradesHint">每一笔买入 / 卖出 / 止损卖出</span>
+    </div>
+    <div id="tradesWrap">
+      <div class="no-data">加载中…</div>
+    </div>
+  </div>
+
+  <!-- 5. 历史运行记录（每日一行：调仓 / 止损 / 持有）-->
+  <div class="panel">
+    <div class="panel-title">
+      历史运行记录 <span id="runsHint"></span>
+      <label class="run-filter">
+        <input type="checkbox" id="hideHoldRuns" checked onchange="renderRunsFiltered()">
+        只看有交易的日子
+      </label>
+    </div>
     <div id="runsWrap">
       <div class="no-data">暂无记录</div>
     </div>
@@ -77,6 +153,27 @@
       <button class="modal-close" onclick="closeRunDetail()">×</button>
     </div>
     <div class="modal-content" id="modalContent">加载中…</div>
+  </div>
+</div>
+
+<!-- 白名单管理弹窗（仅 admin 能打开）-->
+<div id="adminModal" class="modal" style="display:none">
+  <div class="modal-mask" onclick="closeAdminModal()"></div>
+  <div class="modal-body">
+    <div class="modal-head">
+      <div class="modal-title">管理 IP 白名单</div>
+      <button class="modal-close" onclick="closeAdminModal()">×</button>
+    </div>
+    <div class="modal-content">
+      <div class="admin-current" id="adminCurrent">当前 IP：—</div>
+      <div class="admin-add-row">
+        <input type="text" id="adminAddIp" placeholder="新增 IP，如 1.2.3.4">
+        <input type="text" id="adminAddNote" placeholder="备注（可选，如 同事电脑）">
+        <button class="params-btn-save" onclick="addAdminIp()" id="adminAddBtn">添加</button>
+      </div>
+      <div class="admin-msg" id="adminMsg"></div>
+      <div id="adminList" class="admin-list">加载中…</div>
+    </div>
   </div>
 </div>
 

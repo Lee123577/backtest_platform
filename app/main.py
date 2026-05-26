@@ -6,10 +6,11 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.requests import Request
 
 
 def _validate_date_range(start: str, end: str) -> None:
@@ -27,14 +28,17 @@ def _validate_date_range(start: str, end: str) -> None:
 from .data.data_loader import get_kline_data, get_stock_name, normalize_code
 from .data.feed import CACHE_DIR
 from .data.market_data import (
+    build_universe_hint,
     download_universe_history,
     get_historical_market_caps,
     get_index_history,
+    get_universe_stats,
     get_universe_stocks,
 )
 from .data.realtime import get_realtime_prices
 from .engine.backtest import calc_benchmark, run_backtest
 from .engine.portfolio_backtest import run_portfolio_backtest
+from .paper_trading import admin_ip as paper_admin_ip
 from .paper_trading import db as paper_db
 from .scheduler import db as scheduler_db
 from .scheduler import registry as scheduler_registry
@@ -181,6 +185,119 @@ async def api_paper_runs(limit: int = 30):
     return _json_safe(runs)
 
 
+@app.get("/api/paper_trading/universe_preview")
+async def api_paper_universe_preview(cap_min: float, cap_max: float):
+    """
+    实时预览：给定市值范围，返回今日全市场命中数 + 整体分位数 + 头部样本。
+    供策略参数编辑器在用户输入时显示「此范围内 X 只」，避免"未找到股票"的死胡同。
+    """
+    if cap_min < 0 or cap_max < 0 or cap_min >= cap_max:
+        raise HTTPException(400, "需满足 0 ≤ cap_min < cap_max")
+    loop = asyncio.get_event_loop()
+    stats = await loop.run_in_executor(
+        None, lambda: get_universe_stats(cap_min, cap_max)
+    )
+    return stats
+
+
+@app.get("/api/paper_trading/strategy_params")
+async def api_paper_get_strategy_params():
+    """
+    返回当前策略参数 + 默认值（首次未初始化时空表用得上）。
+    前端编辑后调 POST 写回，下次 daily_signal 跑就用新参数。
+    """
+    DEFAULTS = {
+        "capital": 90000.0,
+        "cap_min": 20.0, "cap_max": 30.0,
+        "stock_num": 3, "hold_days": 5,
+        "stop_loss_pct": 5.0,
+        "allow_boards": ["main"],
+    }
+    try:
+        paper_db.ensure_tables()
+    except Exception as e:
+        return {"params": DEFAULTS, "defaults": DEFAULTS, "initialized": False,
+                "error": f"数据库未就绪：{e}"}
+
+    current = paper_db.get_strategy_params() or {}
+    # 缺字段用默认值补全（让前端不用做兜底）
+    merged = {**DEFAULTS, **{k: v for k, v in current.items() if v is not None}}
+    return {
+        "params": merged,
+        "defaults": DEFAULTS,
+        "initialized": bool(current),
+    }
+
+
+class StrategyParamsPatch(BaseModel):
+    cap_min: Optional[float] = None
+    cap_max: Optional[float] = None
+    stock_num: Optional[int] = None
+    hold_days: Optional[int] = None
+    stop_loss_pct: Optional[float] = None
+    allow_boards: Optional[List[str]] = None
+    # capital 只读：账户已开后改这个会让累计收益失真
+
+
+@app.post("/api/paper_trading/strategy_params")
+async def api_paper_update_strategy_params(
+    patch: StrategyParamsPatch,
+    admin: str = Depends(paper_admin_ip.require_admin_ip),
+):
+    """
+    保存策略参数。校验范围后 merge 到 paper_account.strategy_params。
+    不直接动持仓/账户 —— 真正生效在下次 daily_signal 跑时。
+    """
+    # ── 范围校验 ─────────────────────────────────────────────────────────
+    if patch.cap_min is not None and not (0.1 <= patch.cap_min <= 10000):
+        raise HTTPException(400, "市值下限需在 0.1 ~ 10000 亿之间")
+    if patch.cap_max is not None and not (0.1 <= patch.cap_max <= 10000):
+        raise HTTPException(400, "市值上限需在 0.1 ~ 10000 亿之间")
+    if (patch.cap_min is not None and patch.cap_max is not None
+            and patch.cap_min >= patch.cap_max):
+        raise HTTPException(400, "市值下限必须小于上限")
+    if patch.stock_num is not None and not (1 <= patch.stock_num <= 20):
+        raise HTTPException(400, "持仓数量需在 1 ~ 20 之间")
+    if patch.hold_days is not None and not (1 <= patch.hold_days <= 120):
+        raise HTTPException(400, "调仓周期需在 1 ~ 120 天之间")
+    if patch.stop_loss_pct is not None and not (0 <= patch.stop_loss_pct <= 50):
+        raise HTTPException(400, "止损百分比需在 0 ~ 50 之间（0=关闭）")
+    if patch.allow_boards is not None:
+        valid = {"main", "gem", "star", "bj"}
+        bad = set(patch.allow_boards) - valid
+        if bad:
+            raise HTTPException(400, f"未知板块：{bad}，可选 {valid}")
+        if not patch.allow_boards:
+            raise HTTPException(400, "至少选择一个板块")
+
+    try:
+        paper_db.ensure_tables()
+    except Exception as e:
+        raise HTTPException(500, f"数据库未就绪：{e}")
+
+    # 账户首次未初始化 → 自动建一个空账户，capital 用默认 9 万（之后用户也改不了）
+    if paper_db.get_account() is None:
+        paper_db.init_account(90000.0, patch.model_dump(exclude_none=True))
+
+    merged = paper_db.update_strategy_params(patch.model_dump(exclude_none=True))
+    return {"ok": True, "params": merged,
+            "message": "已保存，下次 daily_signal 运行时生效。可点「立即扫描」即时生效。"}
+
+
+@app.get("/api/paper_trading/trades")
+async def api_paper_trades(limit: int = 200):
+    """
+    成交流水（只含真买卖，已 FIFO 配对算出每笔卖出的实现盈亏）。
+    用于前端"成交流水"面板，比"历史运行记录"更聚焦。
+    """
+    try:
+        paper_db.ensure_tables()
+    except Exception:
+        return {"trades": []}
+    trades = paper_db.list_trades(limit=limit)
+    return {"trades": _json_safe(trades)}
+
+
 @app.get("/api/paper_trading/run/{run_id}")
 async def api_paper_run_detail(run_id: int):
     try:
@@ -263,7 +380,10 @@ async def api_tasks_runs(task: Optional[str] = None, limit: int = 100):
 
 
 @app.post("/api/tasks/{name}/run")
-async def api_tasks_run(name: str):
+async def api_tasks_run(
+    name: str,
+    admin: str = Depends(paper_admin_ip.require_admin_ip),
+):
     """
     手动触发一个任务。
     流程：
@@ -299,6 +419,78 @@ def _iso(v):
 @app.get("/tasks", include_in_schema=False)
 async def page_tasks():
     return FileResponse(STATIC_DIR / "tasks.html")
+
+
+# ── 管理员 IP 白名单 ──────────────────────────────────────────────────────────
+# 实盘观察 / 定时任务页的所有"写"操作（改策略参数、手动触发任务、增删 IP）
+# 都受白名单保护。读操作（GET）全部公开。
+
+class AdminIpAddRequest(BaseModel):
+    ip: str
+    note: Optional[str] = None
+
+
+@app.get("/api/admin/ip/me")
+async def api_admin_ip_me(request: Request):
+    """
+    公开端点：返回当前请求 IP 和它是否在白名单。前端用它决定按钮禁不禁用。
+    DB 未就绪时降级到只返回 IP，is_admin=False。
+    """
+    ip = paper_admin_ip.get_request_ip(request)
+    try:
+        paper_admin_ip.ensure_table()
+    except Exception as e:
+        return {"ip": ip, "is_admin": False, "whitelist_empty": True,
+                "error": f"DB 未就绪：{e}"}
+    return {
+        "ip": ip,
+        "is_admin": paper_admin_ip.is_admin(ip),
+        "whitelist_empty": paper_admin_ip.count_ips() == 0,
+    }
+
+
+@app.get("/api/admin/ip")
+async def api_admin_ip_list(admin: str = Depends(paper_admin_ip.require_admin_ip)):
+    """列出全部白名单 IP（仅 admin 可见）。"""
+    return {
+        "current_ip": admin,
+        "ips": _json_safe(paper_admin_ip.list_ips()),
+    }
+
+
+@app.post("/api/admin/ip")
+async def api_admin_ip_add(
+    payload: AdminIpAddRequest,
+    admin: str = Depends(paper_admin_ip.require_admin_ip),
+):
+    """添加 IP 到白名单（仅 admin）。"""
+    try:
+        paper_admin_ip.add_ip(payload.ip, payload.note or "", admin)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "ip": payload.ip}
+
+
+@app.delete("/api/admin/ip/{ip}")
+async def api_admin_ip_delete(
+    ip: str,
+    admin: str = Depends(paper_admin_ip.require_admin_ip),
+):
+    """
+    从白名单删除 IP（仅 admin）。
+    安全保护：
+      - 不允许在只剩自己的情况下删除自己 → 会把自己锁在外面
+      - 允许 admin 删除其他 IP（包括同事的 IP，由 admin 自行负责）
+    """
+    if ip == admin and paper_admin_ip.count_ips() <= 1:
+        raise HTTPException(
+            400, "不能删除最后一个白名单 IP（会把自己锁在外面）。"
+                 "请先添加另一个 IP 再删除当前 IP。"
+        )
+    removed = paper_admin_ip.remove_ip(ip)
+    if not removed:
+        raise HTTPException(404, f"IP {ip} 不在白名单中")
+    return {"ok": True, "ip": ip}
 
 
 # ── 旧分组：paper trading equity ──────────────────────────────────────────────
@@ -480,8 +672,11 @@ async def api_portfolio_backtest(req: PortfolioBacktestRequest):
             return
 
         if universe_df.empty:
-            yield _sse({"type": "error",
-                        "msg": f"未找到市值 {cap_min}~{cap_max} 亿元的股票，请调整参数"})
+            # 把空池转化为可操作的诊断（分布 + 建议范围 / 数据缺失提示）
+            hint = await loop.run_in_executor(
+                None, lambda: build_universe_hint(cap_min, cap_max)
+            )
+            yield _sse({"type": "error", "msg": hint})
             return
 
         codes = universe_df["code"].tolist()

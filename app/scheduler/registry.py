@@ -43,11 +43,13 @@ TASKS: Dict[str, TaskDef] = {
         "description": "增量更新 K 线 / 财务 / 指数 / 北向资金（每个交易日 17:00）",
     },
     "daily_signal": {
+        # 参数全部走数据库 paper_account.strategy_params（前端 UI 编辑），
+        # 不在 cmd 里硬编码 —— 用户改完保存即下次扫描生效
         "cmd": ["python", "scripts/daily_signal.py"],
         "schedule": "weekday:17:30",
         "timeout_sec": 10 * 60,
         "depends_on": "daily_update",  # 上游今天没成功就不跑
-        "description": "小市值策略每日信号生成（17:30，等 daily_update 跑完）",
+        "description": "小市值策略每日信号生成（17:30，参数由实盘观察页 UI 配置）",
     },
     "backfill_geo": {
         "cmd": ["python", "scripts/backfill_visit_log_geo.py"],

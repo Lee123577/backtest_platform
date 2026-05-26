@@ -14,7 +14,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date as Date
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import akshare as ak
 import pandas as pd
@@ -233,11 +233,11 @@ def _parse_akshare_raw(raw: pd.DataFrame) -> pd.DataFrame:
 def _query_universe_from_db() -> pd.DataFrame | None:
     """
     从 stock_kline（最新交易日数据）+ stock_info（股票名称）查询全市场快照。
-    返回 {code, name, price, market_cap(亿元)}，数据库不可用或为空时返回 None。
+    返回 {code, name, price, market_cap(亿元)}，数据库不可用或市值数据缺失时返回 None。
 
-    分两阶段查询：
-      1. 优先查带 market_cap 的完整数据
-      2. 如最新交易日的 market_cap 为空（daily_update 未运行），降级到不含 market_cap 的查询
+    **守门规则**：必须返回带有效 market_cap 的数据。若数据库里没有任何一天
+    含 market_cap 的快照，直接返回 None — 让外层降级到外部 API，而不是返回
+    "全是 NaN 的伪快照"污染下游过滤器（曾导致"未找到市值 X~Y 亿股票"误报）。
     """
     conn = _get_pool()
     if conn is None:
@@ -245,7 +245,6 @@ def _query_universe_from_db() -> pd.DataFrame | None:
         return None
     conn.ping(reconnect=True)
 
-    # ── Attempt A: 查带 market_cap 的完整数据 ────────────────────────────────
     # 注意: market_cap 在 DB 中已为亿元（import_history 写入时已除 1e8）
     # 内层 MAX 只看有 market_cap 的日子，避免被"残缺日"（K线已写入但估值快照
     # 抓取失败 → market_cap 全 NULL）卡住，自动回退到最近一个完整快照日。
@@ -257,44 +256,40 @@ def _query_universe_from_db() -> pd.DataFrame | None:
         snap_row = cur.fetchone()
     snap_date = snap_row and snap_row.get("snap_date")
 
-    if snap_date is not None:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT k.code, i.name, k.close AS price,
-                       k.market_cap AS market_cap
-                FROM stock_kline k
-                JOIN stock_info i ON k.code = i.code
-                WHERE k.trade_date = %s
-                  AND k.market_cap IS NOT NULL
-                ORDER BY k.code
-            """, (snap_date,))
-            rows = cur.fetchall()
-        if rows:
-            df = pd.DataFrame(rows)
-            df["code"] = df["code"].astype(str).str.zfill(6)
-            logger.info("数据库查询成功: %d 只股票 (含market_cap, 快照日=%s)",
-                        len(df), snap_date)
-            return df
+    if snap_date is None:
+        logger.warning(
+            "stock_kline 全表无含 market_cap 的交易日 — "
+            "daily_update 估值快照可能从未成功跑过。DB 路径放弃，由外层降级到外部 API。"
+        )
+        return None
 
-    # ── Attempt B: 全表都没有 market_cap（daily_update 从未跑过估值快照）─────
-    logger.warning("stock_kline 全表无 market_cap 数据，降级到不含 market_cap 的查询")
     with conn.cursor() as cur:
         cur.execute("""
             SELECT k.code, i.name, k.close AS price,
-                   NULL AS market_cap
+                   k.market_cap AS market_cap
             FROM stock_kline k
             JOIN stock_info i ON k.code = i.code
-            WHERE k.trade_date = (SELECT MAX(trade_date) FROM stock_kline)
+            WHERE k.trade_date = %s
+              AND k.market_cap IS NOT NULL
             ORDER BY k.code
-        """)
+        """, (snap_date,))
         rows = cur.fetchall()
     if not rows:
-        logger.warning("数据库 stock_kline 表无任何数据")
+        logger.warning("快照日 %s 查询为空，DB 路径放弃", snap_date)
         return None
+
     df = pd.DataFrame(rows)
     df["code"] = df["code"].astype(str).str.zfill(6)
-    logger.info("数据库查询成功: %d 只股票 (不含market_cap，将使用比例估算)", len(df))
+    logger.info("数据库查询成功: %d 只股票 (含market_cap, 快照日=%s)",
+                len(df), snap_date)
     return df
+
+
+def _has_valid_market_cap(df: pd.DataFrame | None) -> bool:
+    """快照是否含至少一行非 NaN market_cap — 不满足则不该被缓存/返回。"""
+    if df is None or df.empty or "market_cap" not in df.columns:
+        return False
+    return bool(df["market_cap"].notna().any())
 
 
 def get_universe_snapshot() -> pd.DataFrame:
@@ -315,16 +310,29 @@ def get_universe_snapshot() -> pd.DataFrame:
     # 优先走数据库，确保已导入历史数据后不依赖外部API和本地缓存
     try:
         df = _query_universe_from_db()
-        if df is not None and not df.empty:
+        if _has_valid_market_cap(df):
             atomic_to_csv(df, SNAP_CACHE)
             return df
-        errors.append("[方式0 数据库] 数据为空")
+        if df is not None and not df.empty:
+            errors.append("[方式0 数据库] 返回数据 market_cap 全为空，降级到外部 API")
+        else:
+            errors.append("[方式0 数据库] 数据为空")
     except Exception as exc:
         errors.append(f"[方式0 数据库] {exc}")
 
-    # ── Attempt 0.5: 本地CSV缓存（数据库无数据时使用已有缓存）────────────────────
+    # ── Attempt 0.5: 本地CSV缓存（同样守门：脏缓存自动丢弃）─────────────────────
     if SNAP_CACHE.exists():
-        return pd.read_csv(SNAP_CACHE, dtype={"code": str})
+        try:
+            cached = pd.read_csv(SNAP_CACHE, dtype={"code": str})
+            if _has_valid_market_cap(cached):
+                return cached
+            errors.append("[方式0.5 本地缓存] CSV 中 market_cap 全为空，删除后重抓")
+            try:
+                SNAP_CACHE.unlink()  # 主动清掉脏缓存，避免下次再读到
+            except Exception:
+                pass
+        except Exception as exc:
+            errors.append(f"[方式0.5 本地缓存] 读取失败：{exc}")
 
     # ── Attempt 1: xuangu API (data.eastmoney.com, reliable) ──────────────────
     try:
@@ -398,10 +406,97 @@ def get_universe_snapshot() -> pd.DataFrame:
 
 
 def get_universe_stocks(cap_min: float, cap_max: float) -> pd.DataFrame:
-    """Filter universe to [cap_min, cap_max] 亿元, sorted by market cap ascending."""
+    """Filter universe to [cap_min, cap_max] 亿元, sorted by market cap ascending.
+
+    NaN market_cap 一律剔除（不会因为 NaN 比较而出现"看似空池"的假阳性）。
+    """
     df = get_universe_snapshot()
+    if "market_cap" not in df.columns:
+        return df.iloc[0:0]
+    df = df.dropna(subset=["market_cap"])
     mask = (df["market_cap"] >= cap_min) & (df["market_cap"] <= cap_max)
     return df[mask].sort_values("market_cap").reset_index(drop=True)
+
+
+def get_universe_stats(cap_min: float | None = None,
+                       cap_max: float | None = None) -> Dict[str, Any]:
+    """
+    返回全市场市值分布 + 可选的 [cap_min, cap_max] 命中数。前端实时预览用。
+
+    返回字段：
+      - total: 全市场含有效 market_cap 的股票数
+      - distribution: {min, p10, p25, p50, p75, p90, max} 各分位数（亿元）
+      - in_range: 当前 [cap_min, cap_max] 范围内的股票数（None 则不算）
+      - sample: 范围内前 10 只代表股票（仅 code/name/market_cap）
+      - source: 数据来源说明
+    """
+    try:
+        df = get_universe_snapshot()
+    except Exception as exc:
+        return {"total": 0, "distribution": None, "in_range": None,
+                "sample": [], "source": f"数据源不可用：{exc}"}
+
+    if "market_cap" not in df.columns:
+        return {"total": 0, "distribution": None, "in_range": None,
+                "sample": [], "source": "快照缺少 market_cap 列"}
+    valid = df.dropna(subset=["market_cap"])
+    if valid.empty:
+        return {"total": 0, "distribution": None, "in_range": None,
+                "sample": [],
+                "source": "全市场快照中无有效 market_cap，请运行 daily_update"}
+
+    mc = valid["market_cap"].astype(float)
+    dist = {
+        "min": round(float(mc.min()), 2),
+        "p10": round(float(mc.quantile(0.10)), 2),
+        "p25": round(float(mc.quantile(0.25)), 2),
+        "p50": round(float(mc.quantile(0.50)), 2),
+        "p75": round(float(mc.quantile(0.75)), 2),
+        "p90": round(float(mc.quantile(0.90)), 2),
+        "max": round(float(mc.max()), 2),
+    }
+    in_range = None
+    sample: list = []
+    if cap_min is not None and cap_max is not None:
+        sub = valid[(mc >= cap_min) & (mc <= cap_max)].sort_values("market_cap")
+        in_range = int(len(sub))
+        sample = [
+            {"code": r["code"], "name": r.get("name", ""),
+             "market_cap": round(float(r["market_cap"]), 2)}
+            for _, r in sub.head(10).iterrows()
+        ]
+    return {
+        "total": int(len(valid)),
+        "distribution": dist,
+        "in_range": in_range,
+        "sample": sample,
+        "source": "snapshot",
+    }
+
+
+def build_universe_hint(cap_min: float, cap_max: float) -> str:
+    """
+    生成「无可选股票」时的可操作错误信息，包含市值分布和建议范围。
+    用于选股回测 / 实盘信号生成 等任何 universe 过滤为空的场景。
+    """
+    stats = get_universe_stats(cap_min, cap_max)
+    if stats["total"] == 0:
+        return ("市值数据缺失：全市场快照中没有任何含 market_cap 的股票。"
+                "请检查数据库 stock_kline.market_cap 是否已通过 daily_update 写入。"
+                f" 诊断：{stats['source']}")
+
+    d = stats["distribution"]
+    suggest_lo = max(0.1, round(d["p25"]))
+    suggest_hi = round(d["p50"])
+    if suggest_hi <= suggest_lo:
+        suggest_hi = suggest_lo + 5  # 兜底避免上下限重合
+    return (
+        f"未找到市值 {cap_min}~{cap_max} 亿元的股票。"
+        f"今日全市场共 {stats['total']} 只含市值，分布："
+        f"P10={d['p10']:.1f}亿 / P25={d['p25']:.1f}亿 / 中位={d['p50']:.1f}亿 / "
+        f"P75={d['p75']:.1f}亿 / P90={d['p90']:.1f}亿 / 最大={d['max']:.0f}亿。"
+        f"建议改成 {suggest_lo:.0f}~{suggest_hi:.0f} 亿元附近，或先适当放宽范围。"
+    )
 
 
 def download_universe_history(

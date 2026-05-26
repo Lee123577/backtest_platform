@@ -2,6 +2,51 @@
 
 const REFRESH_MS = 15_000;
 let _timer = null;
+let _adminInfo = { ip: '—', is_admin: false, whitelist_empty: false };
+
+// ── 权限检测 ────────────────────────────────────────────────────────────────
+
+async function loadAdminStatus() {
+  try {
+    const res = await fetch('/api/admin/ip/me');
+    _adminInfo = await res.json();
+  } catch (e) {
+    console.error('admin status:', e);
+  }
+  renderAdminChip();
+}
+
+function renderAdminChip() {
+  const chip = document.getElementById('adminChip');
+  if (!chip) return;
+  if (_adminInfo.is_admin) {
+    chip.textContent = `✓ 管理员 (${_adminInfo.ip})`;
+    chip.className = 'admin-chip admin-chip-admin';
+    chip.title = '你的 IP 在白名单中，可手动触发任务';
+  } else {
+    chip.textContent = `○ 只读 (${_adminInfo.ip})`;
+    chip.className = 'admin-chip admin-chip-guest';
+    chip.title = _adminInfo.whitelist_empty
+      ? '白名单为空。首次触发任务的 IP 将被自动加入。'
+      : '你的 IP 不在白名单中，「立即重跑」按钮被禁用。请到实盘观察页通过管理弹窗添加。';
+  }
+}
+
+// 给每个任务卡片上的「立即重跑」按钮加锁
+function applyAdminGuards() {
+  const lockTip = '你的 IP 不在白名单中，无法触发任务。请联系管理员添加你的 IP。';
+  document.querySelectorAll('.rerun-btn').forEach(btn => {
+    if (_adminInfo.is_admin) {
+      btn.disabled = false;
+      btn.removeAttribute('data-locked');
+      btn.title = '';
+    } else {
+      btn.disabled = true;
+      btn.setAttribute('data-locked', '1');
+      btn.title = lockTip;
+    }
+  });
+}
 
 const STATUS_CN = {
   success: '成功', failed: '失败', timeout: '超时',
@@ -35,6 +80,7 @@ async function loadSummary() {
     const { tasks } = await res.json();
     renderSummary(tasks || []);
     populateTaskFilter(tasks || []);
+    applyAdminGuards();   // renderSummary 重新生成按钮，需要重新加锁
   } catch (e) {
     console.error(e);
     document.getElementById('tasksGrid').innerHTML =
@@ -162,11 +208,19 @@ function closeDetail() {
 }
 
 async function triggerRun(name, btn) {
+  if (!_adminInfo.is_admin) {
+    alert('你的 IP 不在白名单中，无法触发任务。');
+    return;
+  }
   if (!confirm(`确认要立即重跑 ${name} 吗？`)) return;
   btn.disabled = true;
   btn.textContent = '提交中…';
   try {
     const res = await fetch(`/api/tasks/${encodeURIComponent(name)}/run`, { method: 'POST' });
+    if (res.status === 403) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(d.detail || 'IP 不在白名单');
+    }
     if (!res.ok) throw new Error(await res.text());
     const data = await res.json();
 
@@ -199,7 +253,9 @@ function escapeHtml(s) {
   }[c]));
 }
 
-function load() {
+async function load() {
+  // 权限先拉，避免按钮一闪一锁
+  await loadAdminStatus();
   loadSummary();
   loadRuns();
   if (_timer) clearInterval(_timer);

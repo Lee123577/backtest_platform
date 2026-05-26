@@ -142,6 +142,49 @@ def init_account(initial_capital: float, strategy_params: Dict[str, Any]) -> Non
         )
 
 
+def get_strategy_params() -> Optional[Dict[str, Any]]:
+    """读账户里持久化的策略参数（JSON）。账户不存在或字段为空返回 None。"""
+    acc = get_account()
+    if not acc:
+        return None
+    raw = acc.get("strategy_params")
+    if not raw:
+        return None
+    # pymysql JSON 字段可能返回 str（未自动反序列化）或 dict
+    if isinstance(raw, (bytes, bytearray)):
+        raw = raw.decode("utf-8")
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except Exception:
+            return None
+    return raw if isinstance(raw, dict) else None
+
+
+def update_strategy_params(patch: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    把 patch 合并到账户里的策略参数 JSON 上（局部更新，未在 patch 里的键保持原值）。
+    返回合并后的最终 dict。账户必须已存在，否则抛 RuntimeError。
+    """
+    # 先 SELECT 验证账户存在 —— 不用 UPDATE rowcount，pymysql 默认返回 changed rows，
+    # 如果新值与旧值完全相同 rowcount=0，会被误判为"账户不存在"
+    if get_account() is None:
+        raise RuntimeError("paper_account 不存在，请先运行一次 daily_signal 初始化账户")
+
+    current = get_strategy_params() or {}
+    current.update({k: v for k, v in patch.items() if v is not None})
+
+    conn = _get_pool()
+    conn.ping(reconnect=True)
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE paper_account SET strategy_params=%s WHERE id=1",
+            (json.dumps(current),),
+        )
+    logger.info("策略参数已更新: %s", current)
+    return current
+
+
 def update_account(
     cash: float,
     last_rebalance_date: Optional[_Date] = None,
@@ -380,6 +423,87 @@ def get_equity_curve(start: Optional[str] = None, end: Optional[str] = None
     with conn.cursor() as cur:
         cur.execute(sql, params)
         return cur.fetchall()
+
+
+def list_trades(limit: int = 200) -> List[Dict[str, Any]]:
+    """
+    成交流水：只取真正的买卖动作（剔除"持有"行），按 run_date 倒序。
+    同时为每笔"卖出/止损卖出"配上一次买入价，算出本笔实现盈亏（PnL）。
+
+    配对策略：同 code 顺序遍历，遇买入入栈、遇卖出与栈顶买入配对（FIFO）。
+    本策略每只股票同一时间只持有一份，FIFO 等价于精确配对。
+    """
+    conn = _get_pool()
+    if conn is None:
+        return []
+    conn.ping(reconnect=True)
+    with conn.cursor() as cur:
+        # 先正序查全部历史买卖（含 run_id 用作详情跳转），后续算 PnL；
+        # 最后再倒序返回给前端
+        cur.execute(
+            """
+            SELECT id, run_id, run_date, code, name, price, shares, amount, action
+            FROM paper_signal_position
+            WHERE action IN ('买入', '卖出', '止损卖出')
+            ORDER BY run_date ASC, id ASC
+            """
+        )
+        rows = cur.fetchall()
+
+    # FIFO 配对：每 code 维护一个买入队列
+    from collections import defaultdict, deque
+    queue: Dict[str, "deque[Dict[str, Any]]"] = defaultdict(deque)
+    enriched: List[Dict[str, Any]] = []
+    for r in rows:
+        code = r["code"]
+        action = r["action"]
+        price = float(r["price"]) if r["price"] is not None else 0.0
+        shares = int(r["shares"]) if r["shares"] is not None else 0
+        amount = float(r["amount"]) if r["amount"] is not None else 0.0
+        item = {
+            "id": r["id"],
+            "run_id": r["run_id"],
+            "run_date": r["run_date"],
+            "code": code,
+            "name": r.get("name") or "",
+            "action": action,
+            "price": price,
+            "shares": shares,
+            "amount": amount,
+            "buy_price": None,
+            "buy_date": None,
+            "pnl": None,
+            "pnl_pct": None,
+            "hold_days": None,
+        }
+
+        if action == "买入":
+            queue[code].append({
+                "price": price,
+                "shares": shares,
+                "buy_date": r["run_date"],
+            })
+        else:  # 卖出 / 止损卖出
+            if queue[code]:
+                buy = queue[code].popleft()
+                buy_px = buy["price"]
+                pnl = (price - buy_px) * shares
+                pnl_pct = (price - buy_px) / buy_px if buy_px > 0 else None
+                hold_days = None
+                try:
+                    hold_days = (r["run_date"] - buy["buy_date"]).days
+                except Exception:
+                    pass
+                item["buy_price"] = buy_px
+                item["buy_date"] = buy["buy_date"]
+                item["pnl"] = round(pnl, 2)
+                item["pnl_pct"] = round(pnl_pct, 6) if pnl_pct is not None else None
+                item["hold_days"] = hold_days
+        enriched.append(item)
+
+    # 倒序后截断
+    enriched.reverse()
+    return enriched[: max(1, min(limit, 1000))]
 
 
 def get_latest_holdings_with_prices() -> List[Dict[str, Any]]:

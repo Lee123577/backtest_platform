@@ -78,7 +78,23 @@ CREATE TABLE IF NOT EXISTS paper_signal_position (
   COMMENT='每次运行的建议持仓/交易明细，action=买入/卖出/止损卖出/持有';
 
 
--- 5) 每日净值快照 + 上证综指基准
+-- 5) 管理员 IP 白名单（实盘/定时任务写操作鉴权）
+-- 同步自 app/paper_trading/admin_ip.py DDL_STATEMENTS
+CREATE TABLE IF NOT EXISTS paper_admin_ip (
+    ip             VARCHAR(45)   NOT NULL PRIMARY KEY,
+    note           VARCHAR(200),
+    created_at     DATETIME      DEFAULT CURRENT_TIMESTAMP,
+    created_by_ip  VARCHAR(45)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  COMMENT='paper_trading & 定时任务的写操作白名单 IP';
+
+-- Bootstrap：要么用环境变量 PAPER_ADMIN_INITIAL_IPS=1.2.3.4,5.6.7.8 启动；
+-- 要么留空，第一次有人点"立即扫描"或"保存参数"时，那个 IP 会被自动加入。
+-- 也可以预先手动插入：
+--   INSERT INTO paper_admin_ip (ip, note) VALUES ('1.2.3.4', '我的笔记本');
+
+
+-- 6) 每日净值快照 + 上证综指基准
 CREATE TABLE IF NOT EXISTS paper_equity_daily (
     trade_date           DATE          NOT NULL PRIMARY KEY,
     total_value          DECIMAL(18,2) NOT NULL,

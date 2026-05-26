@@ -51,18 +51,24 @@ log = logging.getLogger(__name__)
 
 
 def main():
-    p = argparse.ArgumentParser(description="小市值策略每日信号")
+    p = argparse.ArgumentParser(
+        description=(
+            "小市值策略每日信号。优先级：命令行参数 > 数据库 strategy_params > "
+            "代码默认值。前端编辑策略参数走数据库，cron 命令不传 --xxx 时即用 UI 设置。"
+        )
+    )
     p.add_argument("--date", help="指定运行日期 YYYY-MM-DD（默认数据库最新交易日）")
-    p.add_argument("--capital", type=float, default=90_000.0,
-                   help="初始资金（仅首次初始化时生效），默认 90000")
-    p.add_argument("--cap-min", type=float, default=20.0, help="市值下限（亿元）")
-    p.add_argument("--cap-max", type=float, default=30.0, help="市值上限（亿元）")
-    p.add_argument("--stock-num", type=int, default=3, help="持仓数量")
-    p.add_argument("--hold-days", type=int, default=5, help="持仓天数（调仓周期）")
-    p.add_argument("--stop-loss", type=float, default=10.0,
-                   help="止损百分比，0 关闭")
-    p.add_argument("--allow", default="main",
-                   help="允许板块（逗号分隔）：main/gem/star/bj，默认 main 仅主板")
+    # 全部默认 None：解析后从 DB 兜底，再回退到代码默认
+    p.add_argument("--capital", type=float, default=None,
+                   help="初始资金（仅首次初始化时生效）")
+    p.add_argument("--cap-min", type=float, default=None, help="市值下限（亿元）")
+    p.add_argument("--cap-max", type=float, default=None, help="市值上限（亿元）")
+    p.add_argument("--stock-num", type=int, default=None, help="持仓数量")
+    p.add_argument("--hold-days", type=int, default=None, help="持仓天数（调仓周期）")
+    p.add_argument("--stop-loss", type=float, default=None,
+                   help="止损百分比（买入后累计跌幅触发卖出），0 关闭")
+    p.add_argument("--allow", default=None,
+                   help="允许板块（逗号分隔）：main/gem/star/bj")
     p.add_argument("--dry-run", action="store_true", help="只打印不落库")
     p.add_argument("--reset", action="store_true",
                    help="清空模拟账户/持仓/历史记录后再跑（不可恢复）")
@@ -70,6 +76,58 @@ def main():
                    help="只跑一天（不补缺失日）。默认会从 paper_signal_run "
                         "最大 run_date 补到最新交易日，更适合 cron 使用。")
     args = p.parse_args()
+
+    # ── 参数解析三级回退 ───────────────────────────────────────────────────
+    # 1) 命令行显式传入  2) 数据库 paper_account.strategy_params  3) 代码默认
+    DEFAULTS = {
+        "capital": 90_000.0,
+        "cap_min": 20.0, "cap_max": 30.0,
+        "stock_num": 3, "hold_days": 5,
+        "stop_loss_pct": 5.0,
+        "allow_boards": ["main"],
+    }
+    from app.paper_trading import db as _pdb
+    try:
+        _pdb.ensure_tables()
+        db_params = _pdb.get_strategy_params() or {}
+    except Exception as e:
+        log.warning("读 DB strategy_params 失败，全部用默认值：%s", e)
+        db_params = {}
+
+    def _pick(cli_val, db_key, default_key):
+        if cli_val is not None:
+            return cli_val, "cli"
+        if db_key in db_params and db_params[db_key] is not None:
+            return db_params[db_key], "db"
+        return DEFAULTS[default_key], "default"
+
+    capital, src_cap = _pick(args.capital, "capital", "capital")
+    cap_min, src_cmin = _pick(args.cap_min, "cap_min", "cap_min")
+    cap_max, src_cmax = _pick(args.cap_max, "cap_max", "cap_max")
+    stock_num, src_sn = _pick(args.stock_num, "stock_num", "stock_num")
+    hold_days, src_hd = _pick(args.hold_days, "hold_days", "hold_days")
+    stop_loss, src_sl = _pick(args.stop_loss, "stop_loss_pct", "stop_loss_pct")
+
+    if args.allow is not None:
+        allow = tuple(s.strip() for s in args.allow.split(",") if s.strip())
+        src_allow = "cli"
+    elif db_params.get("allow_boards"):
+        allow = tuple(db_params["allow_boards"])
+        src_allow = "db"
+    else:
+        allow = tuple(DEFAULTS["allow_boards"])
+        src_allow = "default"
+
+    # 把解析结果重新塞回 args 方便后续代码沿用
+    args.capital = capital
+    args.cap_min = cap_min
+    args.cap_max = cap_max
+    args.stock_num = stock_num
+    args.hold_days = hold_days
+    args.stop_loss = stop_loss
+
+    log.info("参数来源 → capital=%s cap=[%s,%s] num=%s hold=%s stop=%s allow=%s",
+             src_cap, src_cmin, src_cmax, src_sn, src_hd, src_sl, src_allow)
 
     if args.reset:
         from app.paper_trading import db
@@ -85,7 +143,7 @@ def main():
     from app.paper_trading.runner import run_once, run_catch_up
 
     target = _Date.fromisoformat(args.date) if args.date else None
-    allow = tuple(s.strip() for s in args.allow.split(",") if s.strip())
+    # allow 已在前面三级回退算好，这里直接用
     # 指定 --date 或 --single → 单日模式；其余情况默认补跑（适合 cron）
     catch_up_mode = (target is None) and (not args.single)
 
