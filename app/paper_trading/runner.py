@@ -53,6 +53,7 @@ class RunResult:
     universe_size: int
     selected: List[str] = field(default_factory=list)
     stop_loss_codes: List[str] = field(default_factory=list)
+    sold_codes: List[str] = field(default_factory=list)   # 调仓/止损卖出的股票代码
     total_value: float = 0.0
     cash: float = 0.0
     position_value: float = 0.0
@@ -400,8 +401,14 @@ def run_once(
             revenue = shares * sell_price
             comm = max(revenue * COMMISSION_RATE, MIN_COMMISSION)
             tax = revenue * STAMP_TAX_RATE
-            cash += revenue - comm - tax
+            net_revenue = revenue - comm - tax
+            cash += net_revenue
+            cost = float(h.get("cost") or 0)
+            _buy_px = float(h["buy_price"])
+            _pnl = net_revenue - cost
+            _pnl_pct = _pnl / cost if cost > 0 else None
             result.stop_loss_codes.append(code)
+            result.sold_codes.append(code)
             positions_log.append({
                 "code": code,
                 "name": h.get("name"),
@@ -409,6 +416,10 @@ def run_once(
                 "shares": shares,
                 "amount": round(revenue, 2),
                 "action": "止损卖出",
+                "buy_price":  round(_buy_px, 3),
+                "commission": round(comm + tax, 2),
+                "pnl":        round(_pnl, 2),
+                "pnl_pct":    round(_pnl_pct, 6) if _pnl_pct is not None else None,
             })
             if not dry_run:
                 db.remove_holding(code)
@@ -466,7 +477,13 @@ def run_once(
             revenue = shares * sell_price
             comm = max(revenue * COMMISSION_RATE, MIN_COMMISSION)
             tax = revenue * STAMP_TAX_RATE
-            cash += revenue - comm - tax
+            net_revenue = revenue - comm - tax
+            cash += net_revenue
+            cost = float(h.get("cost") or 0)
+            _buy_px = float(h.get("buy_price") or 0)
+            _pnl = net_revenue - cost
+            _pnl_pct = _pnl / cost if cost > 0 else None
+            result.sold_codes.append(code)
             positions_log.append({
                 "code": code,
                 "name": h.get("name"),
@@ -474,6 +491,10 @@ def run_once(
                 "shares": shares,
                 "amount": round(revenue, 2),
                 "action": "卖出",
+                "buy_price":  round(_buy_px, 3),
+                "commission": round(comm + tax, 2),
+                "pnl":        round(_pnl, 2),
+                "pnl_pct":    round(_pnl_pct, 6) if _pnl_pct is not None else None,
             })
             if not dry_run:
                 db.remove_holding(code)
@@ -694,12 +715,16 @@ def run_catch_up(
 def _build_notes(is_rebalance: bool, r: RunResult) -> str:
     parts = []
     if is_rebalance:
+        # 纯调仓卖出（不含止损卖出）
+        rebal_sold = [c for c in r.sold_codes if c not in r.stop_loss_codes]
+        if rebal_sold:
+            parts.append("卖出 " + ",".join(rebal_sold))
         if r.selected:
-            parts.append("调仓：买入 " + ",".join(r.selected))
+            parts.append("买入 " + ",".join(r.selected))
         else:
-            parts.append("调仓日但无可选标的，空仓")
+            parts.append("无可选标的，空仓")
     if r.stop_loss_codes:
-        parts.append("止损：" + ",".join(r.stop_loss_codes))
+        parts.append("止损 " + ",".join(r.stop_loss_codes))
     if not parts:
         parts.append("持有日，无交易")
     return "；".join(parts)

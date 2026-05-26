@@ -1,5 +1,12 @@
 /* 小市值策略 · 实盘观察 — 简洁版前端 */
 
+function escapeHtml(s) {
+  if (s === null || s === undefined) return '';
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
 const fmtPct = (v) => {
   if (v === null || v === undefined || isNaN(v)) return '—';
   const x = Number(v) * 100;
@@ -279,6 +286,20 @@ function renderRuns(runs) {
     const cr = r.cum_return;
     const crCls = cr === null || cr === undefined ? '' :
                   (Number(cr) >= 0 ? 'val-pos' : 'val-neg');
+
+    // 把 notes 字符串里的"买入/卖出/止损"关键字用彩色 badge 高亮
+    function fmtNotes(raw) {
+      if (!raw) return '';
+      return raw
+        .replace(/买入\s+([^；]+)/g, (_, codes) =>
+          `<span class="note-buy">▲买入</span> <span class="note-codes">${codes.trim()}</span>`)
+        .replace(/卖出\s+([^；]+)/g, (_, codes) =>
+          `<span class="note-sell">▼卖出</span> <span class="note-codes">${codes.trim()}</span>`)
+        .replace(/止损\s+([^；]+)/g, (_, codes) =>
+          `<span class="tag-stop" style="font-size:11px">⚠止损</span> <span class="note-codes">${codes.trim()}</span>`)
+        .replace(/；/g, '　');
+    }
+
     return `
       <tr class="row-link" onclick="showRunDetail(${r.run_id})">
         <td>${r.run_date}</td>
@@ -288,8 +309,10 @@ function renderRuns(runs) {
         <td>¥${fmtMoney(r.total_value)}</td>
         <td>¥${fmtMoney(r.cash)}</td>
         <td class="${crCls}">${fmtPct(cr)}</td>
-        <td style="color:#57606a;font-size:12px;max-width:280px;overflow:hidden;text-overflow:ellipsis;">
-          ${r.notes || r.error_msg || ''}
+        <td style="font-size:12px;max-width:300px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+          ${r.status === 'error'
+            ? `<span style="color:#cf222e">${escapeHtml(r.error_msg || '')}</span>`
+            : fmtNotes(r.notes)}
         </td>
       </tr>`;
   }).join('');
@@ -347,19 +370,34 @@ function renderTrades(trades) {
   const rows = trades.map(t => {
     let tag;
     if (t.action === '买入') tag = '<span class="badge-buy">买入</span>';
-    else if (t.action === '止损卖出') tag = '<span class="tag-stop">止损</span>';
+    else if (t.action === '止损卖出') tag = '<span class="tag-stop">止损卖出</span>';
     else tag = '<span class="badge-sell">卖出</span>';
 
-    // 实现盈亏（只有卖出才有）
+    const isSell = t.action !== '买入';
+
+    // 买入价 + 持有天数（仅卖出行）
+    let buyInfoCell = '<span class="trade-pnl-empty">—</span>';
+    if (isSell && t.buy_price != null) {
+      const holdStr = t.hold_days != null ? `<span style="color:#57606a;font-size:11px">（持${t.hold_days}天）</span>` : '';
+      buyInfoCell = `${fmtPrice(t.buy_price)}${holdStr}`;
+    }
+
+    // 手续费
+    let commCell = '<span class="trade-pnl-empty">—</span>';
+    if (t.commission != null) {
+      commCell = `<span style="color:#57606a">¥${fmtMoney(t.commission)}</span>`;
+    }
+
+    // 实现盈亏 & 收益率（仅卖出行）
     let pnlCell = '<span class="trade-pnl-empty">—</span>';
     let pnlPctCell = '<span class="trade-pnl-empty">—</span>';
-    let buyInfoCell = '<span class="trade-pnl-empty">—</span>';
-    if (t.action !== '买入' && t.pnl !== null && t.pnl !== undefined) {
+    if (isSell && t.pnl != null) {
       const cls = t.pnl >= 0 ? 'trade-pnl-pos' : 'trade-pnl-neg';
       const sign = t.pnl >= 0 ? '+' : '';
       pnlCell = `<span class="${cls}">${sign}¥${fmtMoney(t.pnl)}</span>`;
-      pnlPctCell = `<span class="${cls}">${fmtPct(t.pnl_pct)}</span>`;
-      buyInfoCell = `${fmtPrice(t.buy_price)}　<span style="color:#57606a;font-size:11px">(持${t.hold_days ?? '?'}天)</span>`;
+      if (t.pnl_pct != null) {
+        pnlPctCell = `<span class="${cls}">${fmtPct(t.pnl_pct)}</span>`;
+      }
     }
 
     return `
@@ -372,6 +410,7 @@ function renderTrades(trades) {
         <td>${t.shares || '—'}</td>
         <td>¥${fmtMoney(t.amount)}</td>
         <td>${buyInfoCell}</td>
+        <td>${commCell}</td>
         <td>${pnlCell}</td>
         <td>${pnlPctCell}</td>
       </tr>`;
@@ -382,7 +421,7 @@ function renderTrades(trades) {
       <thead><tr>
         <th>日期</th><th>动作</th><th>代码</th><th>名称</th>
         <th>成交价</th><th>股数</th><th>金额</th>
-        <th>买入价</th><th>实现盈亏</th><th>收益率</th>
+        <th>买入价</th><th>手续费</th><th>实现盈亏</th><th>收益率</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>`;

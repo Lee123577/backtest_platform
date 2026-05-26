@@ -82,6 +82,10 @@ DDL_STATEMENTS = [
         shares      INT,
         amount      DECIMAL(18,2),
         action      VARCHAR(16),
+        buy_price   DECIMAL(10,3)  COMMENT '买入均价（仅卖出行填写，来自持仓表）',
+        commission  DECIMAL(10,2)  COMMENT '本笔手续费（佣金+印花税）',
+        pnl         DECIMAL(18,2)  COMMENT '本笔实现盈亏（扣手续费后）',
+        pnl_pct     DECIMAL(10,6)  COMMENT '本笔实现收益率',
         INDEX idx_run_id (run_id),
         INDEX idx_run_date (run_date)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
@@ -104,7 +108,7 @@ DDL_STATEMENTS = [
 
 
 def ensure_tables() -> None:
-    """启动时确保所有表存在；已存在则忽略。"""
+    """启动时确保所有表存在；已存在则忽略。同时做增量列迁移（旧库补字段）。"""
     conn = _get_pool()
     if conn is None:
         raise RuntimeError("数据库连接不可用，无法初始化 paper_trading 表")
@@ -112,7 +116,30 @@ def ensure_tables() -> None:
     with conn.cursor() as cur:
         for sql in DDL_STATEMENTS:
             cur.execute(sql)
+    # ── 增量迁移：给旧版 paper_signal_position 补 buy_price / commission / pnl / pnl_pct ──
+    _migrate_position_columns(conn)
     logger.info("paper_trading 表已就绪")
+
+
+def _migrate_position_columns(conn) -> None:
+    """幂等地给 paper_signal_position 补充盈亏相关列（旧库升级用）。"""
+    new_cols = [
+        ("buy_price",  "DECIMAL(10,3)  COMMENT '买入均价（卖出行填写）'"),
+        ("commission", "DECIMAL(10,2)  COMMENT '本笔手续费（佣金+印花税）'"),
+        ("pnl",        "DECIMAL(18,2)  COMMENT '本笔实现盈亏（扣手续费后）'"),
+        ("pnl_pct",    "DECIMAL(10,6)  COMMENT '本笔实现收益率'"),
+    ]
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS "
+            "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='paper_signal_position'"
+        )
+        existing = {r["COLUMN_NAME"] for r in cur.fetchall()}
+        for col_name, col_def in new_cols:
+            if col_name not in existing:
+                cur.execute(
+                    f"ALTER TABLE paper_signal_position ADD COLUMN {col_name} {col_def}"
+                )
 
 
 # ── 账户 ─────────────────────────────────────────────────────────────────────
@@ -312,13 +339,16 @@ def insert_positions(run_id: int, run_date: _Date, positions: List[Dict[str, Any
             """
             INSERT INTO paper_signal_position
                 (run_id, run_date, code, name, market_cap, price,
-                 shares, amount, action)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 shares, amount, action,
+                 buy_price, commission, pnl, pnl_pct)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             [
                 (run_id, run_date, p["code"], p.get("name"),
                  p.get("market_cap"), p.get("price"),
-                 p.get("shares"), p.get("amount"), p.get("action"))
+                 p.get("shares"), p.get("amount"), p.get("action"),
+                 p.get("buy_price"), p.get("commission"),
+                 p.get("pnl"), p.get("pnl_pct"))
                 for p in positions
             ],
         )
@@ -387,7 +417,8 @@ def get_run(run_id: int) -> Optional[Dict[str, Any]]:
             return None
         cur.execute(
             """
-            SELECT code, name, market_cap, price, shares, amount, action
+            SELECT code, name, market_cap, price, shares, amount, action,
+                   buy_price, commission, pnl, pnl_pct
             FROM paper_signal_position
             WHERE run_id=%s
             ORDER BY action, code
@@ -442,7 +473,8 @@ def list_trades(limit: int = 200) -> List[Dict[str, Any]]:
         # 最后再倒序返回给前端
         cur.execute(
             """
-            SELECT id, run_id, run_date, code, name, price, shares, amount, action
+            SELECT id, run_id, run_date, code, name, price, shares, amount, action,
+                   buy_price, commission, pnl, pnl_pct
             FROM paper_signal_position
             WHERE action IN ('买入', '卖出', '止损卖出')
             ORDER BY run_date ASC, id ASC
@@ -450,7 +482,8 @@ def list_trades(limit: int = 200) -> List[Dict[str, Any]]:
         )
         rows = cur.fetchall()
 
-    # FIFO 配对：每 code 维护一个买入队列
+    # FIFO 配对（兜底）：只在 DB 里没有存储值时使用
+    # 新版 runner.py 在卖出时直接写 buy_price/commission/pnl/pnl_pct，无需 FIFO
     from collections import defaultdict, deque
     queue: Dict[str, "deque[Dict[str, Any]]"] = defaultdict(deque)
     enriched: List[Dict[str, Any]] = []
@@ -460,6 +493,13 @@ def list_trades(limit: int = 200) -> List[Dict[str, Any]]:
         price = float(r["price"]) if r["price"] is not None else 0.0
         shares = int(r["shares"]) if r["shares"] is not None else 0
         amount = float(r["amount"]) if r["amount"] is not None else 0.0
+
+        # DB 存储的盈亏字段（新版 runner 才有）
+        db_buy_px   = float(r["buy_price"])  if r.get("buy_price")  is not None else None
+        db_comm     = float(r["commission"]) if r.get("commission") is not None else None
+        db_pnl      = float(r["pnl"])        if r.get("pnl")        is not None else None
+        db_pnl_pct  = float(r["pnl_pct"])    if r.get("pnl_pct")    is not None else None
+
         item = {
             "id": r["id"],
             "run_id": r["run_id"],
@@ -472,6 +512,7 @@ def list_trades(limit: int = 200) -> List[Dict[str, Any]]:
             "amount": amount,
             "buy_price": None,
             "buy_date": None,
+            "commission": db_comm,
             "pnl": None,
             "pnl_pct": None,
             "hold_days": None,
@@ -484,7 +525,21 @@ def list_trades(limit: int = 200) -> List[Dict[str, Any]]:
                 "buy_date": r["run_date"],
             })
         else:  # 卖出 / 止损卖出
-            if queue[code]:
+            # 优先使用 DB 直接存储的值（新版 runner）
+            if db_buy_px is not None:
+                item["buy_price"] = db_buy_px
+                item["pnl"]       = db_pnl
+                item["pnl_pct"]   = db_pnl_pct
+                # buy_date / hold_days：从 FIFO 队列里拿（不影响 PnL）
+                if queue[code]:
+                    buy = queue[code].popleft()
+                    item["buy_date"] = buy["buy_date"]
+                    try:
+                        item["hold_days"] = (r["run_date"] - buy["buy_date"]).days
+                    except Exception:
+                        pass
+            elif queue[code]:
+                # 旧版 FIFO 兜底
                 buy = queue[code].popleft()
                 buy_px = buy["price"]
                 pnl = (price - buy_px) * shares
@@ -495,9 +550,9 @@ def list_trades(limit: int = 200) -> List[Dict[str, Any]]:
                 except Exception:
                     pass
                 item["buy_price"] = buy_px
-                item["buy_date"] = buy["buy_date"]
-                item["pnl"] = round(pnl, 2)
-                item["pnl_pct"] = round(pnl_pct, 6) if pnl_pct is not None else None
+                item["buy_date"]  = buy["buy_date"]
+                item["pnl"]       = round(pnl, 2)
+                item["pnl_pct"]   = round(pnl_pct, 6) if pnl_pct is not None else None
                 item["hold_days"] = hold_days
         enriched.append(item)
 
