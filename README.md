@@ -82,7 +82,108 @@ PORTFOLIO_REGISTRY["my_portfolio"] = MyPortfolioStrategy
 无未来数据：选股使用前一日收盘价，成交使用当日开盘价
 基准：单股模式为买入持有同一标的；组合模式为中证500指数
 数据来源
-行情数据：akshare（东方财富）
-全市场快照：东方财富 push API，三级重试机制（akshare无代理 → akshare系统代理 → curl_cffi直连备用节点）
+行情数据：akshare（东方财富 / 新浪 / 腾讯 三接口降级）
+全市场快照：5 级降级链（见下方"架构说明"）
+
+---
+
+## 架构说明（给二次开发者）
+
+### 关键目录
+
+```
+app/
+  data/            数据获取层
+    feed.py            单股 K 线获取（AkshareDataFeed，支持扩展）
+    data_loader.py     MySQL stock_kline 读取 + 线程本地连接池
+    market_data.py     全市场快照编排（5 级降级链）+ 持久化快照表
+    universe_fetcher.py 全市场抓取实现（xuangu / akshare / cffi）
+    filters.py         A 股准入过滤器（ST / 板块判断）
+    calendar.py        交易日历（含节假日，进程内缓存）
+    realtime.py        持仓页实时价（xuangu 单股查询，15s 内存缓存）
+  engine/          回测引擎
+    backtest.py        单股策略回测
+    portfolio_backtest.py 组合策略回测
+  strategies/      策略实现（11 个）
+  paper_trading/   模拟盘
+    runner.py          每日运行器（被 daily_signal.py 调用）
+    db.py              paper_account / paper_holdings / paper_signal_run 等
+    admin_ip.py        IP 白名单（控制写操作）
+  scheduler/       任务调度
+    runner.py          subprocess 执行 + 日志写入 task_run_log
+    registry.py        任务清单（daily_update / daily_signal / backfill_geo）
+  live/            实盘接口抽象（base.py）—— 无可用实现，需自行接入 vnpy/openctp
+  main.py          FastAPI 路由
+scripts/
+  import_history.py    全量历史导入（2010~今，6~12 小时，一次性）
+  daily_update.py      每日增量（cron 17:00）
+  daily_signal.py      每日信号生成（cron 17:30，依赖 daily_update）
+  run_scheduled_tasks.py cron 入口（5 分钟唤醒一次）
+```
+
+### 数据流
+
+```
+[cron 5 min]
+   ↓
+scripts/run_scheduled_tasks.py
+   ↓
+scheduler.runner.run_due()  →  subprocess 跑各任务
+   ├─ daily_update.py    17:00  增量 K 线 / 财务 / 指数 / 北向
+   └─ daily_signal.py    17:30  依赖 daily_update，跑选股
+        ↓
+   paper_trading.runner.run_once()
+        ↓
+   MySQL: paper_account / paper_holdings / paper_signal_run / paper_signal_position / paper_equity_daily
+        ↓
+   FastAPI 读取并对外展示
+```
+
+### 数据库连接：两套并存的模式
+
+| 调用方 | 连接管理 | autocommit | 用途 |
+|--------|---------|-----------|------|
+| FastAPI 服务 + paper_trading.db | `app.data.data_loader._get_pool()` 线程本地池 | True | API 短查询，并发安全 |
+| 运维脚本（daily_update / import_history / daily_signal） | 每个脚本自己 `pymysql.connect()` | **False**（手动 commit） | 大批量事务写入 |
+
+**为什么有两套**：
+- API 端：每个请求都是独立短事务，autocommit=True 最简单
+- 运维脚本：需要批量 `executemany()` + 失败回滚，必须手动 `conn.commit()`
+
+**改动注意**：
+- 在脚本里**别忘 commit**（很常见的疏忽）
+- 在 API 路径里别用 `conn.commit()`（autocommit=True 已经提交，无害但多余）
+
+### 数据源 5 级降级
+
+`market_data.get_universe_snapshot()` 依次尝试：
+1. MySQL `stock_kline`（最近一个有 market_cap 的交易日，要求 ≥500 只）
+2. MySQL `market_universe_snapshot`（持久化快照表，离线兜底）
+3. `data.eastmoney.com` xuangu 选股器（线上主力数据源）
+4. `akshare.stock_zh_a_spot_em()` 禁代理
+5. `akshare.stock_zh_a_spot_em()` 走系统代理
+6. `curl_cffi` Chrome TLS 模拟（最后兜底，**Windows 上崩进程，必须 subprocess 隔离**）
+
+每次成功获取都会写回 `market_universe_snapshot`，保证下次离线也能取到数据。
+
+### 共享模块（避免重复实现）
+
+- `app/data/calendar.py` —— 交易日历，含 `is_trading_day` / `next_n_trading_days` / `count_trading_days`
+- `app/data/filters.py` —— A 股准入过滤，含 `is_st_name` / `is_allowed_board` / `board_of`
+- `app/data/universe_fetcher.py` —— 全市场抓取，5 个独立 fetcher，可单测
+
+新增数据源/过滤器时**优先在这些模块加方法**，不要在调用方就地实现。
+
+### 实盘接入
+
+`app/live/base.py` 定义了 `LiveAdapter` 抽象。目前**没有可用实现**（原 simnow.py 是伪 stub，已删除）。
+要接真实 CTP，推荐：
+- [vnpy](https://www.vnpy.com)：含 CTP/SimNow/OpenCTP 等多个网关
+- [openctp-ctp](https://openctp.cn)：纯 CTP，无框架
+
+继承 `LiveAdapter` 在每个方法里调对应 SDK 即可。
+
+---
+
 免责声明
 本项目仅供学习和研究使用，不构成任何投资建议。历史回测结果不代表未来收益。
