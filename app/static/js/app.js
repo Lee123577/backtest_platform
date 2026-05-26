@@ -19,6 +19,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   loadStrategies();
 
+  const urlMode = new URLSearchParams(location.search).get('mode');
+  if (urlMode === 'portfolio') switchMode('portfolio');
+
   document.getElementById('loadKlineBtn').addEventListener('click', loadKline);
   document.getElementById('runBtn').addEventListener('click', runBacktest);
   document.getElementById('runPortfolioBtn').addEventListener('click', runPortfolioBacktest);
