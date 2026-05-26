@@ -394,14 +394,26 @@ def _read_latest_universe_from_db() -> "pd.DataFrame | None":
         if conn is None:
             return None
         conn.ping(reconnect=True)
+        # 从最新往前找，跳过残缺快照（行数 < _MIN_UNIVERSE_SIZE 的日期）
+        # 用子查询取候选日期列表，避免逐日扫描
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT MAX(snap_date) AS d FROM market_universe_snapshot"
+                """
+                SELECT snap_date, COUNT(*) AS cnt
+                FROM market_universe_snapshot
+                WHERE market_cap IS NOT NULL
+                GROUP BY snap_date
+                HAVING cnt >= %s
+                ORDER BY snap_date DESC
+                LIMIT 1
+                """,
+                (_MIN_UNIVERSE_SIZE,),
             )
             row = cur.fetchone()
-        snap_date = row and row.get("d")
-        if snap_date is None:
+        if row is None:
             return None
+        snap_date = row["snap_date"]
+
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -432,11 +444,26 @@ def _read_latest_universe_from_db() -> "pd.DataFrame | None":
         return None
 
 
+# A 股全市场约 5000 只，低于此数视为数据残缺（daily_update 中途失败等情况）
+_MIN_UNIVERSE_SIZE = 500
+
+
 def _has_valid_market_cap(df: pd.DataFrame | None) -> bool:
-    """快照是否含至少一行非 NaN market_cap — 不满足则不该被缓存/返回。"""
+    """
+    快照是否含足够多的有效 market_cap 行。
+    要求：非 NaN 的 market_cap 行数 ≥ _MIN_UNIVERSE_SIZE（500）。
+    只有 1~几十 行时视为残缺数据（daily_update 中途失败），不缓存也不返回。
+    """
     if df is None or df.empty or "market_cap" not in df.columns:
         return False
-    return bool(df["market_cap"].notna().any())
+    valid_count = int(df["market_cap"].notna().sum())
+    if valid_count < _MIN_UNIVERSE_SIZE:
+        logger.warning(
+            "快照仅含 %d 只有效 market_cap（阈值 %d），视为残缺数据，丢弃",
+            valid_count, _MIN_UNIVERSE_SIZE,
+        )
+        return False
+    return True
 
 
 def get_universe_snapshot() -> pd.DataFrame:
