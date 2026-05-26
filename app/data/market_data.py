@@ -248,20 +248,28 @@ def _query_universe_from_db() -> pd.DataFrame | None:
     conn.ping(reconnect=True)
 
     # 注意: market_cap 在 DB 中已为亿元（import_history 写入时已除 1e8）
-    # 内层 MAX 只看有 market_cap 的日子，避免被"残缺日"（K线已写入但估值快照
-    # 抓取失败 → market_cap 全 NULL）卡住，自动回退到最近一个完整快照日。
+    # 用 GROUP BY + HAVING 跳过"残缺日"：daily_update 每天只写入新增股票，
+    # 若估值快照降级到部分数据（如 414 只），该日 market_cap 行数远少于全市场，
+    # 用 MAX(trade_date) 会选到这类残缺日并级联递减（5184→414→118→1只）。
+    # 改为找最近一个含 ≥_MIN_UNIVERSE_SIZE 只有效市值的交易日，自动跳过残缺日。
     with conn.cursor() as cur:
         cur.execute("""
-            SELECT MAX(trade_date) AS snap_date
-            FROM stock_kline WHERE market_cap IS NOT NULL
-        """)
+            SELECT trade_date AS snap_date
+            FROM stock_kline
+            WHERE market_cap IS NOT NULL
+            GROUP BY trade_date
+            HAVING COUNT(*) >= %s
+            ORDER BY trade_date DESC
+            LIMIT 1
+        """, (_MIN_UNIVERSE_SIZE,))
         snap_row = cur.fetchone()
     snap_date = snap_row and snap_row.get("snap_date")
 
     if snap_date is None:
         logger.warning(
-            "stock_kline 全表无含 market_cap 的交易日 — "
-            "daily_update 估值快照可能从未成功跑过。DB 路径放弃，由外层降级到外部 API。"
+            "stock_kline 全表无满足 ≥%d 只 market_cap 的交易日 — "
+            "daily_update 估值快照可能从未成功跑过。DB 路径放弃，由外层降级到外部 API。",
+            _MIN_UNIVERSE_SIZE,
         )
         return None
 

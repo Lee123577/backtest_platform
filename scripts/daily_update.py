@@ -231,6 +231,28 @@ def update_kline(conn, trade_date: str):
     n = batch_insert(conn, sql, all_rows)
     log.info(f"stock_kline {trade_date} 写入 {n} 条")
 
+    # ── 回填已有行的 market_cap ──────────────────────────────────────────────
+    # update_kline 跳过了"已有 K 线的股票"，这些行的 market_cap 可能是 NULL
+    # （由 import_history.py 写入的纯 K 线数据）。
+    # 如果本次估值快照有效（≥500 只），对当日全部 market_cap IS NULL 的行补写，
+    # 防止 get_universe_snapshot 每次回退到越来越旧的日期，引发市值级联递减。
+    if snap and len(snap) >= 500:
+        backfill_rows = [
+            (snap[code]["mc"], code, trade_date)
+            for code in snap
+            if snap[code].get("mc") is not None
+        ]
+        if backfill_rows:
+            update_sql = (
+                "UPDATE stock_kline SET market_cap=%s "
+                "WHERE code=%s AND trade_date=%s AND market_cap IS NULL"
+            )
+            with conn.cursor() as cur:
+                for i in range(0, len(backfill_rows), BATCH_SIZE):
+                    cur.executemany(update_sql, backfill_rows[i: i + BATCH_SIZE])
+            conn.commit()
+            log.info(f"stock_kline {trade_date} market_cap 回填 {len(backfill_rows)} 只")
+
 
 # ── 2. 更新 stock_info（ST/名称变更）────────────────────────────────────────
 
@@ -272,6 +294,52 @@ def update_stock_info(conn):
 
 # ── 3. 更新 index_daily ──────────────────────────────────────────────────────
 
+def _fetch_index_bar(idx_code: str, date_nodash: str):
+    """
+    抓单只指数指定日期的日K线，返回 (open, high, low, close, volume, amount, pct_change)。
+    双接口降级：
+      1. index_zh_a_hist      — eastmoney 主接口（有时被服务器防火墙拦）
+      2. stock_zh_index_daily_em — 不同 eastmoney 端点，通常不受同一规则限制
+    每个接口内部重试 2 次，两接口都失败则返回 None。
+    """
+    col_map = {
+        "日期": "date", "开盘": "open", "收盘": "close",
+        "最高": "high", "最低": "low", "成交量": "volume",
+        "成交额": "amount", "涨跌幅": "pct_change",
+    }
+
+    # ── 接口 1: index_zh_a_hist ──────────────────────────────────────────────
+    for attempt in range(2):
+        try:
+            raw = ak.index_zh_a_hist(
+                symbol=idx_code, period="daily",
+                start_date=date_nodash, end_date=date_nodash,
+            )
+            if raw is not None and not raw.empty:
+                return raw.rename(columns=col_map)
+        except Exception:
+            if attempt == 0:
+                time.sleep(2)
+    time.sleep(0.5)
+
+    # ── 接口 2: stock_zh_index_daily_em (不同端点，通常不受同一封锁影响) ─────
+    try:
+        raw2 = ak.stock_zh_index_daily_em(symbol=idx_code)
+        if raw2 is None or raw2.empty:
+            return None
+        raw2 = raw2.rename(columns={"date": "date", "open": "open", "close": "close",
+                                     "high": "high", "low": "low",
+                                     "volume": "volume", "amount": "amount"})
+        # 过滤到目标日期
+        target_dt = pd.to_datetime(date_nodash, format="%Y%m%d")
+        if "date" in raw2.columns:
+            raw2["date"] = pd.to_datetime(raw2["date"])
+            raw2 = raw2[raw2["date"] == target_dt]
+        return raw2 if not raw2.empty else None
+    except Exception:
+        return None
+
+
 def update_index_daily(conn, trade_date: str):
     log.info(f"更新 index_daily: {trade_date}")
     date_nodash = trade_date.replace("-", "")
@@ -288,18 +356,10 @@ def update_index_daily(conn, trade_date: str):
     rows = []
     for idx_code in MAJOR_INDICES:
         try:
-            raw = ak.index_zh_a_hist(
-                symbol=idx_code, period="daily",
-                start_date=date_nodash, end_date=date_nodash,
-            )
+            raw = _fetch_index_bar(idx_code, date_nodash)
             if raw is None or raw.empty:
+                log.warning(f"index_daily {idx_code} 两个接口均无数据")
                 continue
-            col_map = {
-                "日期": "date", "开盘": "open", "收盘": "close",
-                "最高": "high", "最低": "low", "成交量": "volume",
-                "成交额": "amount", "涨跌幅": "pct_change",
-            }
-            raw = raw.rename(columns=col_map)
             for _, r in raw.iterrows():
                 rows.append((
                     idx_code, trade_date,
@@ -500,23 +560,57 @@ def update_stock_dividend(conn, trade_date: str):
         return
 
     log.info(f"更新 stock_dividend: {trade_date}")
+    df = None
+
+    # 接口 1: stock_dividend_cninfo（cninfo 全量，akshare 偶发字段名变更）
     try:
         df = ak.stock_dividend_cninfo(symbol="全部")
         if df is None or df.empty:
-            log.warning("stock_dividend 数据为空")
-            return
+            df = None
     except Exception as e:
-        log.error(f"获取分红失败: {e}")
+        log.warning(f"stock_dividend_cninfo 失败: {e}，尝试备用接口")
+        df = None
+
+    # 接口 2: stock_zh_a_daily_qfq 无法获分红，改用 stock_dividend_em（东财）
+    if df is None or df.empty:
+        try:
+            df = ak.stock_dividend_em(symbol="全部")
+        except Exception as e:
+            log.error(f"获取分红失败（所有接口均失败）: {e}")
+            return
+
+    if df is None or df.empty:
+        log.warning("stock_dividend 数据为空")
         return
 
-    col_map = {
-        "证券代码": "code", "公告日期": "announce_date",
-        "股权登记日": "record_date", "除权除息日": "pay_date",
-        "每股派息(税前)(元)": "div_ps",
-        "每10股送股(股)": "bonus",
-        "每10股转增(股)": "allot",
-        "配股价格(元)": "allot_price",
-    }
+    # 字段名兼容——不同接口/版本列名不同，按关键词匹配
+    def _find_col(df, *keywords):
+        for kw in keywords:
+            for c in df.columns:
+                if kw in str(c):
+                    return c
+        return None
+
+    code_col    = _find_col(df, "证券代码", "股票代码", "代码")
+    ann_col     = _find_col(df, "公告日期", "实施方案公告日期", "宣布日")
+    record_col  = _find_col(df, "股权登记日", "登记日")
+    pay_col     = _find_col(df, "除权除息日", "派息日", "实施日")
+    div_col     = _find_col(df, "每股派息", "每股红利", "派息(元)")
+    bonus_col   = _find_col(df, "每10股送股", "送股")
+    allot_col   = _find_col(df, "每10股转增", "转增")
+    price_col   = _find_col(df, "配股价格", "配股价")
+
+    if not code_col or not ann_col:
+        log.error(f"stock_dividend: 无法识别必要列，columns={list(df.columns)}")
+        return
+
+    col_map = {}
+    for src, dst in [(code_col, "code"), (ann_col, "announce_date"),
+                     (record_col, "record_date"), (pay_col, "pay_date"),
+                     (div_col, "div_ps"), (bonus_col, "bonus"),
+                     (allot_col, "allot"), (price_col, "allot_price")]:
+        if src:
+            col_map[src] = dst
     df = df.rename(columns=col_map)
     df["code"] = df["code"].astype(str).str.zfill(6)
 
