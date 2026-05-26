@@ -571,12 +571,35 @@ def update_stock_dividend(conn, trade_date: str):
         log.warning(f"stock_dividend_cninfo 失败: {e}，尝试备用接口")
         df = None
 
-    # 接口 2: stock_zh_a_daily_qfq 无法获分红，改用 stock_dividend_em（东财）
+    # 接口 2: stock_history_dividend —— 新浪财经历史分红汇总（全市场，无需股票代码）
+    # 注意：本函数仅返回每支股票的分红汇总，没有逐次派息明细（无法精确对应 announce_date）
+    # 但至少可以让 stock_dividend 表保持非空；若精确明细，待 akshare 修复 cninfo 接口后自动走回接口1
     if df is None or df.empty:
         try:
-            df = ak.stock_dividend_em(symbol="全部")
+            raw = ak.stock_history_dividend()
+            if raw is not None and not raw.empty:
+                # 统一列名：按关键词匹配
+                def _fc(frame, *kws):
+                    for kw in kws:
+                        for c in frame.columns:
+                            if kw in str(c):
+                                return c
+                    return None
+                code_c = _fc(raw, "代码")
+                date_c = _fc(raw, "日期", "最近")
+                div_c  = _fc(raw, "派息", "股息")
+                if code_c and date_c:
+                    df = raw[[code_c, date_c] + ([div_c] if div_c else [])].copy()
+                    df = df.rename(columns={
+                        code_c: "code",
+                        date_c: "announce_date",
+                        **({div_c: "div_ps"} if div_c else {}),
+                    })
+                    log.info(f"stock_dividend 备用接口 stock_history_dividend 成功 ({len(df)} 条汇总)")
+                else:
+                    df = None
         except Exception as e:
-            log.error(f"获取分红失败（所有接口均失败）: {e}")
+            log.warning(f"stock_dividend 所有接口均失败，本次跳过分红更新: {e}")
             return
 
     if df is None or df.empty:
@@ -708,16 +731,40 @@ def update_index_constituent(conn, trade_date: str):
 
 # ── 主入口 ───────────────────────────────────────────────────────────────────
 
+# 交易日历缓存（进程内一次性加载）
+_TRADE_DATE_SET: set | None = None
+
+
+def _load_trade_calendar() -> set:
+    """从 akshare 加载 A 股交易日历，缓存到进程内变量。失败时返回空集合（回退到工作日判断）。"""
+    global _TRADE_DATE_SET
+    if _TRADE_DATE_SET is not None:
+        return _TRADE_DATE_SET
+    try:
+        df = ak.tool_trade_date_hist_sina()
+        col = df.columns[0]
+        _TRADE_DATE_SET = set(pd.to_datetime(df[col]).dt.date)
+        log.info(f"交易日历加载完成: 共 {len(_TRADE_DATE_SET)} 个交易日")
+    except Exception as e:
+        log.warning(f"交易日历加载失败 ({e})，退回到工作日判断（节假日可能被多余处理，无副作用）")
+        _TRADE_DATE_SET = set()
+    return _TRADE_DATE_SET
+
+
 def is_trading_day(target_date: date) -> bool:
-    """简单判断：周一到周五（不考虑节假日，akshare 会返回空则跳过）。"""
+    """判断是否为 A 股交易日（优先使用 akshare 官方日历，含节假日调整）。"""
+    cal = _load_trade_calendar()
+    if cal:
+        return target_date in cal
+    # 兜底：周一到周五
     return target_date.weekday() < 5
 
 
 def _find_missing_kline_dates(conn, today: date, lookback_days: int = 30) -> list[date]:
     """
-    扫描 [today - lookback_days, today] 窗口内所有工作日，
+    扫描 [today - lookback_days, today] 窗口内所有交易日，
     找出 stock_kline 中完全没有数据的日期（空洞），按升序返回。
-    节假日 akshare 会返回空，update_kline 会安全跳过，无副作用。
+    使用 akshare 官方日历过滤节假日，避免对休市日发起无效请求。
     """
     window_start = today - timedelta(days=lookback_days)
     # 窗口内所有工作日
