@@ -8,3 +8,7 @@ data/cache/
 venv/
 .DS_Store
 .playwright-mcp/
+
+# 运行时日志，不要进 git
+*.log
+scripts/*.log

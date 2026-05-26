@@ -1,16 +1,12 @@
 import logging
 import threading
-from pathlib import Path
 
 import pandas as pd
 
-from .feed import get_feed
+from .feed import CACHE_DIR, get_feed   # noqa: F401 — re-export for backward compatibility
 from ..config import settings
 
 logger = logging.getLogger(__name__)
-
-CACHE_DIR = Path(__file__).parent.parent.parent / "data" / "cache"
-CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 # 每个线程独立数据库连接（ThreadPoolExecutor 多线程共享单连接会导致协议错乱）
 _db_local = threading.local()

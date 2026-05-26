@@ -1,15 +1,17 @@
 """
 DataFeed abstraction — swap data sources without touching strategy or engine code.
 
-Built-in implementations:
-  AkshareDataFeed  — akshare (东方财富), default, no account required
-  TqDataFeed       — 天勤 tqsdk, requires free registration at https://www.shinnytech.com
-  RqdataDataFeed   — 米矿 rqdata, requires paid licence (rqdatac)
+Built-in implementation:
+  AkshareDataFeed  — akshare（东方财富/新浪/腾讯 三接口降级），默认，无需账号
 
-Usage:
-    from app.data.feed import set_feed, TqDataFeed
-    set_feed(TqDataFeed(username="xxx", password="yyy"))
-    # Now all get_kline_data / get_universe_snapshot calls go through tqsdk
+要切到其它行情源（如天勤 tqsdk / 米矿 rqdata），自己实现 DataFeed 即可：
+    class MyFeed(DataFeed):
+        def get_kline(self, code, start_date, end_date, adjust="qfq"):
+            ...
+        def get_stock_name(self, code):
+            ...
+    from app.data.feed import set_feed
+    set_feed(MyFeed())
 """
 from __future__ import annotations
 
@@ -259,128 +261,6 @@ class AkshareDataFeed(DataFeed):
             except Exception:
                 continue
         return code
-
-
-# ── 天勤 tqsdk stub ────────────────────────────────────────────────────────────
-
-class TqDataFeed(DataFeed):
-    """
-    天勤量化 tqsdk — free real-time + historical data.
-    Sign up at https://www.shinnytech.com/tianqin/
-
-    pip install tqsdk
-    """
-
-    def __init__(self, username: str = "", password: str = ""):
-        self._user = username
-        self._pwd = password
-        self._api = None
-
-    def _connect(self):
-        if self._api is not None:
-            return self._api
-        try:
-            from tqsdk import TqApi, TqAuth
-            self._api = TqApi(auth=TqAuth(self._user, self._pwd))
-        except ImportError:
-            raise ImportError("请先安装天勤：pip install tqsdk")
-        return self._api
-
-    def get_kline(self, code: str, start_date: str, end_date: str,
-                  adjust: str = "qfq") -> pd.DataFrame:
-        cache_key = f"tq_{code}_{start_date}_{end_date}"
-        cache_file = CACHE_DIR / f"{cache_key}.csv"
-        if cache_file.exists():
-            return pd.read_csv(cache_file, parse_dates=["date"])
-
-        api = self._connect()
-        # tqsdk symbol format: SHFE.au2412 / SSE.600519 / SZSE.000001
-        prefix = "SSE" if code.startswith("6") else "SZSE"
-        symbol = f"{prefix}.{code}"
-
-        klines = api.get_kline_serial(symbol, duration_seconds=86400, data_length=10000)
-        api.wait_update()
-
-        df = klines[["datetime", "open", "high", "low", "close", "volume"]].copy()
-        df["date"] = pd.to_datetime(df["datetime"], unit="ns").dt.normalize()
-        df = df.drop(columns=["datetime"])
-
-        start_dt = pd.to_datetime(start_date)
-        end_dt = pd.to_datetime(end_date)
-        df = df[(df["date"] >= start_dt) & (df["date"] <= end_dt)].reset_index(drop=True)
-
-        atomic_to_csv(df, cache_file)
-        return df
-
-    def get_stock_name(self, code: str) -> str:
-        return code  # tqsdk doesn't provide stock names directly
-
-
-# ── 米矿 rqdata stub ──────────────────────────────────────────────────────────
-
-class RqdataDataFeed(DataFeed):
-    """
-    米矿 rqdata — paid licence required.
-    Contact: https://www.ricequant.com/welcome/purchase/research
-
-    pip install rqdatac
-    """
-
-    def __init__(self, username: str = "", password: str = ""):
-        self._user = username
-        self._pwd = password
-        self._inited = False
-
-    def _init(self):
-        if self._inited:
-            return
-        try:
-            import rqdatac
-            rqdatac.init(self._user, self._pwd)
-            self._inited = True
-        except ImportError:
-            raise ImportError("请先安装 rqdatac：pip install rqdatac")
-
-    def get_kline(self, code: str, start_date: str, end_date: str,
-                  adjust: str = "qfq") -> pd.DataFrame:
-        cache_key = f"rq_{code}_{start_date}_{end_date}_{adjust}"
-        cache_file = CACHE_DIR / f"{cache_key}.csv"
-        if cache_file.exists():
-            return pd.read_csv(cache_file, parse_dates=["date"])
-
-        self._init()
-        import rqdatac as rq
-
-        # rqdata format: 600519.XSHG / 000001.XSHE
-        suffix = "XSHG" if code.startswith("6") else "XSHE"
-        symbol = f"{code}.{suffix}"
-
-        adjust_map = {"qfq": "pre", "hfq": "post", "": "none", None: "none"}
-        raw = rq.get_price(
-            symbol,
-            start_date=start_date,
-            end_date=end_date,
-            frequency="1d",
-            adjust_type=adjust_map.get(adjust, "pre"),
-            fields=["open", "high", "low", "close", "volume"],
-        )
-        if raw is None or raw.empty:
-            raise ValueError(f"rqdata 未返回数据：{code}")
-
-        df = raw.reset_index().rename(columns={"index": "date"})
-        df["date"] = pd.to_datetime(df["date"])
-        atomic_to_csv(df, cache_file)
-        return df
-
-    def get_stock_name(self, code: str) -> str:
-        try:
-            self._init()
-            import rqdatac as rq
-            suffix = "XSHG" if code.startswith("6") else "XSHE"
-            info = rq.instruments(f"{code}.{suffix}")
-            return info.symbol if info else code
-        except Exception:
-            return code
 
 
 # ── Global singleton — change data source here ────────────────────────────────
