@@ -1,5 +1,6 @@
 import asyncio
 import json
+from bisect import bisect_left as _bisect_left, bisect_right as _bisect_right
 from datetime import date as _date
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -89,8 +90,7 @@ def _next_rebalance_date(last_rebalance: "_date", hold_days: int) -> "_date | No
                 count += 1
         return d
     # 在日历中找 last_rebalance 的位置，向后取第 hold_days 个
-    import bisect
-    idx = bisect.bisect_right(cal, last_rebalance)   # 第一个 > last_rebalance 的位置
+    idx = _bisect_right(cal, last_rebalance)   # 第一个 > last_rebalance 的位置
     target_idx = idx + hold_days - 1
     return cal[target_idx] if target_idx < len(cal) else None
 from .visit_log import VisitLogMiddleware  # noqa: E402
@@ -211,33 +211,26 @@ async def api_paper_account():
     # ── 下次调仓日 ───────────────────────────────────────────────────────────
     next_rb_date: str | None = None
     days_until_rb: int | None = None
-    if account:
-        last_rb_raw = account.get("last_rebalance_date")
-        sp = account.get("strategy_params") or {}
-        if isinstance(sp, str):
-            try:
-                sp = json.loads(sp)
-            except Exception:
-                sp = {}
+    if account and account.get("last_rebalance_date"):
+        # 复用 paper_db.get_strategy_params()，避免在两处重复处理 bytes/str/dict 三态
+        sp = paper_db.get_strategy_params() or {}
         hold_days_val = int(sp.get("hold_days") or 5)
-        if last_rb_raw:
-            last_rb_date = (
-                _date.fromisoformat(str(last_rb_raw))
-                if not isinstance(last_rb_raw, _date) else last_rb_raw
-            )
-            nrd = _next_rebalance_date(last_rb_date, hold_days_val)
-            if nrd:
-                next_rb_date = str(nrd)
-                today_date = _date.today()
-                cal = _get_trade_date_list()
-                if cal:
-                    import bisect
-                    # count trading days from today (inclusive of today if trading) to nrd (exclusive)
-                    today_idx = bisect.bisect_left(cal, today_date)
-                    nrd_idx   = bisect.bisect_left(cal, nrd)
-                    days_until_rb = max(0, nrd_idx - today_idx)
-                else:
-                    days_until_rb = max(0, (nrd - today_date).days)
+        last_rb_raw = account["last_rebalance_date"]
+        last_rb_date = (
+            last_rb_raw if isinstance(last_rb_raw, _date)
+            else _date.fromisoformat(str(last_rb_raw))
+        )
+        nrd = _next_rebalance_date(last_rb_date, hold_days_val)
+        if nrd:
+            next_rb_date = str(nrd)
+            cal = _get_trade_date_list()
+            if cal:
+                # 距今交易日数：今天若是交易日则计 0；否则计到下一个交易日
+                today_idx = _bisect_left(cal, _date.today())
+                nrd_idx   = _bisect_left(cal, nrd)
+                days_until_rb = max(0, nrd_idx - today_idx)
+            else:
+                days_until_rb = max(0, (nrd - _date.today()).days)
 
     return {
         "account": _json_safe([account])[0] if account else None,

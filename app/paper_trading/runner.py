@@ -75,19 +75,6 @@ def _latest_trade_date() -> Optional[_Date]:
     return row["td"] if row and row["td"] else None
 
 
-def _previous_trade_date(before: _Date) -> Optional[_Date]:
-    """指定日期之前最近一个 market_cap 完整的交易日。"""
-    conn = _get_pool()
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT MAX(trade_date) AS td FROM stock_kline "
-            "WHERE trade_date < %s AND market_cap IS NOT NULL",
-            (before,),
-        )
-        row = cur.fetchone()
-    return row["td"] if row and row["td"] else None
-
-
 def _trading_dates_after(after: _Date) -> List[_Date]:
     """大于指定日期、有 market_cap 的所有交易日，升序返回。"""
     conn = _get_pool()
@@ -311,27 +298,6 @@ def _get_index_close(index_code: str, trade_date: _Date) -> Optional[float]:
     return float(row["close"]) if row and row["close"] is not None else None
 
 
-def _get_first_index_close(index_code: str) -> Optional[float]:
-    """模拟账户首日的指数收盘 — 用作基准累计收益的起点。"""
-    conn = _get_pool()
-    if conn is None:
-        return None
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT close FROM index_daily
-            WHERE index_code=%s
-              AND trade_date = (SELECT MIN(trade_date) FROM paper_equity_daily)
-            """,
-            (index_code,),
-        )
-        row = cur.fetchone()
-        if row and row["close"] is not None:
-            return float(row["close"])
-        # 第一次跑时 paper_equity_daily 为空，回退到 today 的前一天指数收盘
-        return None
-
-
 # ── 主流程 ───────────────────────────────────────────────────────────────────
 
 def run_once(
@@ -542,8 +508,12 @@ def run_once(
     else:
         rebalance_counter += 1
         # 非调仓日，把剩余持仓作为 "持有" 写入日志方便追踪
+        # 一次性补齐缺失的当日价格（day_prices 在止损后可能少了几只）
+        missing = [c for c in holdings if c not in day_prices]
+        if missing:
+            day_prices.update(_get_day_prices(missing, trade_date))
         for code, h in holdings.items():
-            px = day_prices.get(code) or _get_day_prices([code], trade_date).get(code)
+            px = day_prices.get(code)
             if not px:
                 continue
             positions_log.append({
@@ -569,19 +539,18 @@ def run_once(
     total_value = cash + pos_value
     cum_return = (total_value - initial_capital) / initial_capital
 
-    # ── 步骤 5: 基准（上证综指）────────────────────────────────────────────
+    # ── 步骤 5: 基准（上证综指）+ 日收益率 ─────────────────────────────────
+    # 合并为单次 cursor，少 3 个 RTT
     bm_close = _get_index_close(BENCHMARK_INDEX, trade_date)
-
-    # 决定 bm 的"起点"：第一次跑时用今天作为起点（累计收益 = 0）
     conn = _get_pool()
     with conn.cursor() as cur:
+        # 5a. 基准起点：第一次跑时用今天作为起点（累计收益 = 0）
         cur.execute("SELECT MIN(trade_date) AS d FROM paper_equity_daily")
         first_row = cur.fetchone()
-    first_date = first_row["d"] if first_row else None
+        first_date = first_row["d"] if first_row else None
 
-    bm_first_close = None
-    if first_date:
-        with conn.cursor() as cur:
+        bm_first_close = None
+        if first_date:
             cur.execute(
                 "SELECT close FROM index_daily WHERE index_code=%s AND trade_date=%s",
                 (BENCHMARK_INDEX, first_date),
@@ -590,19 +559,16 @@ def run_once(
             if r and r["close"] is not None:
                 bm_first_close = float(r["close"])
 
-    if bm_first_close and bm_close:
-        bm_cum = (bm_close - bm_first_close) / bm_first_close
-    else:
-        bm_cum = 0.0
-
-    # 日收益率：用昨日权益
-    with conn.cursor() as cur:
+        # 5b. 昨日权益 → 日收益率
         cur.execute(
             "SELECT total_value FROM paper_equity_daily "
             "WHERE trade_date < %s ORDER BY trade_date DESC LIMIT 1",
             (trade_date,),
         )
         prev = cur.fetchone()
+
+    bm_cum = ((bm_close - bm_first_close) / bm_first_close
+              if bm_first_close and bm_close else 0.0)
     daily_ret = ((total_value - float(prev["total_value"])) / float(prev["total_value"])
                  if prev and float(prev["total_value"]) > 0 else 0.0)
 
