@@ -65,7 +65,8 @@ DDL_STATEMENTS = [
         cum_return      DECIMAL(10,6),
         status          VARCHAR(16)   NOT NULL DEFAULT 'success',
         error_msg       TEXT,
-        notes           TEXT,
+        notes           TEXT          COMMENT '人类可读摘要（旧字段，前端兜底显示）',
+        notes_struct    JSON          COMMENT '结构化摘要：{buy:[],sell:[],stop_loss:[],reason:""}',
         created_at      DATETIME      DEFAULT CURRENT_TIMESTAMP,
         UNIQUE KEY uq_run_date (run_date)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='每日运行记录'
@@ -116,30 +117,32 @@ def ensure_tables() -> None:
     with conn.cursor() as cur:
         for sql in DDL_STATEMENTS:
             cur.execute(sql)
-    # ── 增量迁移：给旧版 paper_signal_position 补 buy_price / commission / pnl / pnl_pct ──
-    _migrate_position_columns(conn)
-    logger.info("paper_trading 表已就绪")
-
-
-def _migrate_position_columns(conn) -> None:
-    """幂等地给 paper_signal_position 补充盈亏相关列（旧库升级用）。"""
-    new_cols = [
+    # ── 增量迁移：旧库补字段（幂等） ──────────────────────────────────────────
+    _migrate_table_columns(conn, "paper_signal_position", [
         ("buy_price",  "DECIMAL(10,3)  COMMENT '买入均价（卖出行填写）'"),
         ("commission", "DECIMAL(10,2)  COMMENT '本笔手续费（佣金+印花税）'"),
         ("pnl",        "DECIMAL(18,2)  COMMENT '本笔实现盈亏（扣手续费后）'"),
         ("pnl_pct",    "DECIMAL(10,6)  COMMENT '本笔实现收益率'"),
-    ]
+    ])
+    _migrate_table_columns(conn, "paper_signal_run", [
+        ("notes_struct", "JSON COMMENT '结构化摘要：{buy:[],sell:[],stop_loss:[],reason:\"\"}'"),
+    ])
+    logger.info("paper_trading 表已就绪")
+
+
+def _migrate_table_columns(conn, table: str, columns: List[tuple]) -> None:
+    """幂等给指定表补充列；新库 DDL_STATEMENTS 里已有则跳过，旧库执行 ALTER。"""
     with conn.cursor() as cur:
         cur.execute(
             "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS "
-            "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='paper_signal_position'"
+            "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=%s",
+            (table,),
         )
         existing = {r["COLUMN_NAME"] for r in cur.fetchall()}
-        for col_name, col_def in new_cols:
+        for col_name, col_def in columns:
             if col_name not in existing:
-                cur.execute(
-                    f"ALTER TABLE paper_signal_position ADD COLUMN {col_name} {col_def}"
-                )
+                cur.execute(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_def}")
+                logger.info("迁移：%s 新增列 %s", table, col_name)
 
 
 # ── 账户 ─────────────────────────────────────────────────────────────────────
@@ -284,6 +287,10 @@ def remove_holding(code: str) -> None:
 # ── 运行记录 / 持仓明细 / 净值 ───────────────────────────────────────────────
 
 def insert_run(row: Dict[str, Any]) -> int:
+    # 防御性默认：旧调用方可能没传 notes_struct
+    row = {**row}
+    row.setdefault("notes_struct", None)
+
     conn = _get_pool()
     conn.ping(reconnect=True)
     with conn.cursor() as cur:
@@ -292,11 +299,12 @@ def insert_run(row: Dict[str, Any]) -> int:
             INSERT INTO paper_signal_run
                 (run_date, strategy, params, universe_size, selected_count,
                  is_rebalance, stop_loss_count, capital, total_value,
-                 position_value, cash, cum_return, status, error_msg, notes)
+                 position_value, cash, cum_return, status, error_msg, notes, notes_struct)
             VALUES (%(run_date)s, %(strategy)s, %(params)s, %(universe_size)s,
                     %(selected_count)s, %(is_rebalance)s, %(stop_loss_count)s,
                     %(capital)s, %(total_value)s, %(position_value)s,
-                    %(cash)s, %(cum_return)s, %(status)s, %(error_msg)s, %(notes)s)
+                    %(cash)s, %(cum_return)s, %(status)s, %(error_msg)s,
+                    %(notes)s, %(notes_struct)s)
             ON DUPLICATE KEY UPDATE
                 params=VALUES(params),
                 universe_size=VALUES(universe_size),
@@ -309,7 +317,8 @@ def insert_run(row: Dict[str, Any]) -> int:
                 cum_return=VALUES(cum_return),
                 status=VALUES(status),
                 error_msg=VALUES(error_msg),
-                notes=VALUES(notes)
+                notes=VALUES(notes),
+                notes_struct=VALUES(notes_struct)
             """,
             row,
         )
@@ -393,7 +402,7 @@ def list_runs(limit: int = 30) -> List[Dict[str, Any]]:
             SELECT run_id, run_date, strategy, universe_size, selected_count,
                    is_rebalance, stop_loss_count, capital, total_value,
                    position_value, cash, cum_return, status, error_msg, notes,
-                   created_at
+                   notes_struct, created_at
             FROM paper_signal_run
             ORDER BY run_date DESC
             LIMIT %s

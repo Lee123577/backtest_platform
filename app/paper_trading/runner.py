@@ -603,6 +603,7 @@ def run_once(
             "status": "success",
             "error_msg": None,
             "notes": _build_notes(is_rebalance, result),
+            "notes_struct": json.dumps(_build_notes_struct(is_rebalance, result), ensure_ascii=False),
         })
 
         db.insert_positions(run_id, trade_date, positions_log)
@@ -679,6 +680,7 @@ def run_catch_up(
 
 
 def _build_notes(is_rebalance: bool, r: RunResult) -> str:
+    """人类可读的摘要（保留旧字段供前端兜底显示）。"""
     parts = []
     if is_rebalance:
         # 纯调仓卖出（不含止损卖出）
@@ -694,3 +696,30 @@ def _build_notes(is_rebalance: bool, r: RunResult) -> str:
     if not parts:
         parts.append("持有日，无交易")
     return "；".join(parts)
+
+
+def _build_notes_struct(is_rebalance: bool, r: RunResult) -> dict:
+    """
+    结构化摘要 —— 前端直接读字段，不再用正则解析字符串。
+    schema:
+      {
+        "is_rebalance": bool,
+        "buy":       List[str],   # 调仓日买入的代码
+        "sell":      List[str],   # 调仓日卖出的代码（不含止损）
+        "stop_loss": List[str],   # 止损卖出的代码
+        "reason":    str          # 备注/原因（如 "无可选标的"）
+      }
+    """
+    rebal_sold = [c for c in r.sold_codes if c not in r.stop_loss_codes]
+    reason = ""
+    if is_rebalance and not r.selected:
+        reason = "无可选标的，空仓"
+    elif not is_rebalance and not r.stop_loss_codes:
+        reason = "持有日，无交易"
+    return {
+        "is_rebalance": bool(is_rebalance),
+        "buy":       list(r.selected) if is_rebalance else [],
+        "sell":      rebal_sold,
+        "stop_loss": list(r.stop_loss_codes),
+        "reason":    reason,
+    }

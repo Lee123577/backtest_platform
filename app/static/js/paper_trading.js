@@ -275,6 +275,39 @@ function renderRuns(runs) {
     wrap.innerHTML = '<div class="no-data">无符合条件的记录</div>';
     return;
   }
+  // 把 notes_struct（结构化）或 notes 字符串渲染为带 badge 的 HTML
+  function renderNotes(r) {
+    if (r.status === 'error') {
+      return `<span style="color:#cf222e">${escapeHtml(r.error_msg || '')}</span>`;
+    }
+    // 优先用结构化字段（新版 runner 写入）
+    let ns = r.notes_struct;
+    if (typeof ns === 'string') {
+      try { ns = JSON.parse(ns); } catch { ns = null; }
+    }
+    if (ns && typeof ns === 'object') {
+      const parts = [];
+      if (ns.sell && ns.sell.length)
+        parts.push(`<span class="note-sell">▼卖出</span> <span class="note-codes">${ns.sell.join(',')}</span>`);
+      if (ns.buy && ns.buy.length)
+        parts.push(`<span class="note-buy">▲买入</span> <span class="note-codes">${ns.buy.join(',')}</span>`);
+      if (ns.stop_loss && ns.stop_loss.length)
+        parts.push(`<span class="tag-stop" style="font-size:11px">⚠止损</span> <span class="note-codes">${ns.stop_loss.join(',')}</span>`);
+      if (ns.reason) parts.push(`<span style="color:#57606a">${escapeHtml(ns.reason)}</span>`);
+      return parts.join('　') || '<span style="color:#57606a">持有日，无交易</span>';
+    }
+    // 兜底：旧字符串 + 正则上色（兼容历史数据）
+    const raw = r.notes || '';
+    return raw
+      .replace(/买入\s+([^；]+)/g, (_, c) =>
+        `<span class="note-buy">▲买入</span> <span class="note-codes">${c.trim()}</span>`)
+      .replace(/卖出\s+([^；]+)/g, (_, c) =>
+        `<span class="note-sell">▼卖出</span> <span class="note-codes">${c.trim()}</span>`)
+      .replace(/止损\s+([^；]+)/g, (_, c) =>
+        `<span class="tag-stop" style="font-size:11px">⚠止损</span> <span class="note-codes">${c.trim()}</span>`)
+      .replace(/；/g, '　');
+  }
+
   const rows = runs.map(r => {
     const tag = r.status === 'error'
       ? '<span class="tag-error">错误</span>'
@@ -287,19 +320,6 @@ function renderRuns(runs) {
     const crCls = cr === null || cr === undefined ? '' :
                   (Number(cr) >= 0 ? 'val-pos' : 'val-neg');
 
-    // 把 notes 字符串里的"买入/卖出/止损"关键字用彩色 badge 高亮
-    function fmtNotes(raw) {
-      if (!raw) return '';
-      return raw
-        .replace(/买入\s+([^；]+)/g, (_, codes) =>
-          `<span class="note-buy">▲买入</span> <span class="note-codes">${codes.trim()}</span>`)
-        .replace(/卖出\s+([^；]+)/g, (_, codes) =>
-          `<span class="note-sell">▼卖出</span> <span class="note-codes">${codes.trim()}</span>`)
-        .replace(/止损\s+([^；]+)/g, (_, codes) =>
-          `<span class="tag-stop" style="font-size:11px">⚠止损</span> <span class="note-codes">${codes.trim()}</span>`)
-        .replace(/；/g, '　');
-    }
-
     return `
       <tr class="row-link" onclick="showRunDetail(${r.run_id})">
         <td>${r.run_date}</td>
@@ -310,9 +330,7 @@ function renderRuns(runs) {
         <td>¥${fmtMoney(r.cash)}</td>
         <td class="${crCls}">${fmtPct(cr)}</td>
         <td style="font-size:12px;max-width:300px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-          ${r.status === 'error'
-            ? `<span style="color:#cf222e">${escapeHtml(r.error_msg || '')}</span>`
-            : fmtNotes(r.notes)}
+          ${renderNotes(r)}
         </td>
       </tr>`;
   }).join('');
