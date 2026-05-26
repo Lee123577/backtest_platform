@@ -127,19 +127,48 @@ def _load_universe_snapshot(
       - 非 ST
       - 当日有成交（volume > 0），剔除停牌
       - 当日非涨停（pct_change < 9.9 / 19.9）
+
+    降级：若该交易日 stock_kline.market_cap 全为 NULL（daily_update 估值快照
+    未成功），自动改用 market_universe_snapshot 里最近一次快照的市值做候选池过滤，
+    价格/成交量仍取当日 stock_kline 真实数据。
     """
     conn = _get_pool()
     if conn is None:
         return []
     conn.ping(reconnect=True)
 
-    # 注意 cap_min/cap_max 单位为亿元，stock_kline.market_cap 同样为亿元
+    def _apply_filters(rows_in, cap_lookup: Optional[Dict[str, float]] = None):
+        """共用过滤逻辑；cap_lookup 不为 None 时用它替代 row["market_cap"]。"""
+        out: List[Dict[str, Any]] = []
+        for r in rows_in:
+            code = str(r["code"])
+            if not _is_allowed_board(code, allow_boards):
+                continue
+            name = (r.get("name") or "").strip()
+            if r.get("is_st") or _is_st_name(name):
+                continue
+            pct = r.get("pct_change")
+            if pct is not None and float(pct) >= 9.8:
+                continue
+            mc = (
+                cap_lookup[code]
+                if cap_lookup and code in cap_lookup
+                else (float(r["market_cap"]) if r.get("market_cap") is not None else 0.0)
+            )
+            out.append({
+                "code": code,
+                "name": name,
+                "price": float(r["price"]) if r["price"] is not None else 0.0,
+                "market_cap": mc,
+            })
+        return out
+
+    # ── Primary: stock_kline with market_cap filter ──────────────────────────
     with conn.cursor() as cur:
         cur.execute(
             """
             SELECT k.code, i.name, k.close AS price, k.open, k.high, k.low,
-                   k.market_cap, k.volume, k.pct_change,
-                   i.is_st
+                   k.market_cap, k.volume, k.pct_change, i.is_st
             FROM stock_kline k
             JOIN stock_info i ON i.code = k.code
             WHERE k.trade_date = %s
@@ -150,26 +179,68 @@ def _load_universe_snapshot(
         )
         rows = cur.fetchall()
 
-    out: List[Dict[str, Any]] = []
-    for r in rows:
-        code = str(r["code"])
-        if not _is_allowed_board(code, allow_boards):
-            continue
-        name = (r.get("name") or "").strip()
-        # 双重 ST 过滤：is_st 字段 + 名称前缀（stock_info.is_st 未及时维护时的兜底）
-        if r.get("is_st") or _is_st_name(name):
-            continue
-        # 涨停过滤：主板 9.9%，创业/科创 19.9% — 这里都用 9.9 保守一点
-        pct = r.get("pct_change")
-        if pct is not None and float(pct) >= 9.8:
-            continue
-        out.append({
-            "code": code,
-            "name": name,
-            "price": float(r["price"]) if r["price"] is not None else 0.0,
-            "market_cap": float(r["market_cap"]) if r["market_cap"] is not None else 0.0,
-        })
-    return out
+    if rows:
+        return _apply_filters(rows)
+
+    # ── Fallback: market_cap 全为 NULL —— 从 market_universe_snapshot 取市值 ──
+    # 检查是否只是 market_cap 缺失（有成交量说明当日 K 线数据已导入）
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) AS cnt FROM stock_kline "
+            "WHERE trade_date=%s AND volume>0",
+            (trade_date,),
+        )
+        has_kline = (cur.fetchone() or {}).get("cnt", 0) > 0
+
+    if not has_kline:
+        return []   # 当天根本没有 K 线数据，无法降级
+
+    logger.warning(
+        "[%s] stock_kline.market_cap 全为 NULL，改用 market_universe_snapshot 过滤市值",
+        trade_date,
+    )
+    try:
+        from ..data.market_data import _read_latest_universe_from_db
+        snap_df = _read_latest_universe_from_db()
+        if snap_df is None or snap_df.empty:
+            logger.warning("[%s] market_universe_snapshot 也为空，无法降级，返回空候选池", trade_date)
+            return []
+
+        # 用快照表的市值做区间过滤，取出符合条件的代码集合
+        in_range = snap_df[
+            (snap_df["market_cap"] >= cap_min) & (snap_df["market_cap"] <= cap_max)
+        ]
+        if in_range.empty:
+            return []
+
+        cap_lookup = dict(zip(in_range["code"].astype(str), in_range["market_cap"].astype(float)))
+        codes = list(cap_lookup.keys())
+        placeholders = ",".join(["%s"] * len(codes))
+
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT k.code, i.name, k.close AS price, k.open, k.high, k.low,
+                       k.market_cap, k.volume, k.pct_change, i.is_st
+                FROM stock_kline k
+                JOIN stock_info i ON i.code = k.code
+                WHERE k.trade_date = %s
+                  AND k.code IN ({placeholders})
+                  AND k.volume > 0
+                """,
+                (trade_date, *codes),
+            )
+            fallback_rows = cur.fetchall()
+
+        result = _apply_filters(fallback_rows, cap_lookup=cap_lookup)
+        logger.info(
+            "[%s] market_universe_snapshot 降级成功，候选池 %d 只",
+            trade_date, len(result),
+        )
+        return result
+    except Exception as exc:
+        logger.error("[%s] market_universe_snapshot 降级失败: %s", trade_date, exc)
+        return []
 
 
 def _is_st_name(name: str) -> bool:

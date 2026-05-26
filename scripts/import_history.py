@@ -172,6 +172,19 @@ def init_tables(conn):
             north_total_hold  DECIMAL(16,2),
             south_net_inflow  DECIMAL(12,2)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='北向资金每日流向'""",
+
+        # market_universe_snapshot — market_data.py 的持久化快照缓存（替代 CSV）
+        # 每次成功获取全市场行情均写入此表，确保离线/API故障时仍可回测
+        """CREATE TABLE IF NOT EXISTS market_universe_snapshot (
+            snap_date  DATE          NOT NULL,
+            code       CHAR(6)       NOT NULL,
+            name       VARCHAR(20),
+            price      DECIMAL(10,3),
+            market_cap DECIMAL(18,4) NOT NULL,
+            PRIMARY KEY (snap_date, code),
+            INDEX idx_snap_date (snap_date)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+          COMMENT='全市场股票池日快照（market_data.py 自动维护，兜底缓存）'""",
     ]
     with conn.cursor() as cur:
         for ddl in ddl_list:

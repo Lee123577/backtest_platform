@@ -1,11 +1,16 @@
 """
 Market-wide data utilities for portfolio strategies.
 
-Connection strategy (four-attempt fallback chain):
-  Attempt 1 — data.eastmoney.com xuangu API (stock screener, reliable, no push2)
-  Attempt 2 — akshare without env-var proxy  (most reliable for non-blocked envs)
-  Attempt 3 — akshare with system proxy      (covers must-use-proxy environments)
-  Attempt 4 — direct eastmoney push API via curl_cffi Chrome impersonation (last resort)
+Connection strategy (five-attempt fallback chain):
+  Attempt 0   — MySQL stock_kline（latest trading day with market_cap）
+  Attempt 0.5 — market_universe_snapshot table（persistent DB cache, replaces CSV）
+  Attempt 1   — data.eastmoney.com xuangu API (stock screener, reliable, no push2)
+  Attempt 2   — akshare without env-var proxy  (most reliable for non-blocked envs)
+  Attempt 3   — akshare with system proxy      (covers must-use-proxy environments)
+  Attempt 4   — direct eastmoney push API via curl_cffi Chrome impersonation (last resort)
+
+Each successful fetch (Attempt 0/1/2/3/4) is persisted into market_universe_snapshot,
+so future calls always have a fallback even when all live sources are unavailable.
 """
 import logging
 import os
@@ -13,19 +18,16 @@ import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date as Date
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import akshare as ak
 import pandas as pd
 import requests as _req
 
-from .data_loader import CACHE_DIR, _get_pool, get_kline_data
-from .feed import atomic_to_csv, get_feed
+from .data_loader import _get_pool, get_kline_data
+from .feed import get_feed
 
 logger = logging.getLogger(__name__)
-
-SNAP_CACHE = CACHE_DIR / f"universe_snapshot_{Date.today().strftime('%Y%m%d')}.csv"
 
 # Candidate push servers — used only for fallback methods
 _EM_PUSH_HOSTS = [
@@ -285,6 +287,151 @@ def _query_universe_from_db() -> pd.DataFrame | None:
     return df
 
 
+# ── market_universe_snapshot 表（DB 持久化快照，取代 CSV 缓存）──────────────
+
+_SNAP_TABLE_DDL = """
+CREATE TABLE IF NOT EXISTS market_universe_snapshot (
+    snap_date  DATE          NOT NULL,
+    code       CHAR(6)       NOT NULL,
+    name       VARCHAR(20),
+    price      DECIMAL(10,3),
+    market_cap DECIMAL(18,4) NOT NULL,
+    PRIMARY KEY (snap_date, code),
+    INDEX idx_snap_date (snap_date)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  COMMENT='全市场股票池日快照（market_data.py 自动维护，兜底用）'
+"""
+
+_snap_table_ready: bool = False
+
+
+def _ensure_snap_table() -> bool:
+    """懒建表；失败时静默返回 False，不影响主流程。"""
+    global _snap_table_ready
+    if _snap_table_ready:
+        return True
+    try:
+        conn = _get_pool()
+        if conn is None:
+            return False
+        conn.ping(reconnect=True)
+        with conn.cursor() as cur:
+            cur.execute(_SNAP_TABLE_DDL)
+        _snap_table_ready = True
+        return True
+    except Exception as exc:
+        logger.warning("建表 market_universe_snapshot 失败: %s", exc)
+        return False
+
+
+def _write_universe_to_db(df: pd.DataFrame) -> bool:
+    """
+    把全市场快照写入 market_universe_snapshot（以今天为 snap_date）。
+    失败时静默返回 False，不影响调用方返回数据。
+    同时清理 7 天前的旧快照，防止表无限增大。
+    """
+    if not _ensure_snap_table():
+        return False
+    try:
+        conn = _get_pool()
+        if conn is None:
+            return False
+        conn.ping(reconnect=True)
+        snap_date = Date.today()
+        rows = []
+        for _, r in df.iterrows():
+            mc = r.get("market_cap")
+            if mc is None or (isinstance(mc, float) and pd.isna(mc)):
+                continue
+            px = r.get("price")
+            if isinstance(px, float) and pd.isna(px):
+                px = None
+            rows.append((
+                snap_date,
+                str(r["code"]).zfill(6),
+                str(r.get("name") or "")[:20],
+                float(px) if px is not None else None,
+                float(mc),
+            ))
+        if not rows:
+            return False
+        with conn.cursor() as cur:
+            cur.executemany(
+                """
+                INSERT INTO market_universe_snapshot (snap_date, code, name, price, market_cap)
+                VALUES (%s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    name=VALUES(name), price=VALUES(price), market_cap=VALUES(market_cap)
+                """,
+                rows,
+            )
+            # 保留最近 7 天快照，防止长期运行后表撑大
+            cur.execute(
+                "DELETE FROM market_universe_snapshot "
+                "WHERE snap_date < DATE_SUB(%s, INTERVAL 7 DAY)",
+                (snap_date,),
+            )
+        logger.info(
+            "✓ market_universe_snapshot 已写入 %d 只股票 (snap_date=%s)",
+            len(rows), snap_date,
+        )
+        return True
+    except Exception as exc:
+        logger.warning("写入 market_universe_snapshot 失败: %s", exc)
+        return False
+
+
+def _read_latest_universe_from_db() -> "pd.DataFrame | None":
+    """
+    从 market_universe_snapshot 读取最近一次快照。
+    不限定今天 —— 即使上次写入是几天前也能用，确保"任何时候都有数据"。
+    表为空或 DB 不可用时返回 None。
+    """
+    if not _ensure_snap_table():
+        return None
+    try:
+        conn = _get_pool()
+        if conn is None:
+            return None
+        conn.ping(reconnect=True)
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT MAX(snap_date) AS d FROM market_universe_snapshot"
+            )
+            row = cur.fetchone()
+        snap_date = row and row.get("d")
+        if snap_date is None:
+            return None
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT code, name, price, market_cap
+                FROM market_universe_snapshot
+                WHERE snap_date = %s AND market_cap IS NOT NULL
+                """,
+                (snap_date,),
+            )
+            rows = cur.fetchall()
+        if not rows:
+            return None
+        df = pd.DataFrame(rows)
+        df["code"] = df["code"].astype(str).str.zfill(6)
+        for col in ("price", "market_cap"):
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        df = df.dropna(subset=["market_cap"])
+        if df.empty:
+            return None
+        logger.info(
+            "market_universe_snapshot 读取 %d 只股票 (snap_date=%s)",
+            len(df), snap_date,
+        )
+        return df
+    except Exception as exc:
+        logger.warning("读取 market_universe_snapshot 失败: %s", exc)
+        return None
+
+
 def _has_valid_market_cap(df: pd.DataFrame | None) -> bool:
     """快照是否含至少一行非 NaN market_cap — 不满足则不该被缓存/返回。"""
     if df is None or df.empty or "market_cap" not in df.columns:
@@ -295,49 +442,49 @@ def _has_valid_market_cap(df: pd.DataFrame | None) -> bool:
 def get_universe_snapshot() -> pd.DataFrame:
     """
     All A-share stocks with current price and total market cap (亿元).
-    Cached once per calendar day.
 
-    Five-attempt fallback chain (database first, then remote APIs):
-      0. MySQL stock_kline + stock_info — latest trading day snapshot
-      1. data.eastmoney.com xuangu API — different host, bypasses push2 blocks
-      2. akshare + proxy disabled      — urllib + requests.utils both patched
-      3. akshare + system proxy        — for environments that legitimately need proxy
-      4. curl_cffi + Chrome TLS        — last-resort bot-detection bypass
+    Five-attempt fallback chain（优先级从高到低）：
+      0   — MySQL stock_kline（最近一个含 market_cap 的交易日快照）
+      0.5 — market_universe_snapshot 表（持久化 DB 缓存，取代 CSV）
+      1   — data.eastmoney.com xuangu 选股器
+      2   — akshare 禁代理
+      3   — akshare 系统代理
+      4   — curl_cffi Chrome TLS（子进程沙箱）
+
+    每次从 Attempt 0/1/2/3/4 成功拿到有效数据，都会同步写入
+    market_universe_snapshot，确保"下次 Attempt 0 失败时也能从 0.5 拿到"。
+    这样只要历史上任意一次成功过，后续无论是否有网络/market_cap，回测都不会
+    报"未找到市值 X~Y 亿元的股票"。
     """
     errors: list = []
 
-    # ── Attempt 0: 查询数据库（stock_kline + stock_info）─────────────────────────
-    # 优先走数据库，确保已导入历史数据后不依赖外部API和本地缓存
+    # ── Attempt 0: stock_kline（最近一个含 market_cap 的交易日）────────────────
     try:
         df = _query_universe_from_db()
         if _has_valid_market_cap(df):
-            atomic_to_csv(df, SNAP_CACHE)
+            _write_universe_to_db(df)   # 同步持久化到快照表
             return df
         if df is not None and not df.empty:
-            errors.append("[方式0 数据库] 返回数据 market_cap 全为空，降级到外部 API")
+            errors.append("[方式0 stock_kline] market_cap 全为空，降级")
         else:
-            errors.append("[方式0 数据库] 数据为空")
+            errors.append("[方式0 stock_kline] 数据为空或 DB 不可用")
     except Exception as exc:
-        errors.append(f"[方式0 数据库] {exc}")
+        errors.append(f"[方式0 stock_kline] {exc}")
 
-    # ── Attempt 0.5: 本地CSV缓存（同样守门：脏缓存自动丢弃）─────────────────────
-    if SNAP_CACHE.exists():
-        try:
-            cached = pd.read_csv(SNAP_CACHE, dtype={"code": str})
-            if _has_valid_market_cap(cached):
-                return cached
-            errors.append("[方式0.5 本地缓存] CSV 中 market_cap 全为空，删除后重抓")
-            try:
-                SNAP_CACHE.unlink()  # 主动清掉脏缓存，避免下次再读到
-            except Exception:
-                pass
-        except Exception as exc:
-            errors.append(f"[方式0.5 本地缓存] 读取失败：{exc}")
+    # ── Attempt 0.5: market_universe_snapshot 持久化快照（替代 CSV 缓存）────────
+    # 不限定"今天"— 任何历史快照都能用，确保离线/周末/API 故障时仍可回测
+    try:
+        df = _read_latest_universe_from_db()
+        if _has_valid_market_cap(df):
+            return df
+        errors.append("[方式0.5 DB快照] 快照表为空，继续降级到外部 API")
+    except Exception as exc:
+        errors.append(f"[方式0.5 DB快照] {exc}")
 
     # ── Attempt 1: xuangu API (data.eastmoney.com, reliable) ──────────────────
     try:
         df = _fetch_via_xuangu()
-        atomic_to_csv(df, SNAP_CACHE)
+        _write_universe_to_db(df)       # 写入快照表，下次 0.5 直接命中
         return df
     except Exception as exc:
         errors.append(f"[方式1 xuangu选股器] {exc}")
@@ -347,7 +494,7 @@ def get_universe_snapshot() -> pd.DataFrame:
     try:
         raw = _call_no_proxy(ak.stock_zh_a_spot_em)
         df = _parse_akshare_raw(raw)
-        atomic_to_csv(df, SNAP_CACHE)
+        _write_universe_to_db(df)
         return df
     except Exception as exc:
         errors.append(f"[方式2 akshare无代理] {exc}")
@@ -357,7 +504,7 @@ def get_universe_snapshot() -> pd.DataFrame:
     try:
         raw = ak.stock_zh_a_spot_em()
         df = _parse_akshare_raw(raw)
-        atomic_to_csv(df, SNAP_CACHE)
+        _write_universe_to_db(df)
         return df
     except Exception as exc:
         errors.append(f"[方式3 akshare系统代理] {exc}")
@@ -382,7 +529,7 @@ def get_universe_snapshot() -> pd.DataFrame:
             _sp.run([_sys.executable, "-c", _scr], capture_output=True, timeout=60)
             obj = _pl.load(open(_tmp.name, "rb"))
             if isinstance(obj, pd.DataFrame) and not obj.empty:
-                atomic_to_csv(obj, SNAP_CACHE)
+                _write_universe_to_db(obj)
                 return obj
             elif isinstance(obj, Exception):
                 errors.append(f"[方式4 curl_cffi] {obj}")
@@ -396,12 +543,13 @@ def get_universe_snapshot() -> pd.DataFrame:
 
     detail = "\n".join(f"  {e}" for e in errors)
     raise ConnectionError(
-        f"获取全市场行情数据失败（已尝试4种方式）：\n{detail}\n\n"
+        f"获取全市场行情数据失败（已尝试 5 种方式）：\n{detail}\n\n"
         f"排查建议：\n"
-        f"  1. 确认东方财富可访问：curl https://data.eastmoney.com\n"
-        f"  2. 如使用代理软件（Clash/V2Ray），尝试暂时关闭或开启TUN模式\n"
-        f"  3. 升级 akshare：pip install akshare --upgrade\n"
-        f"  4. 升级 curl_cffi：pip install curl_cffi --upgrade"
+        f"  1. 如果曾经成功过：确认数据库可用（market_universe_snapshot 里有历史快照）\n"
+        f"  2. 首次运行：确认东方财富可访问：curl https://data.eastmoney.com\n"
+        f"  3. 如使用代理软件（Clash/V2Ray），尝试暂时关闭或开启TUN模式\n"
+        f"  4. 升级 akshare：pip install akshare --upgrade\n"
+        f"  5. 升级 curl_cffi：pip install curl_cffi --upgrade"
     )
 
 
