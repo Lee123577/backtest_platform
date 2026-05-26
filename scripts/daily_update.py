@@ -731,33 +731,8 @@ def update_index_constituent(conn, trade_date: str):
 
 # ── 主入口 ───────────────────────────────────────────────────────────────────
 
-# 交易日历缓存（进程内一次性加载）
-_TRADE_DATE_SET: set | None = None
-
-
-def _load_trade_calendar() -> set:
-    """从 akshare 加载 A 股交易日历，缓存到进程内变量。失败时返回空集合（回退到工作日判断）。"""
-    global _TRADE_DATE_SET
-    if _TRADE_DATE_SET is not None:
-        return _TRADE_DATE_SET
-    try:
-        df = ak.tool_trade_date_hist_sina()
-        col = df.columns[0]
-        _TRADE_DATE_SET = set(pd.to_datetime(df[col]).dt.date)
-        log.info(f"交易日历加载完成: 共 {len(_TRADE_DATE_SET)} 个交易日")
-    except Exception as e:
-        log.warning(f"交易日历加载失败 ({e})，退回到工作日判断（节假日可能被多余处理，无副作用）")
-        _TRADE_DATE_SET = set()
-    return _TRADE_DATE_SET
-
-
-def is_trading_day(target_date: date) -> bool:
-    """判断是否为 A 股交易日（优先使用 akshare 官方日历，含节假日调整）。"""
-    cal = _load_trade_calendar()
-    if cal:
-        return target_date in cal
-    # 兜底：周一到周五
-    return target_date.weekday() < 5
+# 交易日历从共享模块导入（app/data/calendar.py），原 _load_trade_calendar 已删除
+from app.data.calendar import is_trading_day  # noqa: E402
 
 
 def _find_missing_kline_dates(conn, today: date, lookback_days: int = 30) -> list[date]:

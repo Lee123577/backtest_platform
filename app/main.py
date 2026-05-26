@@ -1,6 +1,5 @@
 import asyncio
 import json
-from bisect import bisect_left as _bisect_left, bisect_right as _bisect_right
 from datetime import date as _date
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -26,6 +25,7 @@ def _validate_date_range(start: str, end: str) -> None:
     if s.year < 1990:
         raise HTTPException(400, "开始日期不能早于 1990 年")
 
+from .data.calendar import count_trading_days, next_n_trading_days
 from .data.data_loader import get_kline_data, get_stock_name, normalize_code
 from .data.feed import CACHE_DIR
 from .data.market_data import (
@@ -53,46 +53,6 @@ from .strategies.registry import (
 app = FastAPI(title="A股量化回测平台", version="1.2.0")
 
 # 访问日志中间件 —— 异步写入 back_test.user_visit_log
-
-# ── 交易日历（模块级缓存，首次 API 调用时懒加载）──────────────────────────────
-_TRADE_DATE_LIST: list | None = None   # sorted list of datetime.date
-
-
-def _get_trade_date_list() -> list:
-    """返回 A 股全量交易日列表（升序 date 对象）。首次调用时加载，之后走缓存。"""
-    global _TRADE_DATE_LIST
-    if _TRADE_DATE_LIST is not None:
-        return _TRADE_DATE_LIST
-    try:
-        import akshare as ak
-        df = ak.tool_trade_date_hist_sina()
-        col = df.columns[0]
-        _TRADE_DATE_LIST = sorted(pd.to_datetime(df[col]).dt.date.tolist())
-    except Exception:
-        _TRADE_DATE_LIST = []
-    return _TRADE_DATE_LIST
-
-
-def _next_rebalance_date(last_rebalance: "_date", hold_days: int) -> "_date | None":
-    """
-    从上次调仓日向后数 hold_days 个交易日，返回下次调仓日。
-    例：last_rebalance=2026-05-26, hold_days=5 → 2026-06-02（跳过节假日）。
-    """
-    cal = _get_trade_date_list()
-    if not cal:
-        # 兜底：简单加工作日（忽略节假日，误差小）
-        from datetime import timedelta as _td
-        d = last_rebalance
-        count = 0
-        while count < hold_days:
-            d += _td(days=1)
-            if d.weekday() < 5:
-                count += 1
-        return d
-    # 在日历中找 last_rebalance 的位置，向后取第 hold_days 个
-    idx = _bisect_right(cal, last_rebalance)   # 第一个 > last_rebalance 的位置
-    target_idx = idx + hold_days - 1
-    return cal[target_idx] if target_idx < len(cal) else None
 from .visit_log import VisitLogMiddleware  # noqa: E402
 app.add_middleware(VisitLogMiddleware)
 
@@ -220,17 +180,10 @@ async def api_paper_account():
             last_rb_raw if isinstance(last_rb_raw, _date)
             else _date.fromisoformat(str(last_rb_raw))
         )
-        nrd = _next_rebalance_date(last_rb_date, hold_days_val)
+        nrd = next_n_trading_days(last_rb_date, hold_days_val)
         if nrd:
             next_rb_date = str(nrd)
-            cal = _get_trade_date_list()
-            if cal:
-                # 距今交易日数：今天若是交易日则计 0；否则计到下一个交易日
-                today_idx = _bisect_left(cal, _date.today())
-                nrd_idx   = _bisect_left(cal, nrd)
-                days_until_rb = max(0, nrd_idx - today_idx)
-            else:
-                days_until_rb = max(0, (nrd - _date.today()).days)
+            days_until_rb = count_trading_days(_date.today(), nrd)
 
     return {
         "account": _json_safe([account])[0] if account else None,
