@@ -31,6 +31,9 @@ ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 load_dotenv(ROOT / ".env", override=True)
 
+# 必须在 load_dotenv 之后再 import 项目模块（app.config 读 env）
+from app.data.market_data import _call_no_proxy  # noqa: E402
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -147,6 +150,114 @@ def _get_valuation_snap() -> dict:
     return snap
 
 
+_FETCH_PAD_DAYS = 10   # sina 需要前一日 close 算 pct_change，多拉 N 天做缓冲
+_EM_PROBE_THRESHOLD = 5  # 进入 update_kline 时先抽样探测 EM；全部失败则后续全走 sina
+
+
+def _sina_symbol(code: str) -> str:
+    """A 股 6 位代码 → sina 接口要求的带交易所前缀的 symbol。"""
+    if code.startswith(("6", "9")):
+        return f"sh{code}"
+    if code.startswith(("4", "8")):
+        return f"bj{code}"
+    return f"sz{code}"
+
+
+def _fetch_kline_from_em(code: str, date_nodash: str) -> "pd.DataFrame | None":
+    """
+    源 1：eastmoney `stock_zh_a_hist`（无代理）。
+    返回的列名为中文，由调用方统一映射。失败抛异常给调用方记录。
+    """
+    raw = _call_no_proxy(
+        ak.stock_zh_a_hist,
+        symbol=code, period="daily",
+        start_date=date_nodash, end_date=date_nodash,
+        adjust="qfq",
+    )
+    if raw is None or raw.empty:
+        return None
+    col_map = {
+        "日期": "date", "开盘": "open", "收盘": "close",
+        "最高": "high", "最低": "low", "成交量": "volume",
+        "成交额": "amount", "涨跌幅": "pct_change", "换手率": "turnover",
+    }
+    return raw.rename(columns=col_map)
+
+
+def _fetch_kline_from_sina(code: str, date_nodash: str) -> "pd.DataFrame | None":
+    """
+    源 2：sina `stock_zh_a_daily`（无代理，主用兜底源）。
+    sina 不返回 pct_change → 拉 _FETCH_PAD_DAYS 天历史现算；
+    sina turnover 是小数（0.0046），转成百分比对齐 eastmoney 语义。
+    """
+    from datetime import datetime, timedelta as _td
+
+    sym = _sina_symbol(code)
+    target = datetime.strptime(date_nodash, "%Y%m%d").date()
+    start = (target - _td(days=_FETCH_PAD_DAYS)).strftime("%Y%m%d")
+    raw = _call_no_proxy(
+        ak.stock_zh_a_daily,
+        symbol=sym, start_date=start, end_date=date_nodash, adjust="qfq",
+    )
+    if raw is None or raw.empty:
+        return None
+    raw = raw.copy()
+    raw["date"] = pd.to_datetime(raw["date"])
+    raw = raw.sort_values("date").reset_index(drop=True)
+    raw["pct_change"] = raw["close"].pct_change() * 100
+    raw["turnover"] = raw["turnover"] * 100  # 小数 → 百分比
+
+    target_dt = pd.to_datetime(date_nodash, format="%Y%m%d")
+    raw = raw[raw["date"] == target_dt]
+    return raw if not raw.empty else None
+
+
+def _probe_em(date_nodash: str, sample_codes: list[str]) -> bool:
+    """
+    在主循环前抽样调 EM 几只股票，全部失败则关闭 EM、全走 sina。
+    EM 整体被防火墙拦截时（最近频繁发生），避免对 5497 只逐只重试浪费 ~30 分钟。
+    """
+    ok = 0
+    for c in sample_codes:
+        try:
+            df = _fetch_kline_from_em(c, date_nodash)
+            if df is not None and not df.empty:
+                ok += 1
+        except Exception:
+            pass
+    log.info(f"EM 探测: {ok}/{len(sample_codes)} 成功")
+    return ok > 0
+
+
+def _fetch_one(code: str, date_nodash: str, em_enabled: bool) -> tuple["pd.DataFrame | None", str | None, str | None]:
+    """
+    单只股票单日数据：EM 试一次（如启用），失败立即降级 sina；sina 重试 2 次。
+    返回 (DataFrame, source_label, last_err)。
+    """
+    last_err: str | None = None
+
+    if em_enabled:
+        try:
+            df = _fetch_kline_from_em(code, date_nodash)
+            if df is not None and not df.empty:
+                return df, "em", None
+        except Exception as e:
+            last_err = f"em: {type(e).__name__}: {str(e)[:100]}"
+
+    for attempt in range(2):
+        try:
+            df = _fetch_kline_from_sina(code, date_nodash)
+            if df is not None and not df.empty:
+                return df, "sina", None
+            # sina 返回空 → 当日确实无数据（停牌/退市），不算失败
+            return None, None, None
+        except Exception as e:
+            last_err = f"sina: {type(e).__name__}: {str(e)[:100]}"
+            time.sleep(0.3 * (attempt + 1))
+
+    return None, None, last_err
+
+
 def update_kline(conn, trade_date: str):
     log.info(f"更新 stock_kline: {trade_date}")
     date_nodash = trade_date.replace("-", "")
@@ -184,52 +295,77 @@ def update_kline(conn, trade_date: str):
             pe_ttm=VALUES(pe_ttm), pb=VALUES(pb)
     """
 
+    # 在并发抓取前探测 EM 是否整体可用，避免 5000 只各试一次失败
+    # SKIP_EM=1 时直接跳过探测全走 sina —— 用于 EM 间歇性可用但探测命中
+    # 后续抓取又失败的场景（push2his 节点波动），避免每只浪费 0.5s 超时
+    if os.getenv("SKIP_EM"):
+        em_enabled = False
+        log.info(f"stock_kline {trade_date}: SKIP_EM=1，跳过 EM 探测，全走 sina")
+    else:
+        probe_sample = codes[:_EM_PROBE_THRESHOLD]
+        em_enabled = _probe_em(date_nodash, probe_sample)
+        if not em_enabled:
+            log.info(f"stock_kline {trade_date}: EM 全部失败，本次全走 sina")
+
     def _fetch(code):
-        try:
-            raw = ak.stock_zh_a_hist(
-                symbol=code, period="daily",
-                start_date=date_nodash, end_date=date_nodash,
-                adjust="qfq",
-            )
-            if raw is None or raw.empty:
-                return code, []
-            col_map = {
-                "日期": "date", "开盘": "open", "收盘": "close",
-                "最高": "high", "最低": "low", "成交量": "volume",
-                "成交额": "amount", "涨跌幅": "pct_change", "换手率": "turnover",
-            }
-            raw = raw.rename(columns=col_map)
-            info = snap.get(code, {})
-            rows = []
-            for _, r in raw.iterrows():
-                rows.append((
-                    code, trade_date,
-                    _safe(r, "open"), _safe(r, "high"),
-                    _safe(r, "low"), _safe(r, "close"),
-                    _safe_int(r, "volume"), _safe(r, "amount"),
-                    _safe(r, "turnover"), _safe(r, "pct_change"),
-                    info.get("mc"), info.get("cmc"),
-                    info.get("pe"), info.get("pb"),
-                ))
-            return code, rows
-        except Exception:
-            return code, []
+        raw, source, err = _fetch_one(code, date_nodash, em_enabled)
+        if raw is None or raw.empty:
+            return code, [], source, err
+        info = snap.get(code, {})
+        rows = []
+        for _, r in raw.iterrows():
+            rows.append((
+                code, trade_date,
+                _safe(r, "open"), _safe(r, "high"),
+                _safe(r, "low"), _safe(r, "close"),
+                _safe_int(r, "volume"), _safe(r, "amount"),
+                _safe(r, "turnover"), _safe(r, "pct_change"),
+                info.get("mc"), info.get("cmc"),
+                info.get("pe"), info.get("pb"),
+            ))
+        return code, rows, source, err
 
     total = len(codes)
     done_count = 0
     all_rows = []
+    source_count: dict[str, int] = {"em": 0, "sina": 0}
+    fail_codes: list[tuple[str, str]] = []
+    empty_codes: list[str] = []  # 接口正常但当日无数据（停牌/退市等）
 
+    # _call_no_proxy 临时 unset 代理环境变量。多线程并发时
+    # 这会引入竞态（一个线程恢复时另一个还在用空 env），
+    # 但比起每只都失败的现状，宁可接受降级；并发数维持原值。
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as exe:
         futures = {exe.submit(_fetch, c): c for c in codes}
         for fut in as_completed(futures):
-            _, rows = fut.result()
-            all_rows.extend(rows)
+            code, rows, source, err = fut.result()
+            if rows:
+                all_rows.extend(rows)
+                if source:
+                    source_count[source] = source_count.get(source, 0) + 1
+            elif err:
+                fail_codes.append((code, err))
+            else:
+                empty_codes.append(code)
             done_count += 1
             if done_count % 500 == 0 or done_count == total:
-                log.info(f"stock_kline 抓取进度: {done_count}/{total}")
+                log.info(
+                    f"stock_kline 抓取进度: {done_count}/{total} "
+                    f"(em={source_count.get('em', 0)}, "
+                    f"sina={source_count.get('sina', 0)}, "
+                    f"fail={len(fail_codes)}, empty={len(empty_codes)})"
+                )
 
     n = batch_insert(conn, sql, all_rows)
-    log.info(f"stock_kline {trade_date} 写入 {n} 条")
+    log.info(
+        f"stock_kline {trade_date} 写入 {n} 条 "
+        f"(em={source_count.get('em', 0)}, sina={source_count.get('sina', 0)}, "
+        f"fail={len(fail_codes)}, empty={len(empty_codes)})"
+    )
+    if fail_codes:
+        # 仅打印前 5 个错误样本，避免日志爆量
+        sample = "; ".join(f"{c}→{e}" for c, e in fail_codes[:5])
+        log.warning(f"stock_kline {trade_date} 失败样本 (共 {len(fail_codes)} 只): {sample}")
 
     # ── 回填已有行的 market_cap ──────────────────────────────────────────────
     # update_kline 跳过了"已有 K 线的股票"，这些行的 market_cap 可能是 NULL
