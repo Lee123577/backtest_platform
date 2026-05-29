@@ -14,13 +14,17 @@ Rolling price history:
   rolling_prices[code] is updated with today's close AFTER select_stocks is called,
   so the strategy always sees data up to yesterday — no look-ahead bias.
 """
+import logging
 from collections import defaultdict
 from typing import Any, Dict, List
 
 import numpy as np
 import pandas as pd
 
+from ..data.universe import eligible_codes_at
 from ..strategies.portfolio_base import PortfolioBaseStrategy
+
+logger = logging.getLogger(__name__)
 
 
 def run_portfolio_backtest(
@@ -139,6 +143,22 @@ def run_portfolio_backtest(
                     ref_data_today = ref_data
             else:
                 ref_data_today = ref_data
+
+            # ── 幸存者偏差防护：过滤掉当日未上市/已退市的股 ────────────────
+            # universe_df 是基于"当前"市值生成的，包含将来才上市的股；
+            # 也包含已退市但 stock_kline 还有历史数据的股。在每个 rebalance
+            # 日按 stock_info.list_date/delist_date 二次过滤。
+            try:
+                eligible = eligible_codes_at(ref_data_today["code"].tolist(), date)
+                pre_n = len(ref_data_today)
+                ref_data_today = ref_data_today[ref_data_today["code"].isin(eligible)]
+                if pre_n != len(ref_data_today):
+                    logger.debug(
+                        f"{date_str} 幸存者偏差过滤: {pre_n} → {len(ref_data_today)}"
+                    )
+            except Exception as e:
+                # 数据库不可用时不阻断回测，但记 WARN
+                logger.warning(f"{date_str} eligible_codes_at 失败，跳过过滤: {e}")
 
             # ── Let strategy choose new stocks ──────────────────────────────
             new_stocks = strategy.select_stocks(

@@ -412,10 +412,62 @@ def update_kline(conn, trade_date: str):
 
 # ── 2. 更新 stock_info（ST/名称变更）────────────────────────────────────────
 
+def _fetch_delist_info() -> dict:
+    """
+    抓上交所 + 深交所退市股的 (list_date, delist_date)。
+    返回 {code: (list_date, delist_date)}。两个接口都按"上市日期 + 退市日期"返回，
+    且仅含退市股 —— 在市股需要走 K 线 MIN(trade_date) 兜底。
+    """
+    result: dict[str, tuple] = {}
+
+    def _norm(v):
+        if v is None or pd.isna(v):
+            return None
+        try:
+            return pd.to_datetime(v).date()
+        except Exception:
+            return None
+
+    for label, fn_kwargs in [
+        ("上交所退市", {"fn": ak.stock_info_sh_delist, "kwargs": {}}),
+        ("深交所退市", {"fn": ak.stock_info_sz_delist,
+                  "kwargs": {"symbol": "终止上市公司"}}),
+    ]:
+        try:
+            df = _call_no_proxy(fn_kwargs["fn"], **fn_kwargs["kwargs"])
+            if df is None or df.empty:
+                log.warning(f"{label}: 接口返回空")
+                continue
+            # 字段名容错（不同接口列名不同）
+            code_c = next((c for c in df.columns
+                           if "代码" in str(c)), None)
+            list_c = next((c for c in df.columns
+                           if "上市日期" in str(c)), None)
+            delist_c = next((c for c in df.columns
+                             if "退市" in str(c) or "终止" in str(c) or "暂停" in str(c)), None)
+            if not code_c or not delist_c:
+                log.warning(f"{label}: 无法识别列名 {list(df.columns)}")
+                continue
+            for _, r in df.iterrows():
+                code = str(r[code_c]).zfill(6)
+                if len(code) != 6:
+                    continue
+                ld = _norm(r[list_c]) if list_c else None
+                dd = _norm(r[delist_c])
+                result[code] = (ld, dd)
+            log.info(f"{label}: {len(df)} 条")
+        except Exception as e:
+            log.warning(f"{label} 接口失败: {e}")
+    return result
+
+
 def update_stock_info(conn):
     """
-    更新 stock_info。复用 get_universe_snapshot 的 4 级降级链，
-    服务器 IP 被 push2 节点拦截时仍可通过 xuangu / curl_cffi 拿到数据。
+    更新 stock_info。三步：
+      1. 全市场快照写 code/name/market（复用 get_universe_snapshot 降级链）
+      2. 退市接口写 list_date/delist_date（精确日期）
+      3. SQL 用 MIN(trade_date) 兜底剩余在市股的 list_date
+         （保守下界——比真实上市日只会更晚，足够防止"历史日选到未上市股"的隐性 bug）
     """
     log.info("更新 stock_info")
     from app.data.market_data import get_universe_snapshot
@@ -445,7 +497,37 @@ def update_stock_info(conn):
         rows.append((code, name, market))
 
     n = batch_insert(conn, sql, rows)
-    log.info(f"stock_info 更新 {n} 条")
+    log.info(f"stock_info 基础信息更新 {n} 条")
+
+    # ── 退市接口：精确写 list/delist date ────────────────────────────────────
+    delist_map = _fetch_delist_info()
+    if delist_map:
+        upd_sql = """
+            UPDATE stock_info SET list_date=COALESCE(%s, list_date),
+                                  delist_date=%s
+            WHERE code=%s
+        """
+        with conn.cursor() as cur:
+            cur.executemany(upd_sql, [(ld, dd, c)
+                                       for c, (ld, dd) in delist_map.items()])
+        conn.commit()
+        log.info(f"stock_info 退市股 list/delist 写入 {len(delist_map)} 条")
+
+    # ── 兜底：用 K 线最早日期填 list_date（仅对当前 list_date IS NULL 的行）─
+    with conn.cursor() as cur:
+        cur.execute("""
+            UPDATE stock_info i
+            JOIN (
+                SELECT code, MIN(trade_date) AS first_date
+                FROM stock_kline
+                GROUP BY code
+            ) k ON i.code = k.code
+            SET i.list_date = k.first_date
+            WHERE i.list_date IS NULL
+        """)
+        affected = cur.rowcount
+        conn.commit()
+    log.info(f"stock_info list_date 用 K 线最早日兜底 {affected} 条")
 
 
 # ── 3. 更新 index_daily ──────────────────────────────────────────────────────
