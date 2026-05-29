@@ -71,10 +71,17 @@ def _tail(s: str, n: int = _TAIL_CHARS) -> str:
     return s if len(s) <= n else s[-n:]
 
 
-def _run_subprocess(task_name: str, cmd: List[str], timeout_sec: int) -> dict:
-    """实际跑命令，捕获 stdout/stderr/exit_code/duration。"""
+def _run_subprocess(task_name: str, cmd: List[str], timeout_sec: int,
+                    env: Optional[dict] = None) -> dict:
+    """实际跑命令，捕获 stdout/stderr/exit_code/duration。
+
+    env: 追加到当前进程 os.environ 的额外环境变量。用于把
+    SKIP_EM / MAX_WORKERS 等性能调优参数从 registry 注入。
+    """
+    import os as _os
     t0 = time.monotonic()
     timed_out = False
+    full_env = {**_os.environ, **(env or {})}
     proc = subprocess.Popen(
         [_PY, *cmd[1:]] if cmd and cmd[0] in ("python", "python3") else cmd,
         cwd=str(ROOT),
@@ -83,6 +90,7 @@ def _run_subprocess(task_name: str, cmd: List[str], timeout_sec: int) -> dict:
         text=True,
         encoding="utf-8",
         errors="replace",
+        env=full_env,
     )
     try:
         stdout, stderr = proc.communicate(timeout=timeout_sec)
@@ -128,7 +136,10 @@ def _execute(task_name: str, scheduled_at: _DT, trigger: str) -> str:
     logger.info("[%s] ▶ 开始执行 (trigger=%s, timeout=%ds)",
                 task_name, trigger, spec.get("timeout_sec", 600))
     try:
-        result = _run_subprocess(task_name, spec["cmd"], spec.get("timeout_sec", 600))
+        result = _run_subprocess(
+            task_name, spec["cmd"], spec.get("timeout_sec", 600),
+            env=spec.get("env"),
+        )
         db.mark_finished(
             run_id,
             status=result["status"],

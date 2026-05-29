@@ -29,6 +29,7 @@ class TaskDef(TypedDict, total=False):
     timeout_sec: int
     depends_on: Optional[str]
     description: str
+    env: Optional[Dict[str, str]]  # 追加到子进程的环境变量（不覆盖父进程已有）
 
 
 # ── 任务清单 ─────────────────────────────────────────────────────────────────
@@ -38,9 +39,12 @@ TASKS: Dict[str, TaskDef] = {
     "daily_update": {
         "cmd": ["python", "scripts/daily_update.py"],
         "schedule": "weekday:17:00",
-        "timeout_sec": 30 * 60,    # 30 分钟，含远端接口重试
+        "timeout_sec": 45 * 60,    # 45 分钟（sina 全量 ~15min × 当日 + 前几天缺漏）
         "depends_on": None,
-        "description": "增量更新 K 线 / 财务 / 指数 / 北向资金（每个交易日 17:00）",
+        "description": "增量更新 K 线 / 财务 / 指数 / 北向资金 / 因子（每个交易日 17:00）",
+        # 云服务器 IP 几乎一定被 push2.eastmoney.com 拦截，跳过 EM 探测
+        # 全程走 sina；MAX_WORKERS=10 实测下来 sina 不限流
+        "env": {"SKIP_EM": "1", "MAX_WORKERS": "10"},
     },
     "daily_signal": {
         # 参数全部走数据库 paper_account.strategy_params（前端 UI 编辑），
