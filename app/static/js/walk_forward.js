@@ -189,9 +189,14 @@
     $('resultZone').style.display = '';
 
     renderSummary(data.summary);
-    renderScatter(data.windows, data.summary?.objective);
     renderStability(data.param_stability);
     renderWindowTable(data.windows);
+    // resultZone 刚从 display:none 切到显示，浏览器还没完成 layout，
+    // 此刻 echarts.init 拿到的容器尺寸是 0×0，必须等下一帧 layout 完成
+    // 再 init / setOption，否则要切换浏览器 tab 才会重绘
+    requestAnimationFrame(() => {
+      renderScatter(data.windows, data.summary?.objective);
+    });
   }
 
   function renderSummary(s) {

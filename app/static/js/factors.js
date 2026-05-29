@@ -107,8 +107,14 @@
     $('resultZone').style.display = '';
 
     renderSummary(data.summary);
-    renderICChart(data.series, data.horizon);
-    renderHeatmap(data.monthly_heatmap);
+    // resultZone 刚从 display:none 切到显示，浏览器还没完成 layout，
+    // 此刻 echarts.init 拿到的容器尺寸是 0×0，必须等下一帧让 layout
+    // 跑完才 init / setOption，否则要切换浏览器 tab 触发 visibility
+    // 变化才会重绘
+    requestAnimationFrame(() => {
+      renderICChart(data.series, data.horizon);
+      renderHeatmap(data.monthly_heatmap);
+    });
   }
 
   function renderSummary(s) {
