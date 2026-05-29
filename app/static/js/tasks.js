@@ -309,19 +309,188 @@ function escapeHtml(s) {
   }[c]));
 }
 
+// ── 今日数据入库详情 + 访问统计 ─────────────────────────────────────────────
+
+function pct(actual, expected) {
+  if (!expected || expected <= 0) return null;
+  return Math.min(100, (actual / expected) * 100);
+}
+
+function gradeByPct(p) {
+  if (p == null) return 'idle';
+  if (p >= 99) return 'ok';
+  if (p >= 60) return 'warn';
+  return 'bad';
+}
+
+function statusLabel(grade) {
+  return { ok: '完成', warn: '部分', bad: '缺失', idle: '—' }[grade] || '—';
+}
+
+async function loadDataStatus() {
+  try {
+    const res = await fetch('/api/data_status/today');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    renderDataStatus(data);
+  } catch (e) {
+    document.getElementById('dsGrid').innerHTML =
+      `<div class="no-data">加载失败：${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function renderDataStatus(data) {
+  // 顶部规则徽章
+  const rule = document.getElementById('dsRule');
+  if (data.is_today) {
+    rule.textContent = `🟢 ${data.cutoff_hour}:00 后，查看当日 ${data.target_date}`;
+    rule.className = 'ds-rule now-today';
+  } else {
+    rule.textContent = `🟡 ${data.cutoff_hour}:00 前，查看前一交易日 ${data.target_date}`;
+    rule.className = 'ds-rule now-prev';
+  }
+  document.getElementById('dsTip').textContent = data.rule + '（按 IP 去重）';
+
+  // 卡片网格
+  const grid = document.getElementById('dsGrid');
+  if (!data.items || !data.items.length) {
+    grid.innerHTML = '<div class="no-data">无数据</div>';
+    return;
+  }
+  grid.innerHTML = data.items.map(it => {
+    const p = pct(it.actual, it.expected);
+    const grade = gradeByPct(p);
+    const pctText = p == null ? '—' : `${p.toFixed(0)}%`;
+    const widthStyle = p == null ? '0%' : `${p}%`;
+    const expectedText = it.expected == null ? 'N/A' : Number(it.expected).toLocaleString();
+    const actualText = Number(it.actual).toLocaleString();
+    const missingHTML = (it.missing > 0)
+      ? `<span class="ds-missing">缺 ${Number(it.missing).toLocaleString()}</span>` : '';
+    return `
+      <div class="ds-card">
+        <div class="ds-card-head">
+          <span class="ds-icon">${it.icon || '📊'}</span>
+          <span class="ds-name">${escapeHtml(it.name)}</span>
+          <span class="ds-status ${grade}">${statusLabel(grade)}</span>
+        </div>
+        <div class="ds-numbers">
+          <span class="ds-actual">${actualText}</span>
+          <span class="ds-slash">/</span>
+          <span class="ds-expected">${expectedText}</span>
+          <span class="ds-unit">${escapeHtml(it.unit || '')}</span>
+          ${missingHTML}
+        </div>
+        <div class="ds-bar">
+          <div class="ds-bar-fill ${grade}" style="width:${widthStyle};"></div>
+        </div>
+        <div class="ds-note">${escapeHtml(it.note || '')} · ${pctText}</div>
+      </div>
+    `;
+  }).join('');
+}
+
+async function loadTraffic() {
+  try {
+    const res = await fetch('/api/data_status/traffic_today');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    renderTraffic(data);
+  } catch (e) {
+    document.getElementById('trafficPv').textContent = '—';
+    document.getElementById('trafficUv').textContent = '—';
+    document.getElementById('trafficDetail').innerHTML =
+      `<div>加载失败：${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function renderTraffic(data) {
+  document.getElementById('trafficPv').textContent = Number(data.pv || 0).toLocaleString();
+  document.getElementById('trafficUv').textContent = Number(data.uv || 0).toLocaleString();
+  document.getElementById('trafficPvSub').textContent =
+    `${data.date} · 不含 favicon / 静态资源`;
+  const uvAll = Number(data.uv_all || 0);
+  const uv = Number(data.uv || 0);
+  const inner = Math.max(uvAll - uv, 0);
+  document.getElementById('trafficUvSub').textContent =
+    `按 IP 去重${inner > 0 ? `（另含 ${inner} 个内网/Unknown）` : ''}`;
+
+  // 趋势 + 路径 + 地区，纯文本紧凑展示
+  const byHour = data.by_hour || [];
+  const peakHour = byHour.indexOf(Math.max(...byHour, 0));
+  const peakN = byHour[peakHour] || 0;
+  const trendLine = byHour.map((n, h) => {
+    const max = Math.max(...byHour, 1);
+    const bars = '▁▂▃▄▅▆▇█';
+    const idx = Math.min(bars.length - 1, Math.floor((n / max) * (bars.length - 1)));
+    return bars[idx];
+  }).join('');
+
+  const topPaths = (data.top_paths || []).slice(0, 3).map(p =>
+    `<b>${escapeHtml(p.path)}</b> ${p.n}`
+  ).join('  ·  ');
+  const topGeo = (data.top_geo || []).slice(0, 4).map(g =>
+    `<b>${escapeHtml(g.country)}</b> ${g.n}`
+  ).join('  ·  ');
+
+  document.getElementById('trafficDetail').innerHTML = `
+    <div>📊 24h 趋势 <span style="font-family:monospace;letter-spacing:1px;">${trendLine}</span>
+         ${peakN > 0 ? `<span style="margin-left:6px;">峰值 ${peakHour}:00 · ${peakN}</span>` : ''}</div>
+    <div>🔥 热门路径: ${topPaths || '<i>无</i>'}</div>
+    <div>🌍 来源地区: ${topGeo || '<i>无</i>'}</div>
+  `;
+}
+
+async function triggerDailyRefresh() {
+  const btn = document.getElementById('dsRefreshAll');
+  if (!_adminInfo.is_admin) {
+    alert('IP 不在白名单，无权限触发。请到「实盘观察」页通过管理弹窗加白名单。');
+    return;
+  }
+  if (!confirm('将触发 daily_update 全量补齐（K 线 / stock_info / 因子等），约 15-30 分钟。确定？')) return;
+
+  btn.disabled = true;
+  const orig = btn.textContent;
+  btn.textContent = '⏳ 触发中…';
+  try {
+    const res = await fetch('/api/tasks/daily_update/run', { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+    btn.textContent = data.status === 'queued' ? '✓ 已入队' : `${data.status}`;
+    setTimeout(() => {
+      btn.textContent = orig; btn.disabled = false;
+      loadDataStatus(); loadSummary(); loadRuns();
+    }, 2400);
+  } catch (e) {
+    alert(`触发失败：${e.message}`);
+    btn.textContent = orig; btn.disabled = false;
+  }
+}
+
+// ── 启动 ────────────────────────────────────────────────────────────────────
+
 async function load() {
   // 权限先拉，避免按钮一闪一锁
   await loadAdminStatus();
   loadSummary();
   loadRuns();
+  loadDataStatus();
+  loadTraffic();
+  document.getElementById('dsRefreshAll').addEventListener('click', triggerDailyRefresh);
+
   if (_timer) clearInterval(_timer);
-  _timer = setInterval(() => { loadSummary(); loadRuns(); }, REFRESH_MS);
+  _timer = setInterval(() => {
+    loadSummary(); loadRuns();
+    loadDataStatus(); loadTraffic();
+  }, REFRESH_MS);
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
       if (_timer) { clearInterval(_timer); _timer = null; }
     } else if (!_timer) {
-      loadSummary(); loadRuns();
-      _timer = setInterval(() => { loadSummary(); loadRuns(); }, REFRESH_MS);
+      loadSummary(); loadRuns(); loadDataStatus(); loadTraffic();
+      _timer = setInterval(() => {
+        loadSummary(); loadRuns();
+        loadDataStatus(); loadTraffic();
+      }, REFRESH_MS);
     }
   });
 }

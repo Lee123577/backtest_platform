@@ -36,6 +36,99 @@
     .admin-chip-admin   { background: #dafbe1; color: #1a7f37; }
     .admin-chip-guest   { background: #fff8c5; color: #9a6700; cursor: help; }
     .rerun-btn[data-locked="1"] { opacity: 0.5; cursor: not-allowed; }
+
+    /* ── 今日数据入库详情 ───────────────────────────────────────────── */
+    .ds-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .ds-rule {
+      font-size: 11px; color: var(--txt2); background: var(--bg2);
+      padding: 3px 8px; border-radius: 4px;
+    }
+    .ds-rule.now-today { background: #dafbe1; color: #1a7f37; }
+    .ds-rule.now-prev  { background: #fff8c5; color: #9a6700; }
+
+    .ds-traffic-row {
+      display: grid; grid-template-columns: 1fr 1fr 2fr; gap: 12px;
+      margin: 14px 0 14px;
+    }
+    @media (max-width: 760px) { .ds-traffic-row { grid-template-columns: 1fr 1fr; }
+                                .ds-traffic-row > :last-child { grid-column: 1 / -1; } }
+    .ds-stat {
+      background: linear-gradient(135deg, #f6f8fa 0%, #fff 100%);
+      border: 1px solid #d0d7de;
+      border-radius: 8px; padding: 14px 16px;
+      box-shadow: 0 1px 2px rgba(27,31,36,.04);
+    }
+    .ds-stat-label { font-size: 11px; color: var(--txt2); font-weight: 500; }
+    .ds-stat-val   { font-size: 28px; font-weight: 700; color: var(--accent); line-height: 1.1; margin-top: 4px; }
+    .ds-stat-sub   { font-size: 11px; color: var(--txt2); margin-top: 4px; }
+    .ds-stat.uv .ds-stat-val { color: #1a7f37; }
+
+    .ds-traffic-detail {
+      background: var(--bg2); border-radius: 8px; padding: 10px 14px;
+      font-size: 11px; color: var(--txt2); display: flex;
+      flex-direction: column; gap: 3px; max-height: 110px; overflow: hidden;
+    }
+    .ds-traffic-detail b { color: var(--txt); }
+    .ds-tip { color: var(--txt2); font-size: 11px; padding: 0 0 6px; }
+
+    .ds-grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 10px;
+    }
+    .ds-card {
+      background: #fff; border: 1px solid var(--border); border-radius: 8px;
+      padding: 12px 14px; display: flex; flex-direction: column; gap: 8px;
+      transition: transform .15s, box-shadow .15s;
+    }
+    .ds-card:hover { transform: translateY(-1px); box-shadow: 0 4px 10px rgba(27,31,36,.08); }
+
+    .ds-card-head {
+      display: flex; align-items: center; gap: 8px;
+    }
+    .ds-icon { font-size: 18px; }
+    .ds-name { font-size: 13px; font-weight: 600; color: var(--txt); flex: 1; }
+    .ds-status {
+      font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: 600;
+    }
+    .ds-status.ok    { background: #dafbe1; color: #1a7f37; }
+    .ds-status.warn  { background: #fff8c5; color: #9a6700; }
+    .ds-status.bad   { background: #ffebe9; color: #cf222e; }
+    .ds-status.idle  { background: var(--bg2); color: var(--txt2); }
+
+    .ds-numbers {
+      display: flex; align-items: baseline; gap: 4px;
+      font-family: SFMono-Regular, Consolas, Liberation Mono, Menlo, monospace;
+    }
+    .ds-actual { font-size: 22px; font-weight: 700; color: var(--txt); }
+    .ds-slash  { font-size: 14px; color: var(--txt2); }
+    .ds-expected { font-size: 14px; color: var(--txt2); }
+    .ds-unit   { font-size: 11px; color: var(--txt2); margin-left: 4px; }
+    .ds-missing { font-size: 11px; color: var(--red); margin-left: auto; }
+
+    .ds-bar {
+      height: 6px; background: var(--bg2); border-radius: 3px; overflow: hidden;
+    }
+    .ds-bar-fill {
+      height: 100%; border-radius: 3px;
+      transition: width .35s ease-out;
+      background: var(--accent);
+    }
+    .ds-bar-fill.ok   { background: linear-gradient(90deg, #1a7f37, #2da44e); }
+    .ds-bar-fill.warn { background: linear-gradient(90deg, #bf8700, #f0b429); }
+    .ds-bar-fill.bad  { background: linear-gradient(90deg, #b62324, #d73a3b); }
+
+    .ds-note { font-size: 10px; color: var(--txt2); }
+    .ds-refresh-btn {
+      width: 100%; padding: 7px;
+      border: 1px solid var(--border); background: var(--bg2);
+      border-radius: 5px; cursor: pointer;
+      font-size: 12px; color: var(--accent); font-weight: 500;
+      transition: all .15s;
+    }
+    .ds-refresh-btn:hover:not(:disabled) {
+      background: var(--accent); color: #fff; border-color: var(--accent);
+    }
+    .ds-refresh-btn:disabled { opacity: 0.4; cursor: not-allowed; }
   </style>
 </head>
 <body>
@@ -53,6 +146,41 @@
 </header>
 
 <main>
+
+  <!-- ══════════════ 今日数据入库详情 + 访问统计 ══════════════ -->
+  <div class="panel">
+    <div class="panel-title">
+      <div class="ds-head">
+        今日数据入库详情
+        <span class="ds-rule" id="dsRule">—</span>
+        <button class="ds-refresh-btn rerun-btn" id="dsRefreshAll"
+                style="width:auto;padding:5px 14px;margin-left:auto;"
+                title="触发 daily_update 全量补齐">⟳ 立即刷新全部</button>
+      </div>
+    </div>
+
+    <!-- 访问统计 -->
+    <div class="ds-traffic-row">
+      <div class="ds-stat">
+        <div class="ds-stat-label">今日访问量 (PV)</div>
+        <div class="ds-stat-val" id="trafficPv">—</div>
+        <div class="ds-stat-sub" id="trafficPvSub">总请求数</div>
+      </div>
+      <div class="ds-stat uv">
+        <div class="ds-stat-label">独立访客 (UV)</div>
+        <div class="ds-stat-val" id="trafficUv">—</div>
+        <div class="ds-stat-sub" id="trafficUvSub">按 IP 去重，已排除内网</div>
+      </div>
+      <div class="ds-traffic-detail" id="trafficDetail">
+        <div>加载中…</div>
+      </div>
+    </div>
+
+    <div class="ds-tip" id="dsTip">—</div>
+    <div class="ds-grid" id="dsGrid">
+      <div class="no-data">加载中…</div>
+    </div>
+  </div>
 
   <div class="panel">
     <div class="panel-title">

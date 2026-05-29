@@ -64,6 +64,10 @@ app.include_router(factors_router)
 from .engine.walk_forward_api import router as wf_router  # noqa: E402
 app.include_router(wf_router)
 
+# 今日数据入库状态 API
+from .data_status.api import router as data_status_router  # noqa: E402
+app.include_router(data_status_router)
+
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
