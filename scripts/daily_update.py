@@ -335,10 +335,12 @@ def update_kline(conn, trade_date: str):
 
     total = len(codes)
     done_count = 0
-    all_rows = []
+    pending_rows: list = []
+    written_total = 0
     source_count: dict[str, int] = {"em": 0, "sina": 0}
     fail_codes: list[tuple[str, str]] = []
     empty_codes: list[str] = []  # 接口正常但当日无数据（停牌/退市等）
+    FLUSH_EVERY = 1000  # 每抓 N 只就写入一次，避免中途崩溃丢失大量进度
 
     # _call_no_proxy 临时 unset 代理环境变量。多线程并发时
     # 这会引入竞态（一个线程恢复时另一个还在用空 env），
@@ -348,7 +350,7 @@ def update_kline(conn, trade_date: str):
         for fut in as_completed(futures):
             code, rows, source, err = fut.result()
             if rows:
-                all_rows.extend(rows)
+                pending_rows.extend(rows)
                 if source:
                     source_count[source] = source_count.get(source, 0) + 1
             elif err:
@@ -363,10 +365,20 @@ def update_kline(conn, trade_date: str):
                     f"sina={source_count.get('sina', 0)}, "
                     f"fail={len(fail_codes)}, empty={len(empty_codes)})"
                 )
+            # 分批 flush：抓够 FLUSH_EVERY 只就先写入一次
+            if done_count % FLUSH_EVERY == 0 and pending_rows:
+                n = batch_insert(conn, sql, pending_rows)
+                written_total += n
+                log.info(f"stock_kline {trade_date} 中途 flush {n} 条（累计 {written_total}）")
+                pending_rows = []
 
-    n = batch_insert(conn, sql, all_rows)
+    # 收尾 flush
+    if pending_rows:
+        n = batch_insert(conn, sql, pending_rows)
+        written_total += n
+
     log.info(
-        f"stock_kline {trade_date} 写入 {n} 条 "
+        f"stock_kline {trade_date} 写入 {written_total} 条 "
         f"(em={source_count.get('em', 0)}, sina={source_count.get('sina', 0)}, "
         f"fail={len(fail_codes)}, empty={len(empty_codes)})"
     )
