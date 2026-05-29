@@ -56,6 +56,14 @@ app = FastAPI(title="A股量化回测平台", version="1.2.0")
 from .visit_log import VisitLogMiddleware  # noqa: E402
 app.add_middleware(VisitLogMiddleware)
 
+# 因子分析 API
+from .factors.api import router as factors_router  # noqa: E402
+app.include_router(factors_router)
+
+# Walk-Forward 优化 API
+from .engine.walk_forward_api import router as wf_router  # noqa: E402
+app.include_router(wf_router)
+
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
