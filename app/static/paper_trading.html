@@ -90,6 +90,11 @@
     <div class="summary-grid" id="summaryGrid">
       <div class="sum-card"><div class="sum-label">初始资金</div><div class="sum-val" id="sumCapital">—</div></div>
       <div class="sum-card"><div class="sum-label">当前总值</div><div class="sum-val" id="sumTotal">—</div></div>
+      <div class="sum-card">
+        <div class="sum-label">今日浮盈</div>
+        <div class="sum-val" id="sumDayPnl">—</div>
+        <div class="sum-sub" id="sumDayPnlSub"></div>
+      </div>
       <div class="sum-card"><div class="sum-label">累计收益</div><div class="sum-val" id="sumCumRet">—</div></div>
       <div class="sum-card"><div class="sum-label">持仓市值</div><div class="sum-val" id="sumPos">—</div></div>
       <div class="sum-card"><div class="sum-label">现金</div><div class="sum-val" id="sumCash">—</div></div>
@@ -127,6 +132,23 @@
     <div class="panel-title">
       成交流水
       <span class="tip-badge" id="tradesHint">每一笔买入 / 卖出 / 止损卖出</span>
+    </div>
+    <div class="trades-filter">
+      <label>动作
+        <select id="tradeActionFilter" onchange="renderTradesFiltered()">
+          <option value="">全部</option>
+          <option value="买入">买入</option>
+          <option value="卖出">卖出</option>
+          <option value="止损卖出">止损卖出</option>
+        </select>
+      </label>
+      <label>起始
+        <input type="date" id="tradeDateFrom" onchange="renderTradesFiltered()">
+      </label>
+      <label>截止
+        <input type="date" id="tradeDateTo" onchange="renderTradesFiltered()">
+      </label>
+      <button class="trades-filter-clear" type="button" onclick="clearTradesFilter()">清空</button>
     </div>
     <div id="tradesWrap">
       <div class="no-data">加载中…</div>

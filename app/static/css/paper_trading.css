@@ -102,6 +102,14 @@ table.pt-tbl {
 .pt-tbl tr.row-link { cursor: pointer; }
 .pt-tbl tr.row-link:hover td { background: rgba(9, 105, 218, .04); }
 
+/* 合计行：略加粗 + 浅底色，让用户一眼能区分 */
+.pt-tbl tfoot tr.pt-foot td {
+  background: var(--bg2);
+  font-weight: 600;
+  border-top: 2px solid var(--border);
+  font-size: 13px;
+}
+
 .tag-rebal {
   background: rgba(9, 105, 218, .1);
   color: var(--accent);
@@ -155,6 +163,17 @@ table.pt-tbl {
 .note-buy  { color: #0a7d33; font-weight: 700; font-size: 11px; }
 .note-sell { color: var(--red); font-weight: 700; font-size: 11px; }
 .note-codes { font-size: 11px; color: var(--txt); letter-spacing: 0.2px; }
+
+/* 备注列：允许换行，限宽，行高松点便于阅读 */
+.pt-tbl td.notes-cell {
+  font-size: 12px;
+  text-align: left;
+  white-space: normal;
+  max-width: 380px;
+  min-width: 220px;
+  line-height: 1.7;
+  word-break: break-word;
+}
 
 /* 权限徽章 */
 .admin-chip {
@@ -414,6 +433,48 @@ table.pt-tbl {
 .scan-btn:hover { opacity: 0.9; }
 .scan-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .scan-hint { color: var(--txt2); font-size: 12px; }
+
+/* 成交流水筛选条 */
+.trades-filter {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--txt2);
+}
+.trades-filter label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.trades-filter select,
+.trades-filter input[type="date"] {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+  background: #fff;
+}
+.trades-filter select:focus,
+.trades-filter input[type="date"]:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.trades-filter-clear {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  background: #fff;
+  color: var(--txt2);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.trades-filter-clear:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
 
 /* 历史运行记录的过滤复选框 */
 .run-filter {

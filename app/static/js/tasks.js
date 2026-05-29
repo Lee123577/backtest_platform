@@ -3,6 +3,8 @@
 const REFRESH_MS = 15_000;
 let _timer = null;
 let _adminInfo = { ip: '—', is_admin: false, whitelist_empty: false };
+let _allRuns = [];       // 缓存当前过滤条件下的全量记录，详情弹窗直接复用，避免二次请求
+let _allTasks = [];      // 缓存任务清单，给 schedule 解析 / 下次运行计算用
 
 // ── 权限检测 ────────────────────────────────────────────────────────────────
 
@@ -74,12 +76,47 @@ function statusPill(status) {
   return `<span class="status-pill ${cls}">${STATUS_CN[status] || status || '未运行'}</span>`;
 }
 
+// 解析后端 schedule 字符串（"weekday:HH:MM" / "daily:HH:MM"）算下一次预计运行
+// 返回 { dt: Date, label: '今天 17:30' / '明天 17:00' / '周三 17:30' }
+function nextRunOf(schedule) {
+  if (!schedule || typeof schedule !== 'string') return null;
+  const m = schedule.match(/^(weekday|daily):(\d{1,2}):(\d{1,2})$/);
+  if (!m) return null;
+  const [, kind, hh, mm] = m;
+  const h = parseInt(hh, 10), mi = parseInt(mm, 10);
+  const now = new Date();
+  // 从今天开始往后找最多 8 天，命中第一个合法日（满足 weekday 限制 + 时间未过）
+  for (let i = 0; i < 8; i++) {
+    const d = new Date(now);
+    d.setDate(now.getDate() + i);
+    d.setHours(h, mi, 0, 0);
+    if (i === 0 && d <= now) continue;     // 今天但时刻已过
+    const dow = d.getDay();                // 0=日 6=六
+    if (kind === 'weekday' && (dow === 0 || dow === 6)) continue;
+    // 算 label
+    const today0 = new Date(now); today0.setHours(0, 0, 0, 0);
+    const target0 = new Date(d);  target0.setHours(0, 0, 0, 0);
+    const diffDays = Math.round((target0 - today0) / 86400000);
+    const hm = `${String(h).padStart(2,'0')}:${String(mi).padStart(2,'0')}`;
+    let label;
+    if (diffDays === 0)      label = `今天 ${hm}`;
+    else if (diffDays === 1) label = `明天 ${hm}`;
+    else {
+      const cnDow = ['日', '一', '二', '三', '四', '五', '六'];
+      label = `周${cnDow[d.getDay()]} ${hm}`;
+    }
+    return { dt: d, label };
+  }
+  return null;
+}
+
 async function loadSummary() {
   try {
     const res = await fetch('/api/tasks/summary');
     const { tasks } = await res.json();
-    renderSummary(tasks || []);
-    populateTaskFilter(tasks || []);
+    _allTasks = tasks || [];
+    renderSummary(_allTasks);
+    populateTaskFilter(_allTasks);
     applyAdminGuards();   // renderSummary 重新生成按钮，需要重新加锁
   } catch (e) {
     console.error(e);
@@ -104,11 +141,17 @@ function renderSummary(tasks) {
     const errLine = t.last_status && t.last_status !== 'success' && t.last_error_msg
       ? `<div class="kv-line"><span>错误</span><span class="v" style="color:#cf222e;font-size:11px;max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(t.last_error_msg)}</span></div>`
       : '';
+    // 下次预计运行：今天已成功则不显示（避免误导用户以为还会再跑一次）
+    const nxt = t.ran_today_success ? null : nextRunOf(t.schedule);
+    const nextLine = nxt
+      ? `<div class="kv-line"><span>下次预计</span><span class="v" style="color:#0969da">${nxt.label}</span></div>`
+      : '';
     return `
       <div class="task-card">
         <div class="name">${t.task_name} ${ran}</div>
         <div class="desc">${t.description || ''}</div>
         <div class="kv-line"><span>调度</span><span class="v">${t.schedule}${t.depends_on ? ` · 依赖 ${t.depends_on}` : ''}</span></div>
+        ${nextLine}
         <div class="kv-line"><span>最近一次</span><span class="v">${fmtDt(t.last_started_at)} ${statusPill(t.last_status)}</span></div>
         <div class="kv-line"><span>耗时</span><span class="v">${fmtDur(t.last_duration_ms)}</span></div>
         <div class="kv-line"><span>近 30 天</span><span class="v">${t.recent_success}/${t.recent_total} 成功（${sr}）· 失败 ${t.recent_failed}</span></div>
@@ -133,16 +176,32 @@ async function loadRuns() {
   try {
     const res = await fetch(url);
     const { runs } = await res.json();
-    renderRuns(runs || []);
+    _allRuns = runs || [];
+    renderRunsFiltered();
   } catch (e) {
     document.getElementById('runsWrap').innerHTML =
       `<div class="error-box">加载失败：${e.message || e}</div>`;
   }
 }
 
+// 按 statusFilter 客户端过滤；taskFilter 是后端过滤的，无需重过滤
+function renderRunsFiltered() {
+  const st = document.getElementById('statusFilter')?.value || '';
+  const list = st
+    ? _allRuns.filter(r => r.status === st)
+    : _allRuns;
+  renderRuns(list);
+}
+window.renderRunsFiltered = renderRunsFiltered;
+
 function renderRuns(runs) {
+  const hint = document.getElementById('runsHint');
+  if (hint) {
+    const total = _allRuns.length, shown = runs.length;
+    hint.textContent = total ? `（显示 ${shown}/${total} 条）` : '（最近 100 次）';
+  }
   if (!runs.length) {
-    document.getElementById('runsWrap').innerHTML = '<div class="no-data">暂无记录</div>';
+    document.getElementById('runsWrap').innerHTML = '<div class="no-data">无符合条件的记录</div>';
     return;
   }
   const rows = runs.map(r => {
@@ -172,35 +231,32 @@ function renderRuns(runs) {
     </table>`;
 }
 
-async function showDetail(id) {
+function showDetail(id) {
   const modal = document.getElementById('runDetailModal');
   modal.style.display = '';
-  document.getElementById('modalContent').innerHTML = '加载中…';
-  try {
-    const res = await fetch(`/api/tasks/runs?limit=500`);
-    const { runs } = await res.json();
-    const r = (runs || []).find(x => x.id === id);
-    if (!r) throw new Error('找不到运行记录');
-    document.getElementById('modalTitle').textContent =
-      `${r.task_name} · ${fmtDt(r.started_at)} · ${STATUS_CN[r.status] || r.status}`;
-    document.getElementById('modalContent').innerHTML = `
-      <div class="kv-grid">
-        <div class="kv-item"><div class="kv-label">触发类型</div><div class="kv-val">${r.trigger_type}</div></div>
-        <div class="kv-item"><div class="kv-label">计划时刻</div><div class="kv-val">${fmtDt(r.scheduled_at)}</div></div>
-        <div class="kv-item"><div class="kv-label">开始</div><div class="kv-val">${fmtDt(r.started_at)}</div></div>
-        <div class="kv-item"><div class="kv-label">结束</div><div class="kv-val">${fmtDt(r.finished_at)}</div></div>
-        <div class="kv-item"><div class="kv-label">耗时</div><div class="kv-val">${fmtDur(r.duration_ms)}</div></div>
-        <div class="kv-item"><div class="kv-label">退出码</div><div class="kv-val">${r.exit_code === null ? '—' : r.exit_code}</div></div>
-        <div class="kv-item"><div class="kv-label">主机</div><div class="kv-val">${r.host || '—'}</div></div>
-      </div>
-      ${r.error_msg ? `<h4 style="margin:14px 0 6px;color:#cf222e">错误</h4><pre class="tail-pre">${escapeHtml(r.error_msg)}</pre>` : ''}
-      ${r.stdout_tail ? `<h4 style="margin:14px 0 6px">stdout（末尾）</h4><pre class="tail-pre">${escapeHtml(r.stdout_tail)}</pre>` : ''}
-      ${r.stderr_tail ? `<h4 style="margin:14px 0 6px">stderr（末尾）</h4><pre class="tail-pre">${escapeHtml(r.stderr_tail)}</pre>` : ''}
-    `;
-  } catch (e) {
+  // 直接从已缓存的 _allRuns 找；列表里看到的所有 id 这里都有
+  const r = _allRuns.find(x => x.id === id);
+  if (!r) {
     document.getElementById('modalContent').innerHTML =
-      `<div class="error-box">加载失败：${e.message || e}</div>`;
+      `<div class="error-box">记录不在当前列表中（可能已被刷新移除），请重试。</div>`;
+    return;
   }
+  document.getElementById('modalTitle').textContent =
+    `${r.task_name} · ${fmtDt(r.started_at)} · ${STATUS_CN[r.status] || r.status}`;
+  document.getElementById('modalContent').innerHTML = `
+    <div class="kv-grid">
+      <div class="kv-item"><div class="kv-label">触发类型</div><div class="kv-val">${r.trigger_type}</div></div>
+      <div class="kv-item"><div class="kv-label">计划时刻</div><div class="kv-val">${fmtDt(r.scheduled_at)}</div></div>
+      <div class="kv-item"><div class="kv-label">开始</div><div class="kv-val">${fmtDt(r.started_at)}</div></div>
+      <div class="kv-item"><div class="kv-label">结束</div><div class="kv-val">${fmtDt(r.finished_at)}</div></div>
+      <div class="kv-item"><div class="kv-label">耗时</div><div class="kv-val">${fmtDur(r.duration_ms)}</div></div>
+      <div class="kv-item"><div class="kv-label">退出码</div><div class="kv-val">${r.exit_code === null ? '—' : r.exit_code}</div></div>
+      <div class="kv-item"><div class="kv-label">主机</div><div class="kv-val">${r.host || '—'}</div></div>
+    </div>
+    ${r.error_msg ? `<h4 style="margin:14px 0 6px;color:#cf222e">错误</h4><pre class="tail-pre">${escapeHtml(r.error_msg)}</pre>` : ''}
+    ${r.stdout_tail ? `<h4 style="margin:14px 0 6px">stdout（末尾）</h4><pre class="tail-pre">${escapeHtml(r.stdout_tail)}</pre>` : ''}
+    ${r.stderr_tail ? `<h4 style="margin:14px 0 6px">stderr（末尾）</h4><pre class="tail-pre">${escapeHtml(r.stderr_tail)}</pre>` : ''}
+  `;
 }
 
 function closeDetail() {

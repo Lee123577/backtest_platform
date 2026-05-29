@@ -27,7 +27,10 @@ const REALTIME_REFRESH_MS = 30_000;  // 持仓/账户 30s 拉一次实时价
 const SCAN_REFRESH_MS = 60_000;       // 今日扫描状态 60s 拉一次
 let _realtimeTimer = null;
 let _scanTimer = null;
-let _allRuns = [];  // 缓存全量历史，供前端过滤
+let _allRuns = [];      // 缓存全量历史，供前端过滤
+let _allTrades = [];    // 缓存全量成交流水，供前端过滤
+let _equityData = [];   // 缓存净值曲线，今日浮盈卡片用
+let _lastAccountData = null;  // 最近一次 /account 响应，用于 equity 后到时回填浮盈
 
 // 全局权限状态：load() 时拉一次；admin=true 解锁所有写按钮
 let _adminInfo = { ip: '—', is_admin: false, whitelist_empty: false };
@@ -69,12 +72,53 @@ async function loadAccount() {
   try {
     const res = await fetch('/api/paper_trading/account');
     const data = await res.json();
+    _lastAccountData = data;
     renderSummary(data);
     renderHoldings(data.holdings || []);
+    renderDayPnl(data);   // 今日浮盈：依赖 _equityData 拿昨日基线
     _setUpdatedAt(data.realtime_count || 0);
   } catch (e) {
     console.error(e);
   }
+}
+
+// 今日浮盈 = 当前总值（实时价算出来的）- 上一个交易日的 total_value
+//   - 上一个交易日来自 paper_equity_daily 表（daily_signal 跑完后落库）
+//   - 当前总值来自 /api/paper_trading/account 的 latest_run.total_value
+//     （后端会用实时价重算）
+function renderDayPnl(accData) {
+  const el = document.getElementById('sumDayPnl');
+  const sub = document.getElementById('sumDayPnlSub');
+  if (!el || !sub) return;
+
+  const latest = accData?.latest_run;
+  const curTotal = latest?.total_value;
+  if (curTotal == null || !_equityData.length) {
+    el.textContent = '—';
+    el.className = 'sum-val';
+    sub.textContent = '';
+    return;
+  }
+
+  // 取 equity 最后一条（理论上是昨天）作为基线；当 latest_run.run_date 已经是
+  // 今天且 equity 表里也写了今天，要避开拿今天对比今天
+  const today = (latest?.run_date || '').slice(0, 10);
+  const baseRow = [..._equityData].reverse().find(r => r.trade_date !== today);
+  if (!baseRow || baseRow.total_value == null) {
+    el.textContent = '—';
+    el.className = 'sum-val';
+    sub.textContent = '尚无昨日基线';
+    return;
+  }
+
+  const baseTotal = Number(baseRow.total_value);
+  const diff = Number(curTotal) - baseTotal;
+  const pct = baseTotal > 0 ? diff / baseTotal : 0;
+
+  const sign = diff >= 0 ? '+' : '';
+  el.textContent = `${sign}¥${fmtMoney(diff)}`;
+  el.className = 'sum-val ' + (diff >= 0 ? 'pos' : 'neg');
+  sub.textContent = `${sign}${(pct * 100).toFixed(2)}% · 基线 ${baseRow.trade_date}`;
 }
 
 function _setUpdatedAt(realtimeCount) {
@@ -177,6 +221,14 @@ function renderHoldings(holdings) {
         <td>${h.buy_date || ''}</td>
       </tr>`;
   }).join('');
+
+  // 合计行：总市值 / 总成本 / 总浮盈 / 加权浮盈率（= 总浮盈 / 总成本）
+  const totMv   = holdings.reduce((s, h) => s + (Number(h.market_value) || 0), 0);
+  const totCost = holdings.reduce((s, h) => s + (Number(h.cost) || 0), 0);
+  const totPnl  = totMv - totCost;
+  const totPct  = totCost > 0 ? totPnl / totCost : 0;
+  const totCls  = totPnl >= 0 ? 'val-pos' : 'val-neg';
+
   wrap.innerHTML = `
     <table class="pt-tbl">
       <thead><tr>
@@ -184,6 +236,16 @@ function renderHoldings(holdings) {
         <th>市值</th><th>成本</th><th>浮盈</th><th>浮盈率</th><th>买入日</th>
       </tr></thead>
       <tbody>${rows}</tbody>
+      <tfoot>
+        <tr class="pt-foot">
+          <td colspan="5" style="text-align:right">合计（${holdings.length} 只）</td>
+          <td>¥${fmtMoney(totMv)}</td>
+          <td>¥${fmtMoney(totCost)}</td>
+          <td class="${totCls}">¥${fmtMoney(totPnl)}</td>
+          <td class="${totCls}">${fmtPct(totPct)}</td>
+          <td></td>
+        </tr>
+      </tfoot>
     </table>`;
 }
 
@@ -193,7 +255,10 @@ async function loadEquity() {
   try {
     const res = await fetch('/api/paper_trading/equity');
     const { data } = await res.json();
-    renderEquityChart(data || []);
+    _equityData = data || [];
+    renderEquityChart(_equityData);
+    // equity 比 account 后到时，触发一次浮盈重算（用最近一次 account 快照）
+    if (_lastAccountData) renderDayPnl(_lastAccountData);
   } catch (e) {
     console.error(e);
   }
@@ -331,9 +396,7 @@ function renderRuns(runs) {
         <td>¥${fmtMoney(r.total_value)}</td>
         <td>¥${fmtMoney(r.cash)}</td>
         <td class="${crCls}">${fmtPct(cr)}</td>
-        <td style="font-size:12px;max-width:300px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-          ${renderNotes(r)}
-        </td>
+        <td class="notes-cell">${renderNotes(r)}</td>
       </tr>`;
   }).join('');
   wrap.innerHTML = `
@@ -352,7 +415,8 @@ async function loadTrades() {
   try {
     const res = await fetch('/api/paper_trading/trades?limit=300');
     const { trades } = await res.json();
-    renderTrades(trades || []);
+    _allTrades = trades || [];
+    renderTradesFiltered();
   } catch (e) {
     console.error(e);
     document.getElementById('tradesWrap').innerHTML =
@@ -360,17 +424,44 @@ async function loadTrades() {
   }
 }
 
+// 客户端过滤：动作 / 日期范围
+function renderTradesFiltered() {
+  const act = document.getElementById('tradeActionFilter')?.value || '';
+  const from = document.getElementById('tradeDateFrom')?.value || '';
+  const to   = document.getElementById('tradeDateTo')?.value || '';
+  const list = _allTrades.filter(t => {
+    if (act && t.action !== act) return false;
+    const d = (t.run_date || '').slice(0, 10);
+    if (from && d < from) return false;
+    if (to   && d > to)   return false;
+    return true;
+  });
+  renderTrades(list);
+}
+window.renderTradesFiltered = renderTradesFiltered;
+
+function clearTradesFilter() {
+  const a = document.getElementById('tradeActionFilter'); if (a) a.value = '';
+  const f = document.getElementById('tradeDateFrom');     if (f) f.value = '';
+  const t = document.getElementById('tradeDateTo');       if (t) t.value = '';
+  renderTradesFiltered();
+}
+window.clearTradesFilter = clearTradesFilter;
+
 function renderTrades(trades) {
   const wrap = document.getElementById('tradesWrap');
   const hint = document.getElementById('tradesHint');
+  const total = _allTrades.length;
 
   if (!trades.length) {
-    wrap.innerHTML = '<div class="no-data">暂无成交记录</div>';
-    if (hint) hint.textContent = '每一笔买入 / 卖出 / 止损卖出';
+    wrap.innerHTML = total
+      ? '<div class="no-data">无符合筛选条件的成交</div>'
+      : '<div class="no-data">暂无成交记录</div>';
+    if (hint) hint.textContent = total ? `共 ${total} 笔，当前筛选 0 笔` : '每一笔买入 / 卖出 / 止损卖出';
     return;
   }
 
-  // 统计：胜负次数 / 累计已实现盈亏
+  // 统计：胜负次数 / 累计已实现盈亏（基于当前筛选子集）
   let wins = 0, losses = 0, realized = 0;
   trades.forEach(t => {
     if (t.pnl !== null && t.pnl !== undefined) {
@@ -383,8 +474,11 @@ function renderTrades(trades) {
     ? ((wins / (wins + losses)) * 100).toFixed(1) + '%'
     : '—';
   const realizedCls = realized >= 0 ? 'val-pos' : 'val-neg';
+  const scopeLbl = trades.length === total
+    ? `共 ${total} 笔`
+    : `筛选 ${trades.length} / ${total} 笔`;
   if (hint) {
-    hint.innerHTML = `共 ${trades.length} 笔　|　胜/负 ${wins}/${losses}　|　胜率 ${winRate}　|　已实现盈亏 <span class="${realizedCls}">¥${fmtMoney(realized)}</span>`;
+    hint.innerHTML = `${scopeLbl}　|　胜/负 ${wins}/${losses}　|　胜率 ${winRate}　|　已实现盈亏 <span class="${realizedCls}">¥${fmtMoney(realized)}</span>`;
   }
 
   const rows = trades.map(t => {

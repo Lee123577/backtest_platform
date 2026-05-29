@@ -72,6 +72,14 @@
       <select id="taskFilter" onchange="loadRuns()">
         <option value="">全部任务</option>
       </select>
+      <select id="statusFilter" onchange="renderRunsFiltered()" style="margin-left:8px">
+        <option value="">全部状态</option>
+        <option value="success">仅成功</option>
+        <option value="failed">仅失败</option>
+        <option value="timeout">仅超时</option>
+        <option value="skipped">仅跳过</option>
+        <option value="running">仅运行中</option>
+      </select>
     </div>
     <div id="runsWrap"><div class="no-data">加载中…</div></div>
   </div>
