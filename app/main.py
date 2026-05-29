@@ -78,6 +78,16 @@ async def paper_trading_page():
     return FileResponse(str(STATIC_DIR / "paper_trading.html"))
 
 
+@app.get("/factors", include_in_schema=False)
+async def page_factors():
+    return FileResponse(str(STATIC_DIR / "factors.html"))
+
+
+@app.get("/walk_forward", include_in_schema=False)
+async def page_walk_forward():
+    return FileResponse(str(STATIC_DIR / "walk_forward.html"))
+
+
 # ── Paper trading (实盘信号观察) ──────────────────────────────────────────────
 
 def _json_safe(rows):

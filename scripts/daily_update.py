@@ -33,6 +33,7 @@ load_dotenv(ROOT / ".env", override=True)
 
 # 必须在 load_dotenv 之后再 import 项目模块（app.config 读 env）
 from app.data.market_data import _call_no_proxy  # noqa: E402
+from app.data.quality import ensure_quality_column, filter_and_flag  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -290,17 +291,25 @@ def update_kline(conn, trade_date: str):
         log.info(f"stock_kline {trade_date} 已是最新，无需更新")
         return
 
+    # 确保 quality_flag 列存在（首次运行自动 ALTER TABLE ADD COLUMN）
+    try:
+        ensure_quality_column(conn)
+    except Exception as e:
+        log.warning(f"ensure_quality_column 失败（继续写入，不带 flag）: {e}")
+
     sql = """
         INSERT INTO stock_kline
             (code, trade_date, open, high, low, close, volume,
-             amount, turnover, pct_change, market_cap, circ_market_cap, pe_ttm, pb)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+             amount, turnover, pct_change, market_cap, circ_market_cap, pe_ttm, pb,
+             quality_flag)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         ON DUPLICATE KEY UPDATE
             open=VALUES(open), high=VALUES(high), low=VALUES(low),
             close=VALUES(close), volume=VALUES(volume), amount=VALUES(amount),
             turnover=VALUES(turnover), pct_change=VALUES(pct_change),
             market_cap=VALUES(market_cap), circ_market_cap=VALUES(circ_market_cap),
-            pe_ttm=VALUES(pe_ttm), pb=VALUES(pb)
+            pe_ttm=VALUES(pe_ttm), pb=VALUES(pb),
+            quality_flag=VALUES(quality_flag)
     """
 
     # 在并发抓取前探测 EM 是否整体可用，避免 5000 只各试一次失败
@@ -340,7 +349,21 @@ def update_kline(conn, trade_date: str):
     source_count: dict[str, int] = {"em": 0, "sina": 0}
     fail_codes: list[tuple[str, str]] = []
     empty_codes: list[str] = []  # 接口正常但当日无数据（停牌/退市等）
+    quality_stats = {"dropped": 0, "suspect_jump": 0, "suspect_resumed": 0, "ok": 0}
     FLUSH_EVERY = 1000  # 每抓 N 只就写入一次，避免中途崩溃丢失大量进度
+
+    def _flush(rows: list) -> int:
+        """质量校验 → 拼上 quality_flag 列 → batch_insert。返回成功写入条数。"""
+        if not rows:
+            return 0
+        cleaned, flags, stats = filter_and_flag(rows)
+        for k, v in stats.items():
+            quality_stats[k] = quality_stats.get(k, 0) + v
+        if not cleaned:
+            return 0
+        full_rows = [tuple(list(row) + [flag])
+                     for row, flag in zip(cleaned, flags)]
+        return batch_insert(conn, sql, full_rows)
 
     # _call_no_proxy 临时 unset 代理环境变量。多线程并发时
     # 这会引入竞态（一个线程恢复时另一个还在用空 env），
@@ -367,14 +390,14 @@ def update_kline(conn, trade_date: str):
                 )
             # 分批 flush：抓够 FLUSH_EVERY 只就先写入一次
             if done_count % FLUSH_EVERY == 0 and pending_rows:
-                n = batch_insert(conn, sql, pending_rows)
+                n = _flush(pending_rows)
                 written_total += n
                 log.info(f"stock_kline {trade_date} 中途 flush {n} 条（累计 {written_total}）")
                 pending_rows = []
 
     # 收尾 flush
     if pending_rows:
-        n = batch_insert(conn, sql, pending_rows)
+        n = _flush(pending_rows)
         written_total += n
 
     log.info(
@@ -382,6 +405,14 @@ def update_kline(conn, trade_date: str):
         f"(em={source_count.get('em', 0)}, sina={source_count.get('sina', 0)}, "
         f"fail={len(fail_codes)}, empty={len(empty_codes)})"
     )
+    # 数据质量统计
+    if any(v > 0 for v in quality_stats.values()):
+        log.info(
+            f"stock_kline {trade_date} 质量: ok={quality_stats['ok']}, "
+            f"jump={quality_stats['suspect_jump']}, "
+            f"resumed={quality_stats['suspect_resumed']}, "
+            f"dropped={quality_stats['dropped']}"
+        )
     if fail_codes:
         # 仅打印前 5 个错误样本，避免日志爆量
         sample = "; ".join(f"{c}→{e}" for c, e in fail_codes[:5])
@@ -1012,6 +1043,49 @@ def _find_missing_kline_dates(conn, today: date, lookback_days: int = 30) -> lis
     return missing
 
 
+def update_factors(conn, trade_date: str):
+    """
+    增量算当日的全市场因子值并写入 factor_value。
+    依赖 stock_kline 已更新到 trade_date —— 必须放在 update_kline 之后。
+
+    SKIP_FACTORS=1 时跳过（首次部署 / 数据稀疏期可关）
+    """
+    if os.getenv("SKIP_FACTORS"):
+        log.info(f"SKIP_FACTORS=1，跳过 {trade_date} 因子计算")
+        return
+
+    log.info(f"更新 factor_value: {trade_date}")
+    # 延迟 import：避免 daily_update 主流程在 app 模块加载失败时被阻断
+    from app.factors import FactorRegistry
+    from app.factors.base import ensure_factor_value_table, save_factor_values
+
+    try:
+        ensure_factor_value_table()
+    except Exception as e:
+        log.error(f"factor_value 建表失败: {e}")
+        return
+
+    all_factors = FactorRegistry.list_all()
+    if not all_factors:
+        log.warning("没有已注册的因子，跳过")
+        return
+
+    total_written = 0
+    for name in all_factors:
+        try:
+            cls = FactorRegistry.get(name)
+            df = cls().compute(trade_date, trade_date)
+            if df is None or df.empty:
+                log.info(f"  {name}: 当日无数据（窗口不足或停牌）")
+                continue
+            n = save_factor_values(df, name)
+            total_written += n
+            log.info(f"  {name}: 写入 {n} 条")
+        except Exception as e:
+            log.warning(f"  因子 {name} 失败: {e}")
+    log.info(f"factor_value {trade_date} 累计写入 {total_written} 条")
+
+
 def _run_for_date(conn, trade_date: str) -> list[str]:
     """对单个交易日跑全部更新步骤，返回失败步骤列表。"""
     steps = [
@@ -1022,6 +1096,8 @@ def _run_for_date(conn, trade_date: str) -> list[str]:
         ("stock_finance",     lambda: update_stock_finance(conn, trade_date)),
         ("stock_dividend",    lambda: update_stock_dividend(conn, trade_date)),
         ("index_constituent", lambda: update_index_constituent(conn, trade_date)),
+        # 因子值：必须在 stock_kline 之后跑（依赖当日 K 线 + 历史窗口）
+        ("factor_value",      lambda: update_factors(conn, trade_date)),
     ]
     failed = []
     for name, fn in steps:

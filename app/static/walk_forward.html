@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>参数寻优（Walk-Forward）</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+  <style>
+    .wf-grid { display: grid; grid-template-columns: 360px 1fr; gap: 16px; }
+    @media (max-width: 980px) { .wf-grid { grid-template-columns: 1fr; } }
+
+    .param-row {
+      display: grid; grid-template-columns: 1fr 1fr 50px; gap: 6px;
+      margin-bottom: 6px; align-items: center;
+    }
+    .param-row input { font-size: 12px; padding: 4px 6px; }
+    .param-row .param-name { font-size: 12px; color: var(--txt); font-weight: 500; }
+    .param-row .del-btn {
+      width: 24px; height: 24px; border-radius: 4px; cursor: pointer;
+      background: var(--bg2); border: 1px solid var(--border); color: var(--red);
+      font-weight: 700;
+    }
+    .add-row {
+      font-size: 11px; color: var(--accent); cursor: pointer;
+      margin-top: 4px; display: inline-block;
+    }
+    .add-row:hover { text-decoration: underline; }
+
+    .warn-banner {
+      background: #fff8c5; border-left: 3px solid var(--warn);
+      padding: 10px 14px; font-size: 12px; color: var(--warn);
+      border-radius: 4px; margin: 8px 0;
+    }
+    .summary-cards {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 10px; margin-bottom: 14px;
+    }
+    .stat-card {
+      background: var(--bg2); border-radius: 6px; padding: 10px 12px;
+      border-left: 3px solid var(--accent);
+    }
+    .stat-card .label { font-size: 11px; color: var(--txt2); }
+    .stat-card .val { font-size: 18px; font-weight: 700; color: var(--txt); margin-top: 2px; }
+    .stat-card.good { border-left-color: var(--green); }
+    .stat-card.bad  { border-left-color: var(--red); }
+    .stat-card.warn { border-left-color: var(--warn); }
+
+    #scatterChart { width: 100%; height: 320px; }
+
+    .window-table {
+      width: 100%; font-size: 11px; border-collapse: collapse;
+      margin-top: 8px;
+    }
+    .window-table th, .window-table td {
+      border-bottom: 1px solid var(--bg2); padding: 4px 8px;
+      text-align: left;
+    }
+    .window-table thead th {
+      background: var(--bg2); font-weight: 600; color: var(--txt2);
+    }
+    .window-table .num { text-align: right; font-family: SFMono-Regular, Consolas, monospace; }
+    .window-table .pos { color: var(--green); }
+    .window-table .neg { color: var(--red); }
+
+    .stab-table {
+      width: 100%; font-size: 12px; border-collapse: collapse;
+      margin-top: 8px;
+    }
+    .stab-table th { font-weight: 600; padding: 4px 8px; color: var(--txt2); background: var(--bg2); }
+    .stab-table td { padding: 4px 8px; border-bottom: 1px solid var(--bg2); }
+    .stab-bar {
+      display: inline-block; height: 6px; background: var(--accent);
+      border-radius: 3px; vertical-align: middle; margin-right: 6px;
+    }
+
+    .toast {
+      position: fixed; top: 70px; right: 16px; padding: 10px 16px;
+      background: var(--txt); color: #fff; border-radius: 6px;
+      font-size: 13px; z-index: 1000; opacity: 0; transition: opacity .2s;
+      pointer-events: none;
+    }
+    .toast.show { opacity: 0.92; }
+    .toast.error { background: var(--red); }
+    .toast.success { background: var(--green); }
+
+    .empty-hint { text-align: center; padding: 40px; color: var(--txt2); font-size: 13px; }
+    .help-line {
+      font-size: 11px; color: var(--txt2); line-height: 1.7;
+      padding: 8px 12px; background: var(--bg2); border-radius: 4px; margin-top: 12px;
+    }
+    .help-line b { color: var(--txt); }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>📈 A股量化回测平台</h1>
+  <nav class="header-nav">
+    <a class="nav-btn" href="/" style="text-decoration:none;display:inline-flex;align-items:center;">单股策略</a>
+    <a class="nav-btn" href="/?mode=portfolio" style="text-decoration:none;display:inline-flex;align-items:center;">选股策略</a>
+    <a class="nav-btn" href="/factors" style="text-decoration:none;display:inline-flex;align-items:center;">因子分析</a>
+    <button class="nav-btn active">参数寻优</button>
+    <a class="nav-btn" href="/paper_trading" style="text-decoration:none;display:inline-flex;align-items:center;">实盘观察</a>
+    <a class="nav-btn" href="/tasks" style="text-decoration:none;display:inline-flex;align-items:center;">定时任务</a>
+  </nav>
+</header>
+
+<main>
+  <div class="panel">
+    <div class="panel-title">Walk-Forward 滚动优化</div>
+
+    <div class="wf-grid">
+      <!-- 左：配置 -->
+      <div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>股票代码</label>
+            <input type="text" id="code" placeholder="如 000001" maxlength="6" value="000001">
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label>策略</label>
+            <select id="strategy" style="width:100%"></select>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label>开始日期</label>
+            <input type="date" id="startDate" value="2020-01-01">
+          </div>
+          <div class="form-group">
+            <label>结束日期</label>
+            <input type="date" id="endDate">
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label>In-Sample 长度（天）</label>
+            <input type="number" id="isDays" value="504" min="60">
+          </div>
+          <div class="form-group">
+            <label>Out-Sample 长度（天）</label>
+            <input type="number" id="oosDays" value="126" min="20">
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label>选优指标</label>
+            <select id="objective" style="width:100%">
+              <option value="sharpe_ratio">Sharpe Ratio</option>
+              <option value="total_return">Total Return</option>
+              <option value="calmar_ratio">Calmar Ratio</option>
+              <option value="sortino_ratio">Sortino Ratio</option>
+            </select>
+          </div>
+        </div>
+
+        <div style="margin-top:14px;font-size:12px;font-weight:600;color:var(--txt);">
+          参数网格 <span id="comboCount" style="color:var(--txt2);font-weight:400;"></span>
+        </div>
+        <div style="font-size:11px;color:var(--txt2);margin-bottom:6px;">
+          每个参数填入逗号分隔的候选值，引擎会做笛卡尔积。
+        </div>
+        <div id="paramGrid"></div>
+
+        <div style="margin-top:14px;">
+          <button class="btn btn-primary" id="runBtn" style="width:100%;">运行 Walk-Forward</button>
+        </div>
+        <div id="statusText" style="font-size:12px;color:var(--txt2);margin-top:8px;"></div>
+      </div>
+
+      <!-- 右：结果 -->
+      <div>
+        <div id="warnZone"></div>
+        <div id="resultZone" style="display:none;">
+          <div class="summary-cards" id="summaryCards"></div>
+
+          <div style="font-size:13px;font-weight:600;margin:14px 0 6px;color:var(--txt);">
+            IS vs OOS 散点（每点 = 一个窗口）
+          </div>
+          <div id="scatterChart"></div>
+
+          <div style="font-size:13px;font-weight:600;margin:18px 0 6px;color:var(--txt);">
+            参数稳定性（每个值被选为最优的窗口数）
+          </div>
+          <div id="paramStability"></div>
+
+          <div style="font-size:13px;font-weight:600;margin:18px 0 6px;color:var(--txt);">
+            窗口明细
+          </div>
+          <div style="max-height:340px;overflow-y:auto;">
+            <table class="window-table" id="windowTable"></table>
+          </div>
+
+          <div class="help-line">
+            <b>怎么读 Walk-Forward:</b>
+            理想情况下 OOS 表现接近 IS（衰减率接近 1），说明寻优结果真实有效；
+            若 OOS 远低于 IS（衰减率 &lt; 0.5）说明过拟合严重，参数空间需要收窄；
+            参数稳定性反映哪个值是真正稳健的（高频出现），高度分散说明无 alpha。
+          </div>
+        </div>
+        <div id="emptyHint" class="empty-hint">
+          配置参数后点【运行 Walk-Forward】
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<div class="toast" id="toast"></div>
+<script src="/static/js/walk_forward.js"></script>
+</body>
+</html>
