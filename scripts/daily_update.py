@@ -45,7 +45,11 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 BATCH_SIZE = 500
-MAX_WORKERS = 5
+MAX_WORKERS = int(os.getenv("MAX_WORKERS", "5"))
+
+# 估值快照缓存：长时间 backfill 时由外层（如 backfill_kline.py）一次性写入，
+# 避免每个交易日都重新调一次 30 秒 EM 重试再降级到 DB 兜底
+_cached_snap: dict | None = None
 
 MAJOR_INDICES = [
     "000001", "000300", "000905", "000852",
@@ -262,8 +266,12 @@ def update_kline(conn, trade_date: str):
     log.info(f"更新 stock_kline: {trade_date}")
     date_nodash = trade_date.replace("-", "")
 
-    # 获取全市场估值快照（含多级降级）
-    snap = _get_valuation_snap()
+    # 估值快照：优先用模块级缓存（backfill 长任务复用），否则每天重新拉
+    if _cached_snap is not None:
+        snap = _cached_snap
+        log.info(f"复用缓存估值快照 ({len(snap)} 只)")
+    else:
+        snap = _get_valuation_snap()
 
     # 获取全部股票代码
     with conn.cursor() as cur:
