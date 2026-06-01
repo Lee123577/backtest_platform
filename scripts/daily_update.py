@@ -394,6 +394,10 @@ def update_kline(conn, trade_date: str):
                 written_total += n
                 log.info(f"stock_kline {trade_date} 中途 flush {n} 条（累计 {written_total}）")
                 pending_rows = []
+            # 每 500 只让出 CPU 一下，给 FastAPI 等共享进程留时间片
+            # 单次只让 0.3 秒，对总耗时影响 < 5%，但能避免 1 核服务器卡死
+            if done_count % 500 == 0:
+                time.sleep(0.3)
 
     # 收尾 flush
     if pending_rows:
