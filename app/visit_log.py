@@ -208,6 +208,17 @@ class VisitLogMiddleware(BaseHTTPMiddleware):
             ua = request.headers.get("user-agent") or None
             device, os_name, browser = _parse_ua(ua)
             ip = _client_ip(request)[:45]
+
+            # 管理员 IP 不入库：自己用 backtest 平台时频繁刷新 / 触发任务
+            # 会污染 PV/UV 统计。is_admin_cached 走 60s 进程内缓存，几乎零成本
+            try:
+                from .paper_trading.admin_ip import is_admin_cached
+                if is_admin_cached(ip):
+                    return response
+            except Exception as e:
+                # 缓存查询失败不阻塞访问日志正常流程
+                logger.debug("admin 缓存查询失败（忽略）: %s", e)
+
             country, region, city, isp = _lookup_geo(ip)
             payload = {
                 "ip":      ip,

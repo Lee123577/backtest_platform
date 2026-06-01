@@ -130,6 +130,49 @@ def is_admin(ip: Optional[str]) -> bool:
         return cur.fetchone() is not None
 
 
+# ── 缓存版（中间件高频调用，避免逐请求 SELECT）────────────────────────────────
+import time as _time  # noqa: E402
+
+_admin_set_cache: set[str] = set()
+_admin_cache_loaded_at: float = 0.0
+_ADMIN_CACHE_TTL = 60  # 秒
+
+
+def is_admin_cached(ip: Optional[str]) -> bool:
+    """
+    缓存版 is_admin —— TTL 60s 内重复请求不打 DB。
+    主要给 VisitLogMiddleware 用：每个请求都跑，不能逐请求查表。
+
+    新增/删除 admin IP 时调 invalidate_admin_cache() 让下次请求立即重载。
+    """
+    global _admin_set_cache, _admin_cache_loaded_at
+    if not ip:
+        return False
+    now = _time.time()
+    if now - _admin_cache_loaded_at > _ADMIN_CACHE_TTL:
+        try:
+            conn = _get_pool()
+            if conn is not None:
+                conn.ping(reconnect=True)
+                with conn.cursor() as cur:
+                    cur.execute("SELECT ip FROM paper_admin_ip")
+                    _admin_set_cache = {
+                        (r["ip"] if isinstance(r, dict) else r[0])
+                        for r in cur.fetchall()
+                    }
+                _admin_cache_loaded_at = now
+        except Exception as e:
+            logger.warning("刷新 admin IP 缓存失败: %s", e)
+            # 不更新时间戳，下次请求会重试
+    return ip in _admin_set_cache
+
+
+def invalidate_admin_cache() -> None:
+    """add/remove 后立即过期缓存。下次请求会重新加载。"""
+    global _admin_cache_loaded_at
+    _admin_cache_loaded_at = 0.0
+
+
 def count_ips() -> int:
     conn = _get_pool()
     if conn is None:
@@ -164,6 +207,7 @@ def add_ip(ip: str, note: str, by_ip: str) -> None:
             "ON DUPLICATE KEY UPDATE note=VALUES(note)",
             (ip[:45], (note or "")[:200], (by_ip or "")[:45]),
         )
+    invalidate_admin_cache()
     logger.info("Admin IP added: %s by %s (%s)", ip, by_ip, note)
 
 
@@ -173,7 +217,10 @@ def remove_ip(ip: str) -> bool:
     conn.ping(reconnect=True)
     with conn.cursor() as cur:
         cur.execute("DELETE FROM paper_admin_ip WHERE ip=%s", (ip[:45],))
-        return cur.rowcount > 0
+        ok = cur.rowcount > 0
+    if ok:
+        invalidate_admin_cache()
+    return ok
 
 
 # ── FastAPI dependency ───────────────────────────────────────────────────────
