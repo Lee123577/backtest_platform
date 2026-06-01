@@ -414,29 +414,36 @@ function renderTraffic(data) {
   document.getElementById('trafficUvSub').textContent =
     `按 IP 去重${inner > 0 ? `（另含 ${inner} 个内网/Unknown）` : ''}`;
 
-  // 趋势 + 路径 + 地区，纯文本紧凑展示
+  // 24h 趋势 —— 用 Unicode block 文字图 + 时间轴，去掉次要的 路径/地区 行
   const byHour = data.by_hour || [];
   const peakHour = byHour.indexOf(Math.max(...byHour, 0));
   const peakN = byHour[peakHour] || 0;
-  const trendLine = byHour.map((n, h) => {
-    const max = Math.max(...byHour, 1);
-    const bars = '▁▂▃▄▅▆▇█';
+  const max = Math.max(...byHour, 1);
+  const bars = '▁▂▃▄▅▆▇█';
+  const trendLine = byHour.map(n => {
     const idx = Math.min(bars.length - 1, Math.floor((n / max) * (bars.length - 1)));
     return bars[idx];
   }).join('');
 
-  const topPaths = (data.top_paths || []).slice(0, 3).map(p =>
-    `<b>${escapeHtml(p.path)}</b> ${p.n}`
-  ).join('  ·  ');
-  const topGeo = (data.top_geo || []).slice(0, 4).map(g =>
-    `<b>${escapeHtml(g.country)}</b> ${g.n}`
-  ).join('  ·  ');
+  // 时间刻度：每 6 小时一个标签 (0/6/12/18)
+  const hours = [0, 6, 12, 18];
+  const axisLine = Array.from({ length: 24 }, (_, h) => {
+    return hours.includes(h) ? String(h).padStart(2, '0') : '  ';
+  }).join(' ');
 
   document.getElementById('trafficDetail').innerHTML = `
-    <div>📊 24h 趋势 <span style="font-family:monospace;letter-spacing:1px;">${trendLine}</span>
-         ${peakN > 0 ? `<span style="margin-left:6px;">峰值 ${peakHour}:00 · ${peakN}</span>` : ''}</div>
-    <div>🔥 热门路径: ${topPaths || '<i>无</i>'}</div>
-    <div>🌍 来源地区: ${topGeo || '<i>无</i>'}</div>
+    <div style="font-size:12px;color:var(--txt2);margin-bottom:6px;">
+      📊 今日 24h 访问趋势
+      ${peakN > 0 ? `<span style="margin-left:10px;color:var(--accent);font-weight:600;">峰值 ${peakHour}:00 · ${peakN}</span>` : ''}
+    </div>
+    <div style="font-family:SFMono-Regular,Consolas,Liberation Mono,Menlo,monospace;
+                font-size:22px;letter-spacing:5px;line-height:1.1;color:var(--accent);">
+      ${trendLine}
+    </div>
+    <div style="font-family:SFMono-Regular,Consolas,Liberation Mono,Menlo,monospace;
+                font-size:10px;letter-spacing:5px;color:var(--txt2);margin-top:2px;">
+      ${axisLine}
+    </div>
   `;
 }
 
