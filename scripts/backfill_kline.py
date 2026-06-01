@@ -9,13 +9,15 @@ stock_kline 补全脚本（资源友好版）
 
 可选环境变量：
   SKIP_EM=1        跳过 EM 探测，全走 sina（云服务器推荐）
-  MAX_WORKERS=4    sina 并发数，**默认 4，硬上限 8**（保护 FastAPI 不被挤死）
+  MAX_WORKERS=X    sina 并发数，**默认 max(2, CPU核数 - 1)，硬上限 8**
+                   对 2 核云主机自动 = 2（每核 1 个，FastAPI 靠 nice 优先抢占）
   SKIP_SNAP=1      跳过估值快照（market_cap/pe/pb 写 NULL，单纯补 K 线时最快）
   NICE=10          进程 niceness，越大越不抢 CPU。默认 10，FastAPI 默认 0 = 优先
 
 资源保护机制（自动开启，无需配置）：
   - **锁文件** /tmp/backfill_kline.lock：同时只允许一个实例跑，避免重复进程叠加压垮内存
   - **os.nice(10)**：把自己优先级降到 FastAPI 之下，被抢占不卡服务
+  - **MAX_WORKERS 默认自适应 CPU**：2 核机器只起 2 个 worker，避免 thrashing
   - **MAX_WORKERS 硬上限 8**：超过 8 会被强制裁到 8 并打 WARNING
   - **每 500 只 micro-sleep 0.3s**：给 FastAPI 留 CPU 周期
 
@@ -103,8 +105,39 @@ def _self_nice():
 
 
 def _cap_workers():
-    """把 MAX_WORKERS 硬裁到上限，避免用户传 50 直接打满服务器。"""
-    cur = int(os.environ.get("MAX_WORKERS", "4"))
+    """
+    确定 MAX_WORKERS。用户未传时根据 CPU 核数自动算：
+      - 留 1 核给 FastAPI，避免把所有核都占满引起 thrashing
+      - 至少 2（单线程太慢）
+      - 不超过 WORKER_HARD_CAP（8）
+
+    具体值：
+      1 核 → 2（不得已，让 FastAPI 排队），nice 保护服务响应
+      2 核 → 2  ← 用户场景，FastAPI 1 核优先 + backfill 1 核 + 共享 1 核
+      4 核 → 3
+      8 核 → 7
+    """
+    cpu = os.cpu_count() or 2
+    auto_default = max(2, min(cpu - 1, WORKER_HARD_CAP))
+
+    raw = os.environ.get("MAX_WORKERS")
+    if raw is None:
+        os.environ["MAX_WORKERS"] = str(auto_default)
+        print(
+            f"📊 自动选择 MAX_WORKERS={auto_default} "
+            f"(CPU={cpu} 核，留 1 个核给 FastAPI；可用 MAX_WORKERS=N 覆盖)",
+            file=sys.stderr,
+        )
+        return
+
+    try:
+        cur = int(raw)
+    except ValueError:
+        cur = auto_default
+        os.environ["MAX_WORKERS"] = str(cur)
+        print(f"⚠️ MAX_WORKERS={raw!r} 非法，降回自动值 {cur}", file=sys.stderr)
+        return
+
     if cur > WORKER_HARD_CAP:
         print(
             f"⚠️ MAX_WORKERS={cur} 超过安全上限 {WORKER_HARD_CAP}，"
@@ -112,6 +145,13 @@ def _cap_workers():
             file=sys.stderr,
         )
         os.environ["MAX_WORKERS"] = str(WORKER_HARD_CAP)
+    elif cur > cpu:
+        # 没超过硬上限但超过 CPU 核数 —— 友好提醒不阻断
+        print(
+            f"⚠️ MAX_WORKERS={cur} > CPU 核数 {cpu}，"
+            f"可能引起 CPU 抢占；建议 ≤ {cpu - 1 if cpu > 1 else 1}",
+            file=sys.stderr,
+        )
     elif cur < 1:
         os.environ["MAX_WORKERS"] = "1"
 

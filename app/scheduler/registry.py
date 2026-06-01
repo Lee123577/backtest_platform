@@ -39,12 +39,13 @@ TASKS: Dict[str, TaskDef] = {
     "daily_update": {
         "cmd": ["python", "scripts/daily_update.py"],
         "schedule": "weekday:17:00",
-        "timeout_sec": 45 * 60,    # 45 分钟（sina 全量 ~15min × 当日 + 前几天缺漏）
+        "timeout_sec": 50 * 60,    # 50 分钟（2 核 + worker=2 比 worker=10 慢，但稳）
         "depends_on": None,
         "description": "增量更新 K 线 / 财务 / 指数 / 北向资金 / 因子（每个交易日 17:00）",
-        # 云服务器 IP 几乎一定被 push2.eastmoney.com 拦截，跳过 EM 探测
-        # 全程走 sina；MAX_WORKERS=10 实测下来 sina 不限流
-        "env": {"SKIP_EM": "1", "MAX_WORKERS": "10"},
+        # 云服务器 IP 几乎一定被 push2.eastmoney.com 拦截，跳过 EM 探测全程走 sina；
+        # MAX_WORKERS=2 适配 2 核云主机（留 1 核给 FastAPI、1 核给 backfill，
+        # 共享内核+nice 保护下 FastAPI 优先）。3-4 核机器可调到 3-5。
+        "env": {"SKIP_EM": "1", "MAX_WORKERS": "2"},
     },
     "daily_signal": {
         # 参数全部走数据库 paper_account.strategy_params（前端 UI 编辑），
