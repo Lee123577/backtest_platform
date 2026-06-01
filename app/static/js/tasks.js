@@ -420,9 +420,12 @@ function renderTraffic(data) {
   const peakN = byHour[peakHour] || 0;
   const max = Math.max(...byHour, 1);
   const bars = '▁▂▃▄▅▆▇█';
-  const trendLine = byHour.map(n => {
+  // 每小时一个 .hour-cell span，data-tip 给 CSS hover tooltip
+  const trendLine = byHour.map((n, h) => {
     const idx = Math.min(bars.length - 1, Math.floor((n / max) * (bars.length - 1)));
-    return bars[idx];
+    const ch = n > 0 ? bars[idx] : '·';
+    const label = String(h).padStart(2, '0');
+    return `<span class="hour-cell" data-tip="${label}:00 · ${n} 次">${ch}</span>`;
   }).join('');
 
   // 时间刻度：每 6 小时一个标签 (0/6/12/18)
@@ -435,6 +438,7 @@ function renderTraffic(data) {
     <div style="font-size:12px;color:var(--txt2);margin-bottom:6px;">
       📊 今日 24h 访问趋势
       ${peakN > 0 ? `<span style="margin-left:10px;color:var(--accent);font-weight:600;">峰值 ${peakHour}:00 · ${peakN}</span>` : ''}
+      <span style="margin-left:8px;font-size:10px;">悬停柱体看具体小时</span>
     </div>
     <div style="font-family:SFMono-Regular,Consolas,Liberation Mono,Menlo,monospace;
                 font-size:22px;letter-spacing:5px;line-height:1.1;color:var(--accent);">
