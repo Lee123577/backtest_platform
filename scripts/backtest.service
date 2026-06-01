@@ -1,0 +1,40 @@
+[Unit]
+Description=Backtest Platform - FastAPI server
+Documentation=https://github.com/Lee123577/backtest_platform
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# 跑服务的用户。如果你不是用 root 起，改成对应用户名
+User=root
+Group=root
+
+# 项目根目录。安装脚本会自动替换成实际路径
+WorkingDirectory=__ROOT__
+
+# 读取 .env 里的 MYSQL_* 等环境变量（前缀 - 表示文件不存在也不报错）
+EnvironmentFile=-__ROOT__/.env
+
+# 生产模式：不带 --reload，节省一个监听进程；worker=1 是因为
+# 你是 2 核云主机，留 1 核给 backfill/scheduler；高并发再考虑加
+ExecStart=/usr/bin/env python3 -m uvicorn app.main:app \
+    --host 0.0.0.0 --port 8000 --workers 1
+
+# 进程被 systemctl stop 时的优雅退出：先发 SIGTERM，15s 内不退就 SIGKILL
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=15
+
+# 崩溃自动拉起；正常 exit 不重启（避免 start/stop 死循环）
+Restart=on-failure
+RestartSec=5
+
+# 日志走 journalctl，方便统一查 `journalctl -u backtest -f`
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=backtest
+
+[Install]
+WantedBy=multi-user.target
