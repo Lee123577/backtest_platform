@@ -260,6 +260,9 @@ def run_one(name: str, trigger: str = "manual") -> dict:
     手动触发（CLI 入口或不带 precheck 的调用）。同样会做依赖检查。
     API 调用方推荐先调 precheck()，依赖不通则不要进这里 —— 否则会写两条
     skipped 记录。
+
+    trigger == "manual-force" 时跳过依赖检查（紧急用，例如 daily_signal
+    依赖 daily_update 但 daily_update 跑挂了，又必须立即扫描调仓）。
     """
     db.ensure_table()
     spec = registry.get_task(name)
@@ -268,10 +271,15 @@ def run_one(name: str, trigger: str = "manual") -> dict:
 
     today = _Date.today()
     dep = spec.get("depends_on")
-    if dep and not db.already_ran_today(dep, today, status="success"):
+    if dep and trigger != "manual-force" and not db.already_ran_today(
+        dep, today, status="success"
+    ):
         reason = f"依赖 {dep} 今天还没成功"
         _record_skipped(name, reason)
         return {"task": name, "status": "skipped", "reason": reason}
+
+    if trigger == "manual-force" and dep:
+        logger.warning("[%s] FORCE 触发：跳过依赖 %s 检查", name, dep)
 
     sched_at = _today_scheduled_at(spec["schedule"], today)
     status = _execute(name, sched_at, trigger)

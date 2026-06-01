@@ -620,26 +620,29 @@ function renderScanStatus(t) {
   applyAdminGuards();
 }
 
-async function triggerScan() {
+async function triggerScan(force = false) {
   const btn = document.getElementById('scanBtn');
   const hint = document.getElementById('scanHint');
   btn.disabled = true;
-  btn.textContent = '触发中…';
+  btn.textContent = force ? '强制扫描中…' : '触发中…';
   try {
+    const url = '/api/tasks/daily_signal/run' + (force ? '?force=1' : '');
     // 用 adminFetch：403 抛 Error，避免误显示"已加入队列"假象
-    const res = await adminFetch('/api/tasks/daily_signal/run', { method: 'POST' });
+    const res = await adminFetch(url, { method: 'POST' });
     if (!res.ok) {
       const d = await res.json().catch(() => ({}));
       throw new Error(d.detail || '触发失败');
     }
     const data = await res.json();
     if (data.status === 'skipped') {
-      hint.textContent = `跳过：${data.reason || ''}`;
+      // 依赖未满足。给用户一个"强制扫描"出口（绕过依赖检查）
+      const reason = data.reason || '依赖未满足';
+      hint.innerHTML = `跳过：${reason}。<a href="#" onclick="triggerScan(true);return false;" style="color:#0969da;font-weight:600;">⚡ 强制扫描（跳过依赖）</a>`;
       btn.disabled = false;
       btn.textContent = '重试';
       return;
     }
-    hint.textContent = '已加入队列，约 30s 后刷新看结果';
+    hint.textContent = (force ? '⚡ 已强制入队' : '已加入队列') + '，约 30s 后刷新看结果';
     // 几秒后拉一次摘要 + 成交流水
     setTimeout(async () => {
       await Promise.all([loadScanStatus(), loadAccount(), loadRuns(), loadTrades()]);

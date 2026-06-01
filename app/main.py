@@ -434,6 +434,7 @@ async def api_tasks_runs(task: Optional[str] = None, limit: int = 100):
 @app.post("/api/tasks/{name}/run")
 async def api_tasks_run(
     name: str,
+    force: bool = False,
     admin: str = Depends(paper_admin_ip.require_admin_ip),
 ):
     """
@@ -443,20 +444,28 @@ async def api_tasks_run(
          task_run_log 写一条 status='skipped' 的记录方便溯源
       2. 通过检查 → 丢线程池跑 subprocess，HTTP 立即返回 queued
          （前端会在几秒后刷新 /api/tasks/runs 拿到最新结果）
+
+    ?force=1 跳过依赖检查直接执行。**紧急用**——例如 daily_signal
+    依赖 daily_update 但 daily_update 跑挂了，用户又必须立即扫描调仓。
+    跑的子进程拿到自带的 env，不会重新触发 daily_update。
     """
     if scheduler_registry.get_task(name) is None:
         raise HTTPException(404, f"未知任务: {name}")
 
-    check = scheduler_runner.precheck(name)
-    if not check["ok"]:
-        # 注意：HTTP 200，不是 4xx —— 这是业务结果不是 API 错误
-        return {"task": name, "status": "skipped", "reason": check["reason"]}
+    if not force:
+        check = scheduler_runner.precheck(name)
+        if not check["ok"]:
+            # 注意：HTTP 200，不是 4xx —— 这是业务结果不是 API 错误
+            return {"task": name, "status": "skipped", "reason": check["reason"],
+                    "hint": "可调用 POST /api/tasks/{name}/run?force=1 跳过依赖检查"}
 
     loop = asyncio.get_event_loop()
+    trigger = "manual-force" if force else "manual"
     # subprocess 阻塞调用，丢线程池；不 await，立即返回
-    loop.run_in_executor(None, lambda: scheduler_runner.run_one(name, "manual"))
+    loop.run_in_executor(None, lambda: scheduler_runner.run_one(name, trigger))
     from datetime import datetime as _DT
-    return {"task": name, "status": "queued", "queued_at": _DT.now().isoformat()}
+    return {"task": name, "status": "queued", "force": force,
+            "queued_at": _DT.now().isoformat()}
 
 
 def _iso(v):
