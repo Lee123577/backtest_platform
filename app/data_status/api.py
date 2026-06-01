@@ -224,20 +224,37 @@ _visit_time_col: str | None = None
 
 
 def _detect_visit_time_col(conn) -> str | None:
-    """探测 user_visit_log 表里的时间字段。优先级 created_at > visit_time > 其他。"""
+    """
+    探测 user_visit_log 表里的时间字段。优先级 created_at > visit_time > 其他。
+    MySQL information_schema 的列名返回可能是大写 COLUMN_NAME，做大小写兼容。
+    """
     global _visit_time_col
     if _visit_time_col is not None:
         return _visit_time_col
-    with conn.cursor() as cur:
-        cur.execute("""
-            SELECT column_name FROM information_schema.columns
-            WHERE table_schema = DATABASE()
-              AND table_name = 'user_visit_log'
-              AND (data_type = 'datetime' OR data_type = 'timestamp'
-                   OR data_type = 'date')
-        """)
-        cols = [r["column_name"] if isinstance(r, dict) else r[0]
-                for r in cur.fetchall()]
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema = DATABASE()
+                  AND table_name = 'user_visit_log'
+                  AND (data_type = 'datetime' OR data_type = 'timestamp'
+                       OR data_type = 'date')
+            """)
+            rows = cur.fetchall()
+    except Exception as e:
+        logger.warning(f"INFORMATION_SCHEMA 查询失败: {e}")
+        return None
+
+    cols = []
+    for r in rows:
+        if isinstance(r, dict):
+            # MySQL 返回可能是大写 COLUMN_NAME
+            v = r.get("column_name") or r.get("COLUMN_NAME")
+        else:
+            v = r[0]
+        if v:
+            cols.append(str(v).lower())   # 统一小写比较
+
     priority = ["created_at", "visit_time", "access_time", "ts",
                 "create_time", "log_time"]
     for p in priority:
@@ -267,7 +284,17 @@ def get_traffic_today():
 
     tcol = _detect_visit_time_col(conn)
     if tcol is None:
-        raise HTTPException(500, "user_visit_log 表里没有时间列，无法统计")
+        # 别 500，给前端干净的空响应 + 一行警示
+        logger.warning("user_visit_log 找不到时间列，traffic_today 返回空")
+        return {
+            "date": _DT.now().strftime("%Y-%m-%d"),
+            "pv": 0, "uv": 0, "uv_all": 0,
+            "time_col": None,
+            "by_hour": [0] * 24,
+            "top_paths": [],
+            "top_geo": [],
+            "warning": "user_visit_log 表无 datetime/timestamp/date 列，无法统计今日流量",
+        }
 
     today_str = _DT.now().strftime("%Y-%m-%d")
     # 用 BETWEEN 让 MySQL 走索引；DATE(col)=CURDATE() 会让索引失效
@@ -278,69 +305,77 @@ def get_traffic_today():
     skip_paths = ("/static/%", "/favicon.ico", "/robots.txt", "/api/admin/ip/me")
     skip_clause = " AND ".join([f"request_path NOT LIKE %s"] * len(skip_paths))
 
-    with conn.cursor() as cur:
-        cur.execute(f"""
-            SELECT
-                COUNT(*) AS pv,
-                COUNT(DISTINCT ip) AS uv_all,
-                COUNT(DISTINCT CASE WHEN country IS NOT NULL
-                                     AND country NOT IN ('内网', 'Unknown')
-                                THEN ip END) AS uv
-            FROM user_visit_log
-            WHERE `{tcol}` >= %s AND `{tcol}` <= %s
-              AND {skip_clause}
-        """, (range_start, range_end, *skip_paths))
-        r = cur.fetchone() or {}
-        pv = int(r.get("pv") or 0)
-        uv = int(r.get("uv") or 0)
-        uv_all = int(r.get("uv_all") or 0)
-
-    # 24 小时分布
-    with conn.cursor() as cur:
-        cur.execute(f"""
-            SELECT HOUR(`{tcol}`) AS h, COUNT(*) AS n
-            FROM user_visit_log
-            WHERE `{tcol}` >= %s AND `{tcol}` <= %s
-              AND {skip_clause}
-            GROUP BY HOUR(`{tcol}`)
-        """, (range_start, range_end, *skip_paths))
-        rows = cur.fetchall()
+    pv = uv = uv_all = 0
     by_hour = [0] * 24
-    for r in rows:
-        h = int(r["h"]) if isinstance(r, dict) else int(r[0])
-        n = int(r["n"]) if isinstance(r, dict) else int(r[1])
-        if 0 <= h < 24:
-            by_hour[h] = n
+    top_paths: list = []
+    top_geo: list = []
+    warning: str | None = None
 
-    # Top paths
-    with conn.cursor() as cur:
-        cur.execute(f"""
-            SELECT request_path AS path, COUNT(*) AS n
-            FROM user_visit_log
-            WHERE `{tcol}` >= %s AND `{tcol}` <= %s
-              AND {skip_clause}
-            GROUP BY request_path ORDER BY n DESC LIMIT 5
-        """, (range_start, range_end, *skip_paths))
-        top_paths = [
-            {"path": (r["path"] if isinstance(r, dict) else r[0])[:60],
-             "n": int(r["n"] if isinstance(r, dict) else r[1])}
-            for r in cur.fetchall()
-        ]
+    # 整段统计包 try/except：任何一条 SQL 错误都不抛 500，
+    # 前端能继续渲染（pv/uv 显示 0 + warning 文字）
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT
+                    COUNT(*) AS pv,
+                    COUNT(DISTINCT ip) AS uv_all,
+                    COUNT(DISTINCT CASE WHEN country IS NOT NULL
+                                         AND country NOT IN ('内网', 'Unknown')
+                                    THEN ip END) AS uv
+                FROM user_visit_log
+                WHERE `{tcol}` >= %s AND `{tcol}` <= %s
+                  AND {skip_clause}
+            """, (range_start, range_end, *skip_paths))
+            r = cur.fetchone() or {}
+            pv = int(r.get("pv") or 0)
+            uv = int(r.get("uv") or 0)
+            uv_all = int(r.get("uv_all") or 0)
 
-    # Top geo
-    with conn.cursor() as cur:
-        cur.execute(f"""
-            SELECT COALESCE(country, 'Unknown') AS country, COUNT(DISTINCT ip) AS n
-            FROM user_visit_log
-            WHERE `{tcol}` >= %s AND `{tcol}` <= %s
-              AND {skip_clause}
-            GROUP BY country ORDER BY n DESC LIMIT 5
-        """, (range_start, range_end, *skip_paths))
-        top_geo = [
-            {"country": (r["country"] if isinstance(r, dict) else r[0]),
-             "n": int(r["n"] if isinstance(r, dict) else r[1])}
-            for r in cur.fetchall()
-        ]
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT HOUR(`{tcol}`) AS h, COUNT(*) AS n
+                FROM user_visit_log
+                WHERE `{tcol}` >= %s AND `{tcol}` <= %s
+                  AND {skip_clause}
+                GROUP BY HOUR(`{tcol}`)
+            """, (range_start, range_end, *skip_paths))
+            rows = cur.fetchall()
+        for r in rows:
+            h = int(r["h"]) if isinstance(r, dict) else int(r[0])
+            n = int(r["n"]) if isinstance(r, dict) else int(r[1])
+            if 0 <= h < 24:
+                by_hour[h] = n
+
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT request_path AS path, COUNT(*) AS n
+                FROM user_visit_log
+                WHERE `{tcol}` >= %s AND `{tcol}` <= %s
+                  AND {skip_clause}
+                GROUP BY request_path ORDER BY n DESC LIMIT 5
+            """, (range_start, range_end, *skip_paths))
+            top_paths = [
+                {"path": (r["path"] if isinstance(r, dict) else r[0])[:60],
+                 "n": int(r["n"] if isinstance(r, dict) else r[1])}
+                for r in cur.fetchall()
+            ]
+
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT COALESCE(country, 'Unknown') AS country, COUNT(DISTINCT ip) AS n
+                FROM user_visit_log
+                WHERE `{tcol}` >= %s AND `{tcol}` <= %s
+                  AND {skip_clause}
+                GROUP BY country ORDER BY n DESC LIMIT 5
+            """, (range_start, range_end, *skip_paths))
+            top_geo = [
+                {"country": (r["country"] if isinstance(r, dict) else r[0]),
+                 "n": int(r["n"] if isinstance(r, dict) else r[1])}
+                for r in cur.fetchall()
+            ]
+    except Exception as e:
+        logger.exception("traffic_today 统计失败")
+        warning = f"统计 SQL 失败: {type(e).__name__}: {str(e)[:200]}"
 
     return {
         "date": today_str,
@@ -351,4 +386,5 @@ def get_traffic_today():
         "by_hour": by_hour,
         "top_paths": top_paths,
         "top_geo": top_geo,
+        **({"warning": warning} if warning else {}),
     }
