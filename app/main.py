@@ -92,6 +92,12 @@ async def page_walk_forward():
     return FileResponse(str(STATIC_DIR / "walk_forward.html"))
 
 
+@app.get("/cloudmap", include_in_schema=False)
+async def page_cloudmap():
+    """大盘云图（D3 Treemap）。资源在 app/static/cloudmap/ 下。"""
+    return FileResponse(str(STATIC_DIR / "cloudmap" / "index.html"))
+
+
 # ── Paper trading (实盘信号观察) ──────────────────────────────────────────────
 
 def _json_safe(rows):
