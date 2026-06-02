@@ -148,12 +148,12 @@
               borderColor: '#222', borderWidth: 0.5, gapWidth: 1,
             },
             label: {
-              show: true, color: '#fff', fontSize: 11,
+              show: true, color: '#fff', fontSize: 12,
               formatter: (params) => {
                 const d = params.data;
                 if (!d._code) return d.name;
                 const pctSign = d._pct > 0 ? '+' : '';
-                return `${d._code}\n${pctSign}${d._pct.toFixed(1)}%`;
+                return `${d._stockName}\n${pctSign}${d._pct.toFixed(1)}%`;
               },
             },
           },
