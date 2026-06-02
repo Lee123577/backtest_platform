@@ -133,29 +133,36 @@
           emphasis: { itemStyle: { textStyle: { color: '#ffd700' } } },
         },
         visibleMin: 200,
+        // 全局 label：叶节点显示「名字\n涨跌幅」（不显示代码）
+        // 用矩形面积自适应字号：大盘股大字、小票小字、太小不显示
+        label: {
+          show: true,
+          color: '#fff',
+          fontWeight: 600,
+          textShadowColor: 'rgba(0,0,0,.6)',
+          textShadowBlur: 2,
+          formatter: (params) => {
+            const d = params.data;
+            // 大分类节点（无 _code）由 upperLabel 渲染，这里返回空
+            if (!d._code) return '';
+            const sign = d._pct > 0 ? '+' : '';
+            return `${d._stockName}\n${sign}${d._pct.toFixed(2)}%`;
+          },
+        },
+        // 大分类块顶部条（显示"沪市主板"等）
+        upperLabel: {
+          show: true, height: 22, color: '#fff',
+          fontSize: 13, fontWeight: 700,
+          backgroundColor: 'rgba(0,0,0,.25)',
+        },
         levels: [
           {
-            itemStyle: {
-              borderColor: '#111', borderWidth: 1, gapWidth: 2,
-            },
-            upperLabel: {
-              show: true, height: 22, color: '#fff',
-              fontSize: 12, fontWeight: 600,
-            },
+            // 大分类层
+            itemStyle: { borderColor: '#111', borderWidth: 1, gapWidth: 2 },
           },
           {
-            itemStyle: {
-              borderColor: '#222', borderWidth: 0.5, gapWidth: 1,
-            },
-            label: {
-              show: true, color: '#fff', fontSize: 12,
-              formatter: (params) => {
-                const d = params.data;
-                if (!d._code) return d.name;
-                const pctSign = d._pct > 0 ? '+' : '';
-                return `${d._stockName}\n${pctSign}${d._pct.toFixed(1)}%`;
-              },
-            },
+            // 叶节点层（股票）
+            itemStyle: { borderColor: '#222', borderWidth: 0.5, gapWidth: 1 },
           },
         ],
       }],
