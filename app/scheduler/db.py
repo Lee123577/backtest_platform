@@ -122,6 +122,34 @@ def already_ran_today(task_name: str, today: _Date, status: str = "success") -> 
         return cur.fetchone() is not None
 
 
+def has_running(task_name: str, within_minutes: int = 120) -> Optional[Dict[str, Any]]:
+    """
+    检查同名任务是否还有 status='running' 的记录（在 within_minutes 分钟内）。
+    返回 {run_id, started_at, host} 或 None。
+
+    用于 /api/tasks/run 拒绝重复触发：长任务还在跑时再点会启第二个 subprocess
+    并发抓数据 → sina 限流 + 进度日志混乱（empty=500 重复 N 次的就是症状）。
+
+    超时窗口默认 120 分钟，足以覆盖 daily_update 最长跑完的时间。超过窗口
+    的 running 记录视为僵尸（进程崩了但没 mark_finished），不算"还在跑"。
+    """
+    conn = _get_pool()
+    if conn is None:
+        return None
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id AS run_id, started_at, host
+            FROM task_run_log
+            WHERE task_name = %s AND status = 'running'
+              AND started_at >= DATE_SUB(NOW(), INTERVAL %s MINUTE)
+            ORDER BY started_at DESC LIMIT 1
+            """,
+            (task_name, within_minutes),
+        )
+        return cur.fetchone()
+
+
 def list_recent_runs(
     task: Optional[str] = None, limit: int = 100
 ) -> List[Dict[str, Any]]:

@@ -1113,10 +1113,56 @@ def _run_for_date(conn, trade_date: str) -> list[str]:
     return failed
 
 
+# ── 防并发：PID 锁，所有 daily_update.py 进程互斥 ────────────────────────────
+# 触发路径有三种：cron 自动 / API 手动 / CLI 直接，三者间防止并发抓 sina
+
+_LOCK_PATH = Path("/tmp/daily_update.lock") if os.name != "nt" \
+             else Path(os.environ.get("TEMP", ".")) / "daily_update.lock"
+
+
+def _acquire_lock():
+    """已有进程在跑则退出。陈旧锁自动清理。"""
+    if _LOCK_PATH.exists():
+        try:
+            old_pid = int(_LOCK_PATH.read_text().strip())
+            try:
+                if os.name != "nt":
+                    os.kill(old_pid, 0)
+                alive = True
+            except (ProcessLookupError, PermissionError):
+                alive = False
+            except Exception:
+                alive = True
+            if alive:
+                log.warning(
+                    f"已有 daily_update 进程在跑 (PID={old_pid})，本次退出。"
+                    f"如确认是僵尸锁，删除 {_LOCK_PATH} 后重试"
+                )
+                sys.exit(2)
+            log.info(f"检测到陈旧锁 (PID={old_pid} 已不存在)，清理后继续")
+        except (ValueError, OSError):
+            pass
+    _LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _LOCK_PATH.write_text(str(os.getpid()))
+    import atexit as _atexit
+    _atexit.register(_release_lock)
+
+
+def _release_lock():
+    try:
+        if _LOCK_PATH.exists() and _LOCK_PATH.read_text().strip() == str(os.getpid()):
+            _LOCK_PATH.unlink()
+    except Exception:
+        pass
+
+
 def main():
     parser = argparse.ArgumentParser(description="每日增量更新")
     parser.add_argument("--date", help="指定更新日期 YYYY-MM-DD（默认自动补齐到今日）")
     args = parser.parse_args()
+
+    # 进入主流程前先抢锁，已有进程在跑直接 exit 2
+    _acquire_lock()
 
     conn = get_conn()
     all_failed = []

@@ -452,7 +452,29 @@ async def api_tasks_run(
     if scheduler_registry.get_task(name) is None:
         raise HTTPException(404, f"未知任务: {name}")
 
+    # 防并发：同任务还有 running 记录（120 分钟内）拒绝重复触发
+    # force=1 仍可绕过（紧急场景）。这是 daily_update 跑长时间时
+    # 用户连点"立即刷新"导致 N 个 subprocess 并发抓 sina 的修复
     if not force:
+        running = scheduler_db.has_running(name, within_minutes=120)
+        if running:
+            from datetime import datetime as _DT
+            started = running.get("started_at")
+            ago_sec = int((_DT.now() - started).total_seconds()) if started else None
+            return {
+                "task": name,
+                "status": "skipped",
+                "reason": (
+                    f"同任务还在运行中 (run_id={running.get('run_id')}, "
+                    f"已跑 {ago_sec or '?'} 秒)。再等等，或加 ?force=1 强制再启"
+                ),
+                "running": {
+                    "run_id": running.get("run_id"),
+                    "started_at": str(started) if started else None,
+                    "host": running.get("host"),
+                },
+            }
+
         check = scheduler_runner.precheck(name)
         if not check["ok"]:
             # 注意：HTTP 200，不是 4xx —— 这是业务结果不是 API 错误
