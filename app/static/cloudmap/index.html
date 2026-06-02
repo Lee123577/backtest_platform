@@ -1,124 +1,112 @@
 <!DOCTYPE html>
-<html>
+<html lang="zh-CN">
 <head>
-    <title>大盘云图 · A股量化回测平台</title>
-    <!-- 让所有相对路径资源（Chinese_Stock_Treemap_files/*）自动指向静态目录 -->
-    <base href="/static/cloudmap/">
-    <link rel="shortcut icon" href="/static/cloudmap/favicon.ico" type="image/x-icon" />
-    <meta http-equiv="X-UA-Compatible" content="IE=10">
-    <meta name="viewport" content="width=1024"><meta name="description" content="">
-    <meta name="keywords" content="">
-    <meta http-equiv="imagetoolbar" content="no">
-    <meta http-equiv="pragma" content="no-cache">
-    <meta http-equiv="cache-control" content="no-cache">
-    <meta http-equiv="Expires" content="-1">
-    <meta http-equiv="Refresh" content="3600">
-    <!-- 原模板带 <meta upgrade-insecure-requests> 把同源 css/js 强升 https，
-         但 FastAPI 在 8000 端口只跑 http → 所有静态资源 ERR_SSL_PROTOCOL_ERROR。
-         本项目部署在 http 直连或 nginx 反代时再加 https。先去掉这行让本地能跑。 -->
-    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
-    <link rel="stylesheet" href="Chinese_Stock_Treemap_files/base.css" />
-    <link rel="stylesheet" href="Chinese_Stock_Treemap_files/common.css" />
-    <link rel="stylesheet" href="Chinese_Stock_Treemap_files/map.css" />
-    <link rel="stylesheet" href="Chinese_Stock_Treemap_files/znty.css" type="text/css">
-    <style type="text/css">
-        #tb_header{display: none;}
-        .content{width: 100%;}
-        .content.map .view{padding-left: 0;height: 50px;background:#383b44;padding: 7px 0 13px 0;}
-        .content.map .view .view-select{width: 387px;border-right:none;margin-left: 16px;}
-        .content.map .view .map_nav_a{font-size: 16px;line-height: 45px;display: inline-block;width: 112px;height: 45px;text-align: center;padding:0;color: #fefefe;background: #535663;border-radius: 3px;}
-        .content.map .view .map_nav_a.is-active{font-weight: 400;background: #ee5752;}
-        .pull-right{display: none;}
-    </style>
-    <script type="text/javascript">FinvizSettings = {hasUserPremium: false, name: ""};</script>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>大盘云图 · A股量化回测平台</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+  <style>
+    .cm-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .cm-date-badge {
+      background: var(--bg2); padding: 4px 10px; border-radius: 12px;
+      font-size: 11px; color: var(--txt2);
+    }
+    .cm-summary-row {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 10px; margin: 10px 0 14px;
+    }
+    .cm-stat {
+      background: var(--bg2); border-radius: 6px; padding: 10px 12px;
+      border-left: 3px solid var(--accent);
+    }
+    .cm-stat.up { border-left-color: #cf222e; }
+    .cm-stat.down { border-left-color: #1a7f37; }
+    .cm-stat .label { font-size: 11px; color: var(--txt2); }
+    .cm-stat .val { font-size: 20px; font-weight: 700; margin-top: 2px; }
+    .cm-stat.up .val { color: #cf222e; }
+    .cm-stat.down .val { color: #1a7f37; }
+
+    #treemap {
+      width: 100%; height: 75vh; min-height: 480px;
+      background: #111; border-radius: 6px;
+    }
+    .cm-legend {
+      font-size: 10px; color: var(--txt2); margin-top: 6px;
+      display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+    }
+    .cm-legend .swatch {
+      display: inline-block; width: 14px; height: 10px; vertical-align: middle;
+    }
+    .cm-controls { display: flex; align-items: center; gap: 8px; }
+    .cm-controls select {
+      padding: 5px 10px; border: 1px solid var(--border); border-radius: 5px;
+      background: #fff; font-size: 13px; cursor: pointer;
+    }
+    .cm-controls .btn-refresh {
+      padding: 5px 14px; border: 1px solid var(--border); border-radius: 5px;
+      background: var(--bg2); cursor: pointer; font-size: 12px; color: var(--accent);
+    }
+    .cm-controls .btn-refresh:hover { background: var(--accent); color: #fff; }
+    .cm-loading {
+      text-align: center; padding: 80px; color: var(--txt2); font-size: 13px;
+    }
+    .cm-error {
+      background: #ffebe9; color: var(--red); padding: 12px;
+      border-radius: 6px; font-size: 13px; margin: 12px 0;
+    }
+  </style>
 </head>
-<body class="has-map" style="margin:0" bgcolor="#ffffff">
+<body>
 
-<!-- 返回主站的悬浮 chip（不破坏原 cloudmap 布局，右上角 z-index 高） -->
-<a href="/" target="_self" style="
-    position: fixed; top: 12px; right: 16px; z-index: 9999;
-    background: rgba(9,105,218,.92); color: #fff;
-    padding: 6px 12px; border-radius: 14px;
-    font-size: 12px; font-weight: 500;
-    font-family: -apple-system, 'PingFang SC', sans-serif;
-    text-decoration: none;
-    box-shadow: 0 2px 6px rgba(0,0,0,.2);
-">← 返回回测平台</a>
+<header>
+  <h1>📈 A股量化回测平台</h1>
+  <nav class="header-nav">
+    <a class="nav-btn" href="/" style="text-decoration:none;display:inline-flex;align-items:center;">单股策略</a>
+    <a class="nav-btn" href="/?mode=portfolio" style="text-decoration:none;display:inline-flex;align-items:center;">选股策略</a>
+    <a class="nav-btn" href="/factors" style="text-decoration:none;display:inline-flex;align-items:center;">因子分析</a>
+    <a class="nav-btn" href="/walk_forward" style="text-decoration:none;display:inline-flex;align-items:center;">参数寻优</a>
+    <button class="nav-btn active">大盘云图</button>
+    <a class="nav-btn" href="/paper_trading" style="text-decoration:none;display:inline-flex;align-items:center;">实盘观察</a>
+    <a class="nav-btn" href="/tasks" style="text-decoration:none;display:inline-flex;align-items:center;">定时任务</a>
+  </nav>
+</header>
 
-<div class="content map">
-
-    <div class="narrow">
-        <a id="narrow"><img src="Chinese_Stock_Treemap_files/narrow.png"/></a>
+<main>
+  <div class="panel">
+    <div class="panel-title">
+      <div class="cm-head">
+        大盘云图
+        <span class="cm-date-badge" id="dateBadge">—</span>
+        <span style="font-size:11px;color:var(--txt2);">矩形面积 = 市值，颜色 = 涨跌幅</span>
+        <span style="margin-left:auto;" class="cm-controls">
+          <select id="marketFilter">
+            <option value="all">全部 A 股</option>
+            <option value="SH">仅沪市</option>
+            <option value="SZ">仅深市</option>
+            <option value="BJ">仅北交所</option>
+          </select>
+          <select id="minCapFilter">
+            <option value="0">无市值下限</option>
+            <option value="50" selected>市值 ≥ 50 亿</option>
+            <option value="100">市值 ≥ 100 亿</option>
+            <option value="500">市值 ≥ 500 亿</option>
+            <option value="1000">市值 ≥ 1000 亿</option>
+          </select>
+          <button class="btn-refresh" id="refreshBtn">⟳ 刷新</button>
+        </span>
+      </div>
     </div>
-    
-    <div class="container is-wide"  >
-        <div class="view">
-            <div class="pull-left view-select" style="width:200px">
-                <h1 style="color:#bdbdbd; font-size:30px; display: inline;">大盘云图</h1>
-            </div>
-            
-            <div class="zoom pull-right"></div>
-            
-            <div class="fr enlarge">
-                <span class="currentTime"></span>
-                <a id="enlage"><img src="Chinese_Stock_Treemap_files/enlarge.png"/></a>
-            </div>
-            
-        </div>
-        <div class="map-scan">
-            <div class="sidebar sidebar2">
-                <div class="">
-                    <ul class="left_nav">
-                        <li class="active"><a>全部A股</a></li>
-                        <li><a>上证A股</a></li>
-                        <li><a>深证A股</a></li>
-                        <li><a>创业板</a></li>
-                    </ul>
-                    <br>
-                    <select id="select-change" style="visibility: visible;">
-                        <option value="mkt_idx.cur_chng_pct" selected="selected" color="">涨跌幅</option>
-                        <option value="mkt_idx.chng_pct_week" color="_5">近1周涨跌幅</option>
-                        <option value="perf_idx.chng_pct_month" color="_10">近1月涨跌幅</option>
-                        <option value="perf_idx.chng_pct_3month" color="_15">近3月涨跌幅</option>
-                        <option value="perf_idx.chng_pct_6month" color="_20">近6月涨跌幅</option>
-                        <option value="perf_idx.chng_pct_year" color="_25">近1年涨跌幅</option>
-                        <option value="perf_idx.chng_pct_year_sofar" color="_25">今年以来涨跌幅</option>
-                        <option value="mkt_idx.rela_volume" color="_relvol">相对成交量</option>
-                        <option value="mkt_idx.peg" color="_peg">PEG</option>
-                        <option value="mkt_idx.ps" color="_ps">市销率</option>
-                        <option value="mkt_idx.pb" color="_pb">市净率</option>
-                        <option value="mkt_idx.div_rate" color="_div">股息率</option>
-                        <option value="mkt_idx.pe_ttm" color="_pe">市盈率(TTM)</option>
-                        <option value="mkt_idx.fir_fcst_pe" color="_fpe">预测市盈率</option>
-                        <option value="fin_idx.eps_5year" color="_eps5y">EPS增长率(过去5年)</option>
-                        <option value="act_date" color="_earndate">业绩公布日</option>
-                    </select>
-                </div>
-                <div class="search">
-                    <!--在map.bundle.js中函数93:渲染-->
-                </div>
-            </div>
-            <div class="content-view-map">
-                <div id="map" class="">
-                    <div id="body"></div>
-                    <div id="legend"></div>
-                    <div id="hover-wrapper"></div>
-                </div>
-                <div class="map_bt clearfix map_bt_min">
-                    <div class="map_scale map_scale_min"></div>
-                </div>
-            </div>
-        </div>
-        <div id="modal"></div>
-    </div>
-</div>
-<script src="Chinese_Stock_Treemap_files/jquery-2.2.1.min.js"></script>
-<script src="Chinese_Stock_Treemap_files/d3-json.js"></script>
-<script src="Chinese_Stock_Treemap_files/com.js"></script>
-<script src="Chinese_Stock_Treemap_files/react-with-addons.min.js"></script>
-<script src="Chinese_Stock_Treemap_files/d3.js"></script>
-<script src="Chinese_Stock_Treemap_files/hammer.min.js"></script>
-<script src="Chinese_Stock_Treemap_files/map.bundle.js"></script>
-<script src="Chinese_Stock_Treemap_files/map.js"></script>
+
+    <div class="cm-summary-row" id="summaryRow"></div>
+    <div id="treemap"></div>
+    <div class="cm-legend" id="legend"></div>
+
+    <div id="loading" class="cm-loading" style="display:none;">加载中…</div>
+    <div id="error" class="cm-error" style="display:none;"></div>
+  </div>
+</main>
+
+<script src="/static/js/cloudmap.js"></script>
 </body>
 </html>

@@ -68,6 +68,10 @@ app.include_router(wf_router)
 from .data_status.api import router as data_status_router  # noqa: E402
 app.include_router(data_status_router)
 
+# 大盘云图 API（前端 ECharts treemap 消费）
+from .cloudmap.api import router as cloudmap_router  # noqa: E402
+app.include_router(cloudmap_router)
+
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
