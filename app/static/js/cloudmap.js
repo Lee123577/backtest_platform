@@ -2,6 +2,8 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   let chart = null;
+  let autoTimer = null;
+  const AUTO_INTERVAL_MS = 60_000;   // 60s (后端 60s 缓存对齐)
 
   // ── 涨跌色阶（A 股红涨绿跌）──────────────────────────────────────────────
   // 8 级渐变，0 居中灰
@@ -42,19 +44,41 @@
     }
   }
 
+  // ── 成交额格式化（元 → 万亿/亿） ─────────────────────────────────────
+  function fmtAmount(v) {
+    if (!v || isNaN(v)) return '—';
+    if (v >= 1e12) return (v / 1e12).toFixed(2) + ' 万亿';
+    if (v >= 1e8) return (v / 1e8).toFixed(0) + ' 亿';
+    if (v >= 1e4) return (v / 1e4).toFixed(0) + ' 万';
+    return Math.round(v).toString();
+  }
+
   // ── 渲染 ────────────────────────────────────────────────────────────────
   function render(data) {
     $('dateBadge').textContent = `📅 ${data.trade_date}`;
 
-    // 顶部统计卡
+    // 顶部统计卡（对齐 52etf：上涨/平盘/下跌 + 全市场成交额 + 缩放量）
     const s = data.summary || {};
+    const totalAmt = s.total_amount || 0;
+    const prevAmt = s.prev_amount || 0;
+    let volDelta = '—';
+    let volCls = '';
+    if (prevAmt > 0) {
+      const diff = totalAmt - prevAmt;
+      volDelta = (diff >= 0 ? '放量 ' : '缩量 ') + fmtAmount(Math.abs(diff));
+      volCls = diff >= 0 ? 'up' : 'down';
+    }
+
     const cards = [
-      { label: '股票数', val: data.total, cls: '' },
+      { label: '股票总数', val: data.total, cls: '' },
       { label: '上涨', val: s.up || 0, cls: 'up' },
       { label: '下跌', val: s.down || 0, cls: 'down' },
       { label: '平盘', val: s.flat || 0, cls: '' },
-      { label: '平均涨跌', val: (s.avg_pct >= 0 ? '+' : '') + (s.avg_pct || 0).toFixed(2) + '%',
+      { label: '平均涨跌',
+        val: (s.avg_pct >= 0 ? '+' : '') + (s.avg_pct || 0).toFixed(2) + '%',
         cls: s.avg_pct > 0 ? 'up' : s.avg_pct < 0 ? 'down' : '' },
+      { label: '全市场成交额', val: fmtAmount(totalAmt), cls: '' },
+      { label: '比昨日', val: volDelta, cls: volCls },
     ];
     $('summaryRow').innerHTML = cards.map(c => `
       <div class="cm-stat ${c.cls}">
@@ -72,9 +96,15 @@
     ].map(([c, t]) => `<span class="swatch" style="background:${c};"></span><span>${t}</span>`)
      .join('  ');
 
+    // 板块过滤（客户端做，避免反复打 API）
+    const catFilter = $('categoryFilter').value;
+    const filteredItems = (catFilter === 'all')
+      ? data.items
+      : data.items.filter(it => it.category === catFilter);
+
     // 按 category 聚合成 treemap 数据
     const groups = {};
-    for (const item of data.items) {
+    for (const item of filteredItems) {
       const cat = item.category || '其他';
       if (!groups[cat]) groups[cat] = [];
       groups[cat].push({
@@ -86,6 +116,7 @@
         _stockName: item.name,
         _pct: item.pct_change,
         _close: item.close,
+        _amount: item.amount,
       });
     }
     // 大分类按总市值排序
@@ -111,7 +142,8 @@
                 <b>${d._stockName}</b> <span style="color:#888;">${d._code}</span><br/>
                 市值: <b>${d.value.toFixed(1)} 亿</b><br/>
                 收盘: ${d._close != null ? d._close : '—'}<br/>
-                涨跌: <b style="color:${pctColor};">${pctSign}${d._pct.toFixed(2)}%</b>
+                涨跌: <b style="color:${pctColor};">${pctSign}${d._pct.toFixed(2)}%</b><br/>
+                成交额: ${fmtAmount(d._amount)}
               </div>
             `;
           }
@@ -172,11 +204,45 @@
     requestAnimationFrame(() => chart.resize());
   }
 
+  // ── 自动刷新 ────────────────────────────────────────────────────────────
+  function startAutoRefresh() {
+    if (autoTimer) clearInterval(autoTimer);
+    autoTimer = setInterval(() => {
+      // 后台 tab 不刷新
+      if (document.visibilityState === 'visible') load();
+    }, AUTO_INTERVAL_MS);
+  }
+  function stopAutoRefresh() {
+    if (autoTimer) { clearInterval(autoTimer); autoTimer = null; }
+  }
+
   // ── 事件 ────────────────────────────────────────────────────────────────
   $('marketFilter').addEventListener('change', load);
   $('minCapFilter').addEventListener('change', load);
+  // category 切换是纯客户端过滤，不打 API
+  $('categoryFilter').addEventListener('change', () => {
+    // 取出缓存的 data 重新 render（简单做：直接 load 一次，命中后端缓存秒回）
+    load();
+  });
   $('refreshBtn').addEventListener('click', load);
+  $('autoRefresh').addEventListener('change', (e) => {
+    if (e.target.checked) {
+      startAutoRefresh();
+      $('autoRefreshHint').textContent = '自动刷新 60 秒';
+    } else {
+      stopAutoRefresh();
+      $('autoRefreshHint').textContent = '自动刷新已关闭';
+    }
+  });
   window.addEventListener('resize', () => chart && chart.resize());
 
+  // 页面隐藏停轮询，回前台首次立刻刷新
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && $('autoRefresh').checked) {
+      load();
+    }
+  });
+
   load();
+  startAutoRefresh();
 })();

@@ -81,6 +81,17 @@ def cloudmap_data(market: str = "all", min_cap: float = 0):
         raise HTTPException(404, "stock_kline 无足够数据（< 500 行）")
     target_date = row["d"]
 
+    # ── 1.5 找前一交易日（用于成交额对比"缩量/放量"）─────────────────
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT trade_date AS d FROM stock_kline
+            WHERE trade_date < %s GROUP BY trade_date
+            HAVING COUNT(*) >= 500
+            ORDER BY trade_date DESC LIMIT 1
+        """, (target_date,))
+        prev_row = cur.fetchone()
+    prev_date = prev_row["d"] if prev_row else None
+
     # ── 2. 关联 stock_info + 历史最近 market_cap 兜底 ──────────────────
     # 当日 close/pct_change 用 target_date 当日值
     # market_cap 用该 code 历史上最近一次 > 0 的值兜底（云服务器拉不到 EM
@@ -93,7 +104,7 @@ def cloudmap_data(market: str = "all", min_cap: float = 0):
 
     with conn.cursor() as cur:
         cur.execute(f"""
-            SELECT k.code, i.name, i.market,
+            SELECT k.code, i.name, i.market, k.amount,
                    k.close, k.pct_change,
                    COALESCE(mc.market_cap, k.market_cap) AS market_cap,
                    mc.trade_date AS mc_date
@@ -126,6 +137,7 @@ def cloudmap_data(market: str = "all", min_cap: float = 0):
             "market": r["market"] or "",
             "category": _categorize(code),
             "market_cap": float(r["market_cap"]) if r["market_cap"] else 0.0,
+            "amount": float(r["amount"]) if r["amount"] else 0.0,
             "close": float(r["close"]) if r["close"] else None,
             "pct_change": float(r["pct_change"]) if r["pct_change"] is not None else 0.0,
         })
@@ -148,15 +160,32 @@ def cloudmap_data(market: str = "all", min_cap: float = 0):
     down_count = sum(1 for it in items if it["pct_change"] < 0)
     flat_count = len(items) - up_count - down_count
     avg_pct = (sum(it["pct_change"] for it in items) / len(items)) if items else 0.0
+    # 今日成交额（元）
+    total_amount = sum(it["amount"] for it in items)
+
+    # 前一交易日成交额（用于"放/缩量"对比）
+    prev_amount = None
+    if prev_date is not None:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT SUM(amount) AS amt FROM stock_kline WHERE trade_date=%s",
+                (prev_date,)
+            )
+            row = cur.fetchone()
+            if row and row.get("amt"):
+                prev_amount = float(row["amt"])
 
     result = {
         "trade_date": str(target_date),
+        "prev_date": str(prev_date) if prev_date else None,
         "total": len(items),
         "summary": {
             "up": up_count,
             "down": down_count,
             "flat": flat_count,
             "avg_pct": round(avg_pct, 2),
+            "total_amount": total_amount,
+            "prev_amount": prev_amount,
         },
         "market_stats": market_stats,
         "items": items,

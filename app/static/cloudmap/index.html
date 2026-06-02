@@ -78,13 +78,21 @@
       <div class="cm-head">
         大盘云图
         <span class="cm-date-badge" id="dateBadge">—</span>
-        <span style="font-size:11px;color:var(--txt2);">矩形面积 = 市值，颜色 = 涨跌幅</span>
         <span style="margin-left:auto;" class="cm-controls">
           <select id="marketFilter">
             <option value="all">全部 A 股</option>
             <option value="SH">仅沪市</option>
             <option value="SZ">仅深市</option>
             <option value="BJ">仅北交所</option>
+          </select>
+          <select id="categoryFilter">
+            <option value="all">全部板块</option>
+            <option value="沪市主板">沪市主板</option>
+            <option value="深市主板">深市主板</option>
+            <option value="科创板">科创板</option>
+            <option value="创业板">创业板</option>
+            <option value="中小板">中小板</option>
+            <option value="北交所">北交所</option>
           </select>
           <select id="minCapFilter">
             <option value="0">无市值下限</option>
@@ -93,6 +101,9 @@
             <option value="500">市值 ≥ 500 亿</option>
             <option value="1000">市值 ≥ 1000 亿</option>
           </select>
+          <label style="font-size:11px;color:var(--txt2);display:inline-flex;align-items:center;gap:4px;">
+            <input type="checkbox" id="autoRefresh" checked> 自动刷新
+          </label>
           <button class="btn-refresh" id="refreshBtn">⟳ 刷新</button>
         </span>
       </div>
@@ -101,6 +112,15 @@
     <div class="cm-summary-row" id="summaryRow"></div>
     <div id="treemap"></div>
     <div class="cm-legend" id="legend"></div>
+
+    <div style="font-size:11px;color:var(--txt2);margin-top:6px;line-height:1.6;">
+      📌 <b>操作提示</b>：
+      矩形面积 = 流通市值 ·
+      颜色 = 涨跌幅（红涨绿跌） ·
+      hover 看个股详情 ·
+      点击大类块下钻 ·
+      <span id="autoRefreshHint">自动刷新 60 秒</span>
+    </div>
 
     <div id="loading" class="cm-loading" style="display:none;">加载中…</div>
     <div id="error" class="cm-error" style="display:none;"></div>
