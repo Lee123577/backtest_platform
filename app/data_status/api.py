@@ -9,7 +9,7 @@ GET /api/data_status/today
     * 主要指数（9 个固定指数）
     * 北向资金（1 行）
     * 季报（最近一个已过去的季度末覆盖率）
-    * 分红（最近 7 天 announce_date 行数；仅周一更新）
+    * 分红（最近 7 天 ex_date 除权事件行数；仅周一更新）
     * 6 个因子（每个因子当日入库股票数 vs K 线已有股票数）
 
 GET /api/data_status/traffic_today
@@ -164,10 +164,12 @@ def get_today_status():
     ))
 
     # 6. 分红（最近 7 天）
+    # 新 schema 用 ex_date(除权除息日)和 announcement_date(公告日);
+    # 数据状态展示按"哪天发生除权"算更直观
     week_ago = target - timedelta(days=7)
     div_actual = _scalar(
         conn,
-        "SELECT COUNT(*) AS n FROM stock_dividend WHERE announce_date >= %s",
+        "SELECT COUNT(*) AS n FROM stock_dividend WHERE ex_date >= %s",
         (week_ago,),
     )
     weekday_label = "" if now.weekday() == 0 else "（仅周一更新，今天 N/A）"

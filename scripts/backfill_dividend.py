@@ -1,8 +1,8 @@
 """
-一次性回填 stock_dividend_event 表
+一次性回填 stock_dividend 表
 ============================
 
-从 akshare 抓全市场的历史分红送转事件,写入 ``stock_dividend_event``。
+从 akshare 抓全市场的历史分红送转事件,写入 ``stock_dividend``。
 
 使用场景:
   - 首次部署 dividend 模块时,把 stock_info 里所有 code 的历史事件全部入库
@@ -59,12 +59,12 @@ def _holding_codes() -> list[str]:
 
 
 def _codes_recently_fetched(days: int) -> set[str]:
-    """最近 N 天内 stock_dividend_event.created_at 出现过的 code,可跳过。"""
+    """最近 N 天内 stock_dividend.created_at 出现过的 code,可跳过。"""
     from app.data.data_loader import _get_pool
     conn = _get_pool()
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT DISTINCT code FROM stock_dividend_event "
+            "SELECT DISTINCT code FROM stock_dividend "
             "WHERE created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)",
             (days,),
         )
@@ -72,7 +72,7 @@ def _codes_recently_fetched(days: int) -> set[str]:
 
 
 def main():
-    p = argparse.ArgumentParser(description="回填 stock_dividend_event 表")
+    p = argparse.ArgumentParser(description="回填 stock_dividend 表")
     p.add_argument("--limit", type=int, default=0,
                    help="只跑前 N 只(测试用,0 表示不限)")
     p.add_argument("--holdings-only", action="store_true",

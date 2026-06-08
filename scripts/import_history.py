@@ -130,17 +130,16 @@ def init_tables(conn):
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='季报/年报财务核心指标'""",
 
         """CREATE TABLE IF NOT EXISTS stock_dividend (
-            id                 INT AUTO_INCREMENT PRIMARY KEY,
-            code               CHAR(6)       NOT NULL,
-            announce_date      DATE,
-            record_date        DATE,
-            pay_date           DATE,
-            dividend_per_share DECIMAL(10,4),
-            bonus_ratio        DECIMAL(10,4),
-            allotment_ratio    DECIMAL(10,4),
-            allotment_price    DECIMAL(10,3),
-            INDEX idx_code_date (code, pay_date)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='分红配股历史'""",
+            code              CHAR(6)        NOT NULL,
+            ex_date           DATE           NOT NULL COMMENT '除权除息日',
+            bonus_shares      DECIMAL(8,4)   DEFAULT 0 COMMENT '送股(每10股)',
+            converted_shares  DECIMAL(8,4)   DEFAULT 0 COMMENT '转股(每10股)',
+            cash_dividend     DECIMAL(10,4)  DEFAULT 0 COMMENT '现金分红(每10股,元,税前)',
+            announcement_date DATE           NULL      COMMENT '公告日',
+            created_at        DATETIME       DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (code, ex_date),
+            INDEX idx_ex_date (ex_date)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='除权除息事件(持仓除权调整用)'""",
 
         """CREATE TABLE IF NOT EXISTS index_daily (
             index_code  VARCHAR(8)     NOT NULL,
@@ -602,12 +601,11 @@ def import_stock_dividend(conn, resume: bool):
         return
 
     col_map = {
-        "证券代码": "code", "公告日期": "announce_date",
-        "股权登记日": "record_date", "除权除息日": "pay_date",
-        "每股派息(税前)(元)": "div_ps",
-        "每10股送股(股)": "bonus",
-        "每10股转增(股)": "allot",
-        "配股价格(元)": "allot_price",
+        "证券代码": "code", "公告日期": "ann_date",
+        "除权除息日": "ex_date",
+        "每股派息(税前)(元)": "div_ps",     # 单位"每股"
+        "每10股送股(股)": "bonus10",
+        "每10股转增(股)": "allot10",
     }
     df = df.rename(columns=col_map)
     df["code"] = df["code"].astype(str).str.zfill(6)
@@ -620,25 +618,28 @@ def import_stock_dividend(conn, resume: bool):
 
     rows = []
     for _, r in df.iterrows():
-        pay = _to_date(r.get("pay_date"))
-        if pay and pay < "2010-01-01":
+        ex = _to_date(r.get("ex_date"))
+        if not ex:
+            continue   # 未实施 / 无除权日 → 跳过
+        if ex < "2010-01-01":
             continue
+        # div_ps(每股)× 10 = cash_dividend(每10股),统一到新 schema
+        div_per_share = _safe(r, "div_ps")
+        cash_per10 = div_per_share * 10.0 if div_per_share is not None else 0
         rows.append((
             r["code"],
-            _to_date(r.get("announce_date")),
-            _to_date(r.get("record_date")),
-            pay,
-            _safe(r, "div_ps"),
-            _safe(r, "bonus"),
-            _safe(r, "allot"),
-            _safe(r, "allot_price"),
+            ex,
+            _safe(r, "bonus10") or 0,
+            _safe(r, "allot10") or 0,
+            cash_per10,
+            _to_date(r.get("ann_date")),
         ))
 
     sql = """
-        INSERT INTO stock_dividend
-            (code, announce_date, record_date, pay_date,
-             dividend_per_share, bonus_ratio, allotment_ratio, allotment_price)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+        INSERT IGNORE INTO stock_dividend
+            (code, ex_date, bonus_shares, converted_shares,
+             cash_dividend, announcement_date)
+        VALUES (%s,%s,%s,%s,%s,%s)
     """
     n = batch_insert(conn, sql, rows)
     log.info(f"stock_dividend 写入 {n} 条")
