@@ -84,11 +84,23 @@ def fetch_from_akshare(code: str) -> List[Dict[str, Any]]:
     akshare 接口 ``stock_history_dividend_detail(symbol, indicator='分红')``
     返回列(中文):
       公告日期 / 送股 / 转增 / 派息 / 进度 / 除权除息日 / 股权登记日 / 派息日
+
+    日志策略:
+      - "No tables found":akshare 对**从来没分过红的股**(国企、新股、退市等)
+        的标准返回 → DEBUG 级别,不当报错喊
+      - 其他异常(网络 / 接口风控 / 字段格式变化)→ WARNING,需要关注
     """
     try:
         df = ak.stock_history_dividend_detail(symbol=code, indicator="分红")
     except Exception as e:
-        logger.warning("akshare stock_history_dividend_detail(%s) 异常: %s", code, e)
+        msg = str(e)
+        if "No tables found" in msg or "no tables found" in msg.lower():
+            # 该股无分红记录 — 正常情况,降级日志
+            logger.debug("[%s] 无分红记录", code)
+        else:
+            logger.warning(
+                "akshare stock_history_dividend_detail(%s) 异常: %s", code, e,
+            )
         return []
     if df is None or df.empty:
         return []
