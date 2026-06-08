@@ -851,22 +851,23 @@ def update_stock_dividend(conn, trade_date: str):
     log.info(f"更新 stock_dividend: {trade_date}")
     df = None
 
-    # 接口 1: stock_dividend_cninfo（cninfo 全量，akshare 偶发字段名变更）
+    # cninfo 全量接口(akshare 偶发字段名变更或接口被风控)
     try:
         df = ak.stock_dividend_cninfo(symbol="全部")
         if df is None or df.empty:
             df = None
     except Exception as e:
-        log.warning(f"stock_dividend_cninfo 失败: {e}，尝试备用接口")
+        log.warning(f"stock_dividend_cninfo 失败: {e}")
         df = None
 
-    # cninfo 接口不可用时跳过本周 — 新 schema 需要精确 ex_date,
-    # 老接口 2 (stock_history_dividend) 只给"最近一次派息汇总",拿不到
-    # 逐次 ex_date,不符合 (code, ex_date) PK 要求,索性放弃,
-    # 让 scripts/backfill_dividend.py(单股 stock_history_dividend_detail
-    # 接口,有精确 ex_date)做兜底回填。
+    # cninfo 不可用时跳过本周。老 stock_history_dividend 兜底已删
+    # (它只给"最近一次派息汇总",拿不到逐次 ex_date,跟 (code, ex_date)
+    # PK 不兼容)。历史 / 缺漏由 scripts/backfill_dividend.py 单股回填补全
+    # (akshare stock_history_dividend_detail 有精确 ex_date,
+    # scheduler 已注册 backfill_dividend_full 每月 1 号自动跑)。
     if df is None or df.empty:
-        log.warning("stock_dividend cninfo 接口不可用,本周跳过(建议跑 backfill_dividend.py)")
+        log.warning("stock_dividend cninfo 接口不可用,本周跳过 — "
+                    "等 backfill_dividend_full(每月 1 号)兜底")
         return
 
     # 字段名兼容——不同接口/版本列名不同，按关键词匹配
