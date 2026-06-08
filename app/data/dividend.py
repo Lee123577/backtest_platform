@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 # ── DDL ──────────────────────────────────────────────────────────────────────
 
 _DDL = """
-CREATE TABLE IF NOT EXISTS stock_dividend (
+CREATE TABLE IF NOT EXISTS stock_dividend_event (
     code              CHAR(6)        NOT NULL,
     ex_date           DATE           NOT NULL COMMENT '除权除息日',
     bonus_shares      DECIMAL(8,4)   DEFAULT 0 COMMENT '送股(每10股)',
@@ -143,7 +143,7 @@ def upsert_dividend(code: str, events: List[Dict[str, Any]]) -> int:
         return 0
     conn.ping(reconnect=True)
     sql = (
-        "INSERT IGNORE INTO stock_dividend "
+        "INSERT IGNORE INTO stock_dividend_event "
         "(code, ex_date, bonus_shares, converted_shares, cash_dividend, announcement_date) "
         "VALUES (%s, %s, %s, %s, %s, %s)"
     )
@@ -179,7 +179,7 @@ def get_events(
     with conn.cursor() as cur:
         cur.execute(
             "SELECT ex_date, bonus_shares, converted_shares, cash_dividend "
-            "FROM stock_dividend "
+            "FROM stock_dividend_event "
             "WHERE code=%s AND ex_date BETWEEN %s AND %s "
             "ORDER BY ex_date",
             (code, start, end),
