@@ -16,6 +16,7 @@ Rolling price history:
 """
 import logging
 from collections import defaultdict
+from decimal import Decimal
 from typing import Any, Dict, List
 
 import numpy as np
@@ -23,6 +24,7 @@ import pandas as pd
 
 from ..data.universe import eligible_codes_at
 from ..strategies.portfolio_base import PortfolioBaseStrategy
+from .money import D, ONE, ZERO, round_cent, to_float_cent
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +68,14 @@ def run_portfolio_backtest(
             }
 
     # ── Simulation ────────────────────────────────────────────────────────────
-    capital = float(initial_capital)
+    # 钱量统一用 Decimal:组合策略每天多笔成交 × N 天累积,float 误差最大
+    capital: Decimal = D(initial_capital)
+    commission_rate_d = D(commission_rate)
+    min_commission_d = D(min_commission)
+    stamp_tax_rate_d = D(stamp_tax_rate)
+    slippage_buy = ONE + D(slippage_rate)
+    slippage_sell = ONE - D(slippage_rate)
+
     holdings: Dict[str, int] = {}          # {code: shares held}
     # {code: 平均买入价（含滑点，未含手续费）} — 用于止损判断
     buy_prices: Dict[str, float] = {}
@@ -103,20 +112,20 @@ def run_portfolio_backtest(
             kept: Dict[str, int] = {}
             for code, shares in list(holdings.items()):
                 if code in day_prices and shares > 0:
-                    sell_price = day_prices[code]["open"] * (1 - slippage_rate)
-                    revenue = shares * sell_price
-                    comm = max(revenue * commission_rate, min_commission)
-                    tax = revenue * stamp_tax_rate
-                    capital = round(capital + revenue - comm - tax, 2)
+                    sell_price_d = D(day_prices[code]["open"]) * slippage_sell
+                    revenue = D(shares) * sell_price_d
+                    comm = max(revenue * commission_rate_d, min_commission_d)
+                    tax = revenue * stamp_tax_rate_d
+                    capital = round_cent(capital + revenue - comm - tax)
                     trades.append({
                         "date": str(date.date()),
                         "type": "卖出",
                         "code": code,
-                        "price": round(sell_price, 3),
+                        "price": round(float(sell_price_d), 3),
                         "shares": shares,
-                        "amount": round(revenue, 2),
-                        "commission": round(comm + tax, 2),
-                        "capital": capital,
+                        "amount": to_float_cent(revenue),
+                        "commission": to_float_cent(comm + tax),
+                        "capital": float(capital),
                     })
                     buy_prices.pop(code, None)
                 elif shares > 0:
@@ -124,9 +133,18 @@ def run_portfolio_backtest(
             holdings = kept
 
             # ── 构建当日 ref_data（优先使用历史真实市值）──────────────────
+            # 关键修复:有真实历史市值时,必须把 ref_data 的 price 也同步
+            # 替换成当日 close —— 否则 SmallCapStrategy 会用
+            #    hist_cap = cur_cap * close_for_selection / ref_data.price
+            # 把真值再乘上"(历史 close / 最新价)"这个偏差系数 → 选股结果整段漂。
+            #
+            # 修复后两种 code 路径并存:
+            #   - 有真实历史市值 → cur_cap=真值, cur_price=close, hist_close=close
+            #     → hist_cap = 真值 × 1 = 真值(精确)
+            #   - 无真实历史市值 → 保留 ref_data 原始 cap/price → 走比例近似(兜底)
             date_str = str(date.date())
+            ref_data_today = ref_data
             if hist_market_caps:
-                # 用数据库里当日真实市值替换 ref_data 中的近似值
                 mc_today = {
                     code: caps[date_str]
                     for code, caps in hist_market_caps.items()
@@ -134,15 +152,13 @@ def run_portfolio_backtest(
                 }
                 if mc_today:
                     ref_data_today = ref_data.copy()
-                    ref_data_today["market_cap"] = ref_data_today["code"].map(
-                        lambda c: mc_today.get(c, ref_data_today.loc[
-                            ref_data_today["code"] == c, "market_cap"
-                        ].iloc[0] if (ref_data_today["code"] == c).any() else None)
-                    )
-                else:
-                    ref_data_today = ref_data
-            else:
-                ref_data_today = ref_data
+                    mc_series = ref_data_today["code"].map(mc_today)
+                    have_mc = mc_series.notna()
+                    ref_data_today.loc[have_mc, "market_cap"] = mc_series[have_mc]
+                    # 同步把 price 替换成当日 close(仅对有真实历史市值的 code)
+                    px_series = ref_data_today["code"].map(close_for_selection)
+                    have_px = have_mc & px_series.notna()
+                    ref_data_today.loc[have_px, "price"] = px_series[have_px]
 
             # ── 幸存者偏差防护：过滤掉当日未上市/已退市的股 ────────────────
             # universe_df 是基于"当前"市值生成的，包含将来才上市的股；
@@ -168,18 +184,18 @@ def run_portfolio_backtest(
             new_stocks = [s for s in new_stocks if s in day_prices]
 
             # ── Buy equal-weight at today's OPEN ────────────────────────────
-            if new_stocks and capital > 0:
-                cash_per = capital / len(new_stocks)
+            if new_stocks and capital > ZERO:
+                cash_per = capital / D(len(new_stocks))
                 bought = []
                 for code in new_stocks:
-                    buy_price = day_prices[code]["open"] * (1 + slippage_rate)
-                    if buy_price <= 0:
+                    buy_price_d = D(day_prices[code]["open"]) * slippage_buy
+                    if buy_price_d <= ZERO:
                         continue
-                    shares = int(cash_per / buy_price / 100) * 100
+                    shares = int(cash_per / (buy_price_d * D(100))) * 100
                     if shares <= 0:
                         continue
-                    cost = shares * buy_price
-                    comm = max(cost * commission_rate, min_commission)
+                    cost = D(shares) * buy_price_d
+                    comm = max(cost * commission_rate_d, min_commission_d)
                     if cost + comm <= capital:
                         # Suspended (kept) stocks cannot be in new_stocks because
                         # they're filtered out at line above (not in day_prices),
@@ -187,18 +203,18 @@ def run_portfolio_backtest(
                         # accidental double-allocation if a strategy ever returns
                         # duplicates or the rebalance-sell logic changes.
                         holdings[code] = shares
-                        buy_prices[code] = buy_price
-                        capital = round(capital - cost - comm, 2)
+                        buy_prices[code] = float(buy_price_d)
+                        capital = round_cent(capital - cost - comm)
                         bought.append(code)
                         trades.append({
                             "date": str(date.date()),
                             "type": "买入",
                             "code": code,
-                            "price": round(buy_price, 3),
+                            "price": round(float(buy_price_d), 3),
                             "shares": shares,
-                            "amount": round(cost, 2),
-                            "commission": round(comm, 2),
-                            "capital": capital,
+                            "amount": to_float_cent(cost),
+                            "commission": to_float_cent(comm),
+                            "capital": float(capital),
                         })
                 if bought:
                     holdings_log.append({"date": str(date.date()), "stocks": bought})
@@ -214,20 +230,20 @@ def run_portfolio_backtest(
                 if cost_px <= 0:
                     continue
                 if (close_px - cost_px) / cost_px <= -stop_loss_ratio:
-                    sell_price = close_px * (1 - slippage_rate)
-                    revenue = shares * sell_price
-                    comm = max(revenue * commission_rate, min_commission)
-                    tax = revenue * stamp_tax_rate
-                    capital = round(capital + revenue - comm - tax, 2)
+                    sell_price_d = D(close_px) * slippage_sell
+                    revenue = D(shares) * sell_price_d
+                    comm = max(revenue * commission_rate_d, min_commission_d)
+                    tax = revenue * stamp_tax_rate_d
+                    capital = round_cent(capital + revenue - comm - tax)
                     trades.append({
                         "date": str(date.date()),
                         "type": "止损卖出",
                         "code": code,
-                        "price": round(sell_price, 3),
+                        "price": round(float(sell_price_d), 3),
                         "shares": shares,
-                        "amount": round(revenue, 2),
-                        "commission": round(comm + tax, 2),
-                        "capital": capital,
+                        "amount": to_float_cent(revenue),
+                        "commission": to_float_cent(comm + tax),
+                        "capital": float(capital),
                     })
                     del holdings[code]
                     buy_prices.pop(code, None)
@@ -241,10 +257,13 @@ def run_portfolio_backtest(
                 pos_value += shares * day_prices[code]["close"]
             elif code in last_close:
                 pos_value += shares * last_close[code]
-            # else: brand-new position with no prior close → contributes 0
+            elif code in buy_prices:
+                # Brand-new position that suspended before any close was
+                # recorded — fall back to buy price so equity stays continuous.
+                pos_value += shares * buy_prices[code]
         equity_curve.append({
             "date": str(date.date()),
-            "value": round(capital + pos_value, 2),
+            "value": round(float(capital) + pos_value, 2),
         })
 
         # ── Update rolling_prices and last_close with TODAY'S close ──────────
@@ -256,20 +275,33 @@ def run_portfolio_backtest(
 
     # ── Force-close remaining at last available close ───────────────────────
     if holdings:
-        last_prices = price_lookup.get(all_dates[-1], {})
-        for code, shares in holdings.items():
+        last_date = all_dates[-1]
+        last_prices = price_lookup.get(last_date, {})
+        for code, shares in list(holdings.items()):
             if shares <= 0:
                 continue
             # Use today's close if available, else most recent known close
             close_px = last_prices.get(code, {}).get("close") or last_close.get(code)
             if close_px:
-                p = close_px * (1 - slippage_rate)
-                revenue = shares * p
-                comm = max(revenue * commission_rate, min_commission)
-                tax = revenue * stamp_tax_rate
-                capital = round(capital + revenue - comm - tax, 2)
+                p_d = D(close_px) * slippage_sell
+                revenue = D(shares) * p_d
+                comm = max(revenue * commission_rate_d, min_commission_d)
+                tax = revenue * stamp_tax_rate_d
+                capital = round_cent(capital + revenue - comm - tax)
+                trades.append({
+                    "date": str(last_date.date()),
+                    "type": "卖出",
+                    "code": code,
+                    "price": round(float(p_d), 3),
+                    "shares": shares,
+                    "amount": to_float_cent(revenue),
+                    "commission": to_float_cent(comm + tax),
+                    "capital": float(capital),
+                })
+                buy_prices.pop(code, None)
+        holdings.clear()
         if equity_curve:
-            equity_curve[-1]["value"] = round(capital, 2)
+            equity_curve[-1]["value"] = to_float_cent(capital)
 
     # ── Performance metrics ───────────────────────────────────────────────────
     equity = pd.Series([e["value"] for e in equity_curve])

@@ -275,6 +275,52 @@ def _get_index_close(index_code: str, trade_date: _Date) -> Optional[float]:
     return float(row["close"]) if row and row["close"] is not None else None
 
 
+def _cumulative_pct_change(
+    code: str, buy_date: _Date, today: _Date
+) -> Optional[float]:
+    """
+    买入日(不含)到 today(含)的累积涨跌幅 = prod(1 + pct/100) - 1。
+
+    用 ``stock_kline.pct_change`` 累乘判断"自买入以来真实涨跌",
+    避开 close 与 buy_price 复权基准不一致的坑:
+      - stock_kline.close 是 qfq 前复权,每次新除权时整段历史会"自动下调"
+        → 持有期间分红时 close 跳水,(close-buy)/buy 误判为亏损 → 误触发止损
+      - 而 pct_change 是日级真实涨跌(qfq close 之间的差除以 qfq prev_close,
+        相邻除权日时 close 和 prev_close 同步调整,pct_change 仍是"真实涨跌")
+      - 累乘 pct_change 等价于"未复权口径下的真实持仓收益率",与分红无关
+
+    返回 None 表示数据不足(同时也不该触发止损)。
+    """
+    if buy_date is None or today is None or buy_date >= today:
+        return None
+    conn = _get_pool()
+    if conn is None:
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pct_change FROM stock_kline "
+                "WHERE code=%s AND trade_date>%s AND trade_date<=%s "
+                "ORDER BY trade_date",
+                (code, buy_date, today),
+            )
+            rows = cur.fetchall()
+    except Exception:
+        return None
+    if not rows:
+        return None
+    cum = 1.0
+    for r in rows:
+        pct = r.get("pct_change") if isinstance(r, dict) else r[0]
+        if pct is None:
+            continue
+        try:
+            cum *= 1.0 + float(pct) / 100.0
+        except (TypeError, ValueError):
+            continue
+    return cum - 1.0
+
+
 # ── 主流程 ───────────────────────────────────────────────────────────────────
 
 def run_once(
@@ -323,6 +369,48 @@ def run_once(
 
     positions_log: List[Dict[str, Any]] = []
 
+    # 整段调仓+落库放进单事务:中途任何 db.xxx 失败都会 rollback,避免
+    # "卖了 holdings 但 cash 未回写"的不一致状态。step5 的读查询也在事务里,
+    # 拿到的快照与最终落库视图一致。
+    _conn_txn = None
+    if not dry_run:
+        _conn_txn = _get_pool()
+        if _conn_txn is not None:
+            _conn_txn.ping(reconnect=True)
+            _conn_txn.begin()
+    try:
+        return _run_once_body(
+            initial_capital=initial_capital,
+            cap_min=cap_min, cap_max=cap_max,
+            stock_num=stock_num, hold_days=hold_days,
+            stop_loss_pct=stop_loss_pct,
+            allow_boards=allow_boards,
+            trade_date=trade_date,
+            cash=cash, last_rb=last_rb,
+            rebalance_counter=rebalance_counter,
+            is_rebalance=is_rebalance,
+            holdings=holdings, day_prices=day_prices,
+            positions_log=positions_log, result=result,
+            dry_run=dry_run,
+            _commit=(lambda c=_conn_txn: c.commit()) if _conn_txn is not None else None,
+        )
+    except Exception:
+        if _conn_txn is not None:
+            try:
+                _conn_txn.rollback()
+            except Exception:
+                logger.exception("paper_trading 事务回滚失败")
+        raise
+
+
+def _run_once_body(
+    *,
+    initial_capital, cap_min, cap_max, stock_num, hold_days,
+    stop_loss_pct, allow_boards, trade_date, cash, last_rb,
+    rebalance_counter, is_rebalance, holdings, day_prices,
+    positions_log, result, dry_run, _commit,
+) -> RunResult:
+    """run_once 的实际主体,提出来避免给整段代码加一层 try/with 缩进。"""
     # ── 步骤 1: 止损检查（任何一天都做） ──────────────────────────────────
     stop_loss_ratio = stop_loss_pct / 100.0
     for code, h in list(holdings.items()):
@@ -333,7 +421,15 @@ def run_once(
         close_px = px["close"]
         if buy_px <= 0:
             continue
-        loss_ratio = (close_px - buy_px) / buy_px
+        # 优先用累积 pct_change 判断"持仓真实涨跌",避开 close 复权后跳水
+        # 误触发止损;持仓期间数据缺失时退回到 close 直比
+        buy_date_h = h.get("buy_date")
+        cum_ret = _cumulative_pct_change(code, buy_date_h, trade_date) \
+                  if buy_date_h is not None else None
+        if cum_ret is not None:
+            loss_ratio = cum_ret
+        else:
+            loss_ratio = (close_px - buy_px) / buy_px
         if stop_loss_ratio > 0 and loss_ratio <= -stop_loss_ratio:
             # 跌停的话其实卖不掉，做个保护
             if px.get("pct_change", 0) <= -9.8:
@@ -406,14 +502,33 @@ def run_once(
         ]
         result.selected = selected
 
-        # 卖出所有现持仓（按今日开盘价）
+        # 卖出所有现持仓（按今日开盘价）。卖不出去的留存,后面用 retained_codes
+        # 抵扣新仓数量,保证总仓位 ≈ stock_num 只等权
+        retained_codes: List[str] = []
         for code, h in list(holdings.items()):
             px = day_prices.get(code) or sel_prices.get(code)
             if not px:
                 logger.warning("[%s] 调仓卖出失败：当日无价格，保留至下次", code)
+                retained_codes.append(code)
+                # 仍计入"持有"行,前端能看到
+                positions_log.append({
+                    "code": code, "name": h.get("name"),
+                    "price": None,
+                    "shares": int(h["shares"]),
+                    "amount": None,
+                    "action": "持有(卖出失败:无价格)",
+                })
                 continue
             if px.get("pct_change", 0) <= -9.8:
                 logger.warning("[%s] 调仓卖出失败：当日跌停，保留至下次", code)
+                retained_codes.append(code)
+                positions_log.append({
+                    "code": code, "name": h.get("name"),
+                    "price": round(px["close"], 3),
+                    "shares": int(h["shares"]),
+                    "amount": round(px["close"] * int(h["shares"]), 2),
+                    "action": "持有(卖出失败:跌停)",
+                })
                 continue
             sell_price = px["open"] * (1 - SLIPPAGE_RATE)
             shares = int(h["shares"])
@@ -443,7 +558,16 @@ def run_once(
                 db.remove_holding(code)
             holdings.pop(code, None)
 
-        # 买入新选股（按今日开盘价，等权）
+        # 买入新选股(按今日开盘价,等权)。
+        # 关键修复:
+        #   1) 留存的旧仓(跌停/无价没卖出去)继续占着仓位 → 新仓数缩减
+        #      slots_left = stock_num - len(retained_codes),保持总仓位 ≈ N 只
+        #   2) selected 里如果包含已留存的代码 → 跳过(避免 add_holding 覆盖 shares,
+        #      变成"白买一份"丢老仓信息)
+        slots_left = max(0, stock_num - len(retained_codes))
+        selected = [s for s in selected if s not in retained_codes][:slots_left]
+        result.selected = selected   # 反映真实买入,_build_notes/前端用这个
+
         if selected and cash > 0:
             cash_per = cash / len(selected)
             for code in selected:
@@ -595,6 +719,10 @@ def run_once(
             "benchmark_close": round(bm_close, 3) if bm_close else None,
             "benchmark_cum_return": round(bm_cum, 6),
         })
+
+    # 所有写库完成 → 提交事务
+    if _commit is not None:
+        _commit()
 
     result.total_value = round(total_value, 2)
     result.cash = round(cash, 2)

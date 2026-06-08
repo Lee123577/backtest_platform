@@ -13,6 +13,9 @@ from pydantic import BaseModel
 from starlette.requests import Request
 
 
+_MAX_RANGE_DAYS = 15 * 366  # 15 年(含闰年余量),防 DoS:全市场×长跨度抓崩后端
+
+
 def _validate_date_range(start: str, end: str) -> None:
     """Raise HTTPException(400) on bad date input — keep error UX consistent."""
     try:
@@ -24,6 +27,8 @@ def _validate_date_range(start: str, end: str) -> None:
         raise HTTPException(400, "开始日期必须早于结束日期")
     if s.year < 1990:
         raise HTTPException(400, "开始日期不能早于 1990 年")
+    if (e - s).days > _MAX_RANGE_DAYS:
+        raise HTTPException(400, f"回测时间跨度最大 15 年,请缩短日期范围")
 
 from .data.calendar import count_trading_days, next_n_trading_days
 from .data.data_loader import get_kline_data, get_stock_name, normalize_code

@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 
 from ..strategies.base import BaseStrategy
+from .money import D, ONE, ZERO, round_cent, to_float_cent
 
 
 # ── Metrics ───────────────────────────────────────────────────────────────────
@@ -98,7 +99,14 @@ def run_backtest(
     """
     signals = strategy.generate_signals(df)
 
-    capital = float(initial_capital)
+    # 钱量统一用 Decimal,避免几千笔交易后 float 累积误差
+    capital = D(initial_capital)
+    commission_rate_d = D(commission_rate)
+    min_commission_d = D(min_commission)
+    stamp_tax_rate_d = D(stamp_tax_rate)
+    slippage_buy = ONE + D(slippage_rate)
+    slippage_sell = ONE - D(slippage_rate)
+
     position = 0
     entry_price = 0.0
     forced_sell = False  # stop-loss / take-profit triggered end-of-day
@@ -115,41 +123,41 @@ def run_backtest(
                 sig = -1
                 forced_sell = False
 
-            if sig == 1 and position == 0 and capital > 0 and open_price > 0:
-                exec_price = open_price * (1 + slippage_rate)
-                lots = int(capital / exec_price / 100)
+            if sig == 1 and position == 0 and capital > ZERO and open_price > 0:
+                exec_price_d = D(open_price) * slippage_buy
+                lots = int(capital / (exec_price_d * D(100)))
                 shares = lots * 100
                 if shares > 0:
-                    cost = shares * exec_price
-                    comm = max(cost * commission_rate, min_commission)
+                    cost = D(shares) * exec_price_d
+                    comm = max(cost * commission_rate_d, min_commission_d)
                     if cost + comm <= capital:
                         position = shares
-                        entry_price = exec_price
-                        capital = round(capital - cost - comm, 2)
+                        entry_price = float(exec_price_d)
+                        capital = round_cent(capital - cost - comm)
                         trades.append({
                             "date": str(row["date"].date()),
                             "type": "买入",
-                            "price": round(exec_price, 3),
+                            "price": round(float(exec_price_d), 3),
                             "shares": shares,
-                            "amount": round(cost, 2),
-                            "commission": round(comm, 2),
-                            "capital": capital,
+                            "amount": to_float_cent(cost),
+                            "commission": to_float_cent(comm),
+                            "capital": float(capital),
                         })
 
             elif sig == -1 and position > 0:
-                exec_price = open_price * (1 - slippage_rate)
-                revenue = position * exec_price
-                comm = max(revenue * commission_rate, min_commission)
-                tax = revenue * stamp_tax_rate
-                capital = round(capital + revenue - comm - tax, 2)
+                exec_price_d = D(open_price) * slippage_sell
+                revenue = D(position) * exec_price_d
+                comm = max(revenue * commission_rate_d, min_commission_d)
+                tax = revenue * stamp_tax_rate_d
+                capital = round_cent(capital + revenue - comm - tax)
                 trades.append({
                     "date": str(row["date"].date()),
                     "type": "卖出",
-                    "price": round(exec_price, 3),
+                    "price": round(float(exec_price_d), 3),
                     "shares": position,
-                    "amount": round(revenue, 2),
-                    "commission": round(comm + tax, 2),
-                    "capital": capital,
+                    "amount": to_float_cent(revenue),
+                    "commission": to_float_cent(comm + tax),
+                    "capital": float(capital),
                 })
                 position = 0
                 entry_price = 0.0
@@ -165,17 +173,29 @@ def run_backtest(
             # Defensive: clear any stale flag whenever we hold no position
             forced_sell = False
 
-        equity_values.append(capital + position * close_price)
+        # equity 序列出口给 pandas/numpy,转 float 即可
+        equity_values.append(float(capital) + position * close_price)
 
     # Force-close remaining position at last close
     if position > 0:
-        last_price = float(df.iloc[-1]["close"])
-        exec_price = last_price * (1 - slippage_rate)
-        revenue = position * exec_price
-        comm = max(revenue * commission_rate, min_commission)
-        tax = revenue * stamp_tax_rate
-        capital = round(capital + revenue - comm - tax, 2)
-        equity_values[-1] = capital
+        last_row = df.iloc[-1]
+        last_price = float(last_row["close"])
+        exec_price_d = D(last_price) * slippage_sell
+        revenue = D(position) * exec_price_d
+        comm = max(revenue * commission_rate_d, min_commission_d)
+        tax = revenue * stamp_tax_rate_d
+        capital = round_cent(capital + revenue - comm - tax)
+        trades.append({
+            "date": str(last_row["date"].date()),
+            "type": "卖出",
+            "price": round(float(exec_price_d), 3),
+            "shares": position,
+            "amount": to_float_cent(revenue),
+            "commission": to_float_cent(comm + tax),
+            "capital": float(capital),
+        })
+        position = 0
+        equity_values[-1] = float(capital)
 
     equity = pd.Series(equity_values)
     equity_curve = [
@@ -201,14 +221,20 @@ def calc_benchmark(
     slippage_rate: float = 0.0001,
 ) -> Dict[str, Any]:
     """Buy-and-hold: buy at first open, sell at last close."""
-    open0 = float(df.iloc[0]["open"]) * (1 + slippage_rate)
-    shares = int(initial_capital / open0 / 100) * 100
-    cost = shares * open0
-    comm = max(cost * commission_rate, min_commission)
-    remaining = initial_capital - cost - comm
+    initial_d = D(initial_capital)
+    commission_rate_d = D(commission_rate)
+    min_commission_d = D(min_commission)
+    stamp_tax_rate_d = D(stamp_tax_rate)
+
+    open0_d = D(float(df.iloc[0]["open"])) * (ONE + D(slippage_rate))
+    shares = int(initial_d / (open0_d * D(100))) * 100
+    cost = D(shares) * open0_d
+    comm = max(cost * commission_rate_d, min_commission_d)
+    remaining = round_cent(initial_d - cost - comm)
+    remaining_f = float(remaining)
 
     equity_values = [
-        remaining + shares * float(row["close"]) for _, row in df.iterrows()
+        remaining_f + shares * float(row["close"]) for _, row in df.iterrows()
     ]
     equity = pd.Series(equity_values)
     equity_curve = [
@@ -216,13 +242,14 @@ def calc_benchmark(
         for i in range(len(df))
     ]
 
-    last_price = float(df.iloc[-1]["close"]) * (1 - slippage_rate)
-    sell_revenue = shares * last_price
-    sell_comm = max(sell_revenue * commission_rate, min_commission)
-    sell_tax = sell_revenue * stamp_tax_rate
-    final_capital = remaining + sell_revenue - sell_comm - sell_tax
+    last_price_d = D(float(df.iloc[-1]["close"])) * (ONE - D(slippage_rate))
+    sell_revenue = D(shares) * last_price_d
+    sell_comm = max(sell_revenue * commission_rate_d, min_commission_d)
+    sell_tax = sell_revenue * stamp_tax_rate_d
+    final_capital = round_cent(remaining + sell_revenue - sell_comm - sell_tax)
+    final_capital_f = float(final_capital)
 
-    total_return = (final_capital - initial_capital) / initial_capital
+    total_return = (final_capital_f - initial_capital) / initial_capital
     days = len(df)
     annual_return = (1 + total_return) ** (252 / days) - 1 if days > 0 else 0.0
 
@@ -254,7 +281,7 @@ def calc_benchmark(
             "calmar_ratio": calmar,
             "win_rate": None,
             "trade_count": 1,
-            "final_value": round(final_capital, 2),
+            "final_value": round(final_capital_f, 2),
             "initial_capital": initial_capital,
         },
         "equity_curve": equity_curve,

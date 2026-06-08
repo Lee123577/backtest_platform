@@ -22,7 +22,7 @@ quality_flag 取值（可叠加，用 | 分隔）:
 from __future__ import annotations
 
 import logging
-from typing import Tuple
+from typing import Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -40,11 +40,20 @@ _IDX_VOLUME = 6
 _IDX_PCT = 9
 
 
-def _limit_pct(code: str) -> float:
-    """根据股票代码返回当日涨跌停幅度（百分比，绝对值）。"""
+def _limit_pct(code: str, is_st: bool = False) -> float:
+    """根据股票代码 + ST 状态返回当日涨跌停幅度（百分比，绝对值）。
+
+    规则:
+      - 创业板 (300/301) / 科创板 (688) / 北交所 (4/8): ±20%
+        (即便 ST,板块规则优先 — 创业板 *ST 仍是 20%)
+      - 主板 ST: ±5%
+      - 主板非 ST: ±10%
+    """
     if code.startswith(("300", "688", "8", "4")):
-        return 20.0  # 创业板 / 科创板 / 北交所
-    return 10.0  # 主板（暂不区分 ST，5% 的判断容错）
+        return 20.0
+    if is_st:
+        return 5.0
+    return 10.0
 
 
 def _is_invalid(row: tuple) -> bool:
@@ -76,7 +85,7 @@ def _is_invalid(row: tuple) -> bool:
     return False
 
 
-def _is_suspect_jump(row: tuple) -> bool:
+def _is_suspect_jump(row: tuple, is_st: bool = False) -> bool:
     """异常跳价：|pct_change| 超过涨跌停限制的 1.5 倍（容错）。"""
     code = row[_IDX_CODE]
     pct = row[_IDX_PCT]
@@ -86,7 +95,7 @@ def _is_suspect_jump(row: tuple) -> bool:
         pct_abs = abs(float(pct))
     except (TypeError, ValueError):
         return False
-    limit = _limit_pct(code) * 1.5
+    limit = _limit_pct(code, is_st=is_st) * 1.5
     return pct_abs > limit
 
 
@@ -106,9 +115,17 @@ def _is_suspect_resumed(row: tuple) -> bool:
     return True
 
 
-def filter_and_flag(rows: list[tuple]) -> Tuple[list[tuple], list[str], dict]:
+def filter_and_flag(
+    rows: list[tuple],
+    is_st_map: Optional[Dict[str, bool]] = None,
+) -> Tuple[list[tuple], list[str], dict]:
     """
     主入口：过滤非法行 + 为可疑行生成 flag。
+
+    Args:
+        rows: 待校验的 kline 行(tuple,字段顺序见模块顶部 _IDX_ 常量)
+        is_st_map: ``{code: is_st}`` 映射,用于主板 ST 股 ±5% 涨跌停判断。
+                   缺省 / 缺失某 code → 视为非 ST(回退到主板 ±10% 容错)。
 
     Returns:
         (cleaned_rows, flags, stats)
@@ -119,6 +136,7 @@ def filter_and_flag(rows: list[tuple]) -> Tuple[list[tuple], list[str], dict]:
     cleaned: list[tuple] = []
     flags: list[str] = []
     stats = {"dropped": 0, "suspect_jump": 0, "suspect_resumed": 0, "ok": 0}
+    is_st_map = is_st_map or {}
 
     for row in rows:
         if _is_invalid(row):
@@ -128,7 +146,8 @@ def filter_and_flag(rows: list[tuple]) -> Tuple[list[tuple], list[str], dict]:
                          f"L={row[_IDX_LOW]} C={row[_IDX_CLOSE]}")
             continue
         tags: list[str] = []
-        if _is_suspect_jump(row):
+        code = row[_IDX_CODE]
+        if _is_suspect_jump(row, is_st=bool(is_st_map.get(code, False))):
             tags.append("SUSPECT_JUMP")
             stats["suspect_jump"] += 1
         if _is_suspect_resumed(row):

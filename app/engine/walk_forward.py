@@ -61,11 +61,6 @@ def _expand_grid(param_grid: Dict[str, List[Any]]) -> List[Dict[str, Any]]:
     return combos
 
 
-def _slice(df: pd.DataFrame, start: date, end: date) -> pd.DataFrame:
-    """切 df 到 [start, end]（含两端）。df 必须含 date 列。"""
-    return df[(df["date"].dt.date >= start) & (df["date"].dt.date <= end)].reset_index(drop=True)
-
-
 def _evaluate(
     df: pd.DataFrame,
     strategy_cls: Type[BaseStrategy],
@@ -82,9 +77,9 @@ def run_walk_forward(
     df: pd.DataFrame,
     strategy_cls: Type[BaseStrategy],
     param_grid: Dict[str, List[Any]],
-    is_days: int = 504,     # 默认 2 年 in-sample
-    oos_days: int = 126,    # 默认 6 个月 out-of-sample
-    step_days: int | None = None,  # 默认等于 oos_days（非重叠）
+    is_days: int = 504,     # 默认 2 年 in-sample(交易日,~252/年)
+    oos_days: int = 126,    # 默认 6 个月 out-of-sample(交易日)
+    step_days: int | None = None,  # 默认等于 oos_days(非重叠);单位:交易日
     objective: str = "sharpe_ratio",
     backtest_kwargs: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
@@ -135,26 +130,31 @@ def run_walk_forward(
     df = df.copy()
     df["date"] = pd.to_datetime(df["date"])
     df = df.sort_values("date").reset_index(drop=True)
-
-    total_start = df["date"].iloc[0].date()
-    total_end = df["date"].iloc[-1].date()
+    n = len(df)
 
     windows: List[WalkForwardWindow] = []
-    is_start = total_start
+    # 用 bar 索引滚窗(整数),is_days/oos_days/step_days 全部按**交易日**计算,
+    # 不再用 calendar days —— 否则跨春节/国庆窗口会缩水 30 个 bar 以上。
+    is_start_idx = 0
 
     while True:
-        is_end = is_start + timedelta(days=is_days)
-        oos_start = is_end + timedelta(days=1)
-        oos_end = oos_start + timedelta(days=oos_days)
-        if oos_end > total_end:
+        is_end_idx = is_start_idx + is_days
+        oos_start_idx = is_end_idx
+        oos_end_idx = oos_start_idx + oos_days
+        if oos_end_idx > n:
             break
 
-        is_df = _slice(df, is_start, is_end)
-        oos_df = _slice(df, oos_start, oos_end)
+        is_df = df.iloc[is_start_idx:is_end_idx].reset_index(drop=True)
+        oos_df = df.iloc[oos_start_idx:oos_end_idx].reset_index(drop=True)
         if len(is_df) < 30 or len(oos_df) < 5:
-            # 数据太短，窗口不可靠
-            is_start = is_start + timedelta(days=step_days)
+            # 数据太短(罕见,既然按 bar 切应该是 is_days/oos_days 设得太小)
+            is_start_idx += step_days
             continue
+
+        is_start = is_df["date"].iloc[0].date()
+        is_end = is_df["date"].iloc[-1].date()
+        oos_start = oos_df["date"].iloc[0].date()
+        oos_end = oos_df["date"].iloc[-1].date()
 
         # ── Grid search on IS ────────────────────────────────────────────────
         best_metric = -float("inf")
@@ -177,7 +177,7 @@ def run_walk_forward(
                 best_params = params
 
         if not best_params:
-            is_start = is_start + timedelta(days=step_days)
+            is_start_idx += step_days
             continue
 
         # ── Evaluate best params on OOS ──────────────────────────────────────
@@ -197,7 +197,7 @@ def run_walk_forward(
             oos_max_dd=float(oos_metrics.get("max_drawdown", 0) or 0),
         ))
 
-        is_start = is_start + timedelta(days=step_days)
+        is_start_idx += step_days
 
     # ── 汇总 ─────────────────────────────────────────────────────────────────
     if not windows:

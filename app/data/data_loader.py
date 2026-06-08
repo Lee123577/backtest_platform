@@ -4,43 +4,49 @@ import threading
 import pandas as pd
 
 from .feed import CACHE_DIR, get_feed   # noqa: F401 — re-export for backward compatibility
-from ..config import settings
+from . import db_pool
+from .. import config as _config_module  # noqa: F401 — keep import order
 
 logger = logging.getLogger(__name__)
 
-# 每个线程独立数据库连接（ThreadPoolExecutor 多线程共享单连接会导致协议错乱）
+# Thread-local 缓存:同一线程的反复调用复用上次借出的连接,
+# 让旧调用方语义不变(尤其 paper_trading 通过 conn.begin() 跨多个 db.xxx 做事务)。
+# 真正的连接管理 / 上限 / 归还在 db_pool 里。
 _db_local = threading.local()
 
 
 def _get_pool():
-    """获取当前线程的数据库连接，线程安全，无需加锁。"""
-    try:
-        conn = getattr(_db_local, "conn", None)
-        if conn is not None:
+    """
+    [Compat] 返回 thread-local MySQL 连接。
+
+    新代码请用 ``db_pool.get_conn()`` 上下文管理器(自动归还到池)。
+
+    本函数:
+      - 第一次调用时从 ``db_pool.borrow()`` 借一个连接,缓存在 thread-local
+      - 后续同线程的调用直接复用(ping 一下确保还活)
+      - 连接掉了 / DB 不可用 → 返回 None
+      - **借出去的连接在线程内长期持有,不归还** —— 由 ``db_pool`` 的
+        ``MAX_CONNECTIONS`` 上限保证不会无限增长(超限时 ``borrow`` 会阻塞)
+    """
+    conn = getattr(_db_local, "conn", None)
+    if conn is not None:
+        try:
             conn.ping(reconnect=True)
             return conn
-
-        from pymysql.cursors import DictCursor
-        import pymysql
-        conn = pymysql.connect(
-            host=settings.MYSQL_HOST,
-            port=settings.MYSQL_PORT,
-            user=settings.MYSQL_USER,
-            password=settings.MYSQL_PASSWORD,
-            database=settings.MYSQL_DATABASE,
-            charset="utf8mb4",
-            cursorclass=DictCursor,
-            autocommit=True,
-        )
-        _db_local.conn = conn
-        return conn
-    except Exception as e:
-        logger.error("数据库连接失败(host=%s db=%s): %s", settings.MYSQL_HOST, settings.MYSQL_DATABASE, e)
-        try:
+        except Exception:
+            # 连接已坏,扔掉(让计数减一)再重新借
+            try:
+                db_pool.discard(conn)
+            except Exception:
+                pass
             _db_local.conn = None
-        except AttributeError:
-            pass
+
+    conn = db_pool.borrow()
+    if conn is None:
+        _db_local.conn = None
         return None
+    _db_local.conn = conn
+    return conn
 
 
 def _query_kline_from_db(

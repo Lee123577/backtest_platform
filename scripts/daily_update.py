@@ -297,6 +297,19 @@ def update_kline(conn, trade_date: str):
     except Exception as e:
         log.warning(f"ensure_quality_column 失败（继续写入，不带 flag）: {e}")
 
+    # 拉一次 is_st 映射给 quality 模块判断主板 ST ±5% 涨跌停
+    # (一次性查询,5000 行 ~ 10ms,远比每行查 stock_info 划算)
+    is_st_map: dict[str, bool] = {}
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT code, is_st FROM stock_info")
+            for r in cur.fetchall():
+                code = r[0] if isinstance(r, (list, tuple)) else r["code"]
+                st = r[1] if isinstance(r, (list, tuple)) else r["is_st"]
+                is_st_map[code] = bool(st)
+    except Exception as e:
+        log.warning(f"读取 stock_info.is_st 失败,quality 检查将按非 ST 处理: {e}")
+
     sql = """
         INSERT INTO stock_kline
             (code, trade_date, open, high, low, close, volume,
@@ -356,7 +369,7 @@ def update_kline(conn, trade_date: str):
         """质量校验 → 拼上 quality_flag 列 → batch_insert。返回成功写入条数。"""
         if not rows:
             return 0
-        cleaned, flags, stats = filter_and_flag(rows)
+        cleaned, flags, stats = filter_and_flag(rows, is_st_map=is_st_map)
         for k, v in stats.items():
             quality_stats[k] = quality_stats.get(k, 0) + v
         if not cleaned:

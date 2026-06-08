@@ -19,9 +19,10 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import logging
+import os
 import re
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -30,6 +31,48 @@ from starlette.responses import Response
 from .data.data_loader import _get_pool
 
 logger = logging.getLogger(__name__)
+
+
+# ─────────────────────────── 可信代理白名单 ───────────────────────────
+# 安全要点:不能裸信 X-Forwarded-For —— 它是请求方自己写的,谁都能伪造
+# (admin_ip 也用同一函数取 IP,等于把白名单鉴权 bypass 给任何外部客户端)。
+#
+# 配置方式:环境变量 TRUSTED_PROXIES,逗号分隔的 IP 或 CIDR,例如:
+#   TRUSTED_PROXIES="127.0.0.1,10.0.0.0/8,fd00::/8"
+# 只有当**直连 IP**(request.client.host)在这个集合里时,才信任 XFF/X-Real-IP。
+# 未配置时一律忽略代理头,直接用 request.client.host —— 最安全的默认。
+
+def _parse_trusted_proxies() -> List[ipaddress._BaseNetwork]:
+    raw = os.environ.get("TRUSTED_PROXIES", "").strip()
+    if not raw:
+        return []
+    nets: List[ipaddress._BaseNetwork] = []
+    for s in raw.split(","):
+        s = s.strip()
+        if not s:
+            continue
+        try:
+            nets.append(ipaddress.ip_network(s, strict=False))
+        except ValueError as e:
+            logger.warning("TRUSTED_PROXIES 无效条目 %r: %s", s, e)
+    return nets
+
+
+_TRUSTED_PROXIES: List[ipaddress._BaseNetwork] = _parse_trusted_proxies()
+if _TRUSTED_PROXIES:
+    logger.info("可信代理: %s", [str(n) for n in _TRUSTED_PROXIES])
+else:
+    logger.info("未配置 TRUSTED_PROXIES,X-Forwarded-For/X-Real-IP 一律忽略")
+
+
+def _is_from_trusted_proxy(direct_ip: str) -> bool:
+    if not _TRUSTED_PROXIES or not direct_ip:
+        return False
+    try:
+        addr = ipaddress.ip_address(direct_ip)
+    except ValueError:
+        return False
+    return any(addr in net for net in _TRUSTED_PROXIES)
 
 
 # ─────────────────────────── 地理位置查询 ───────────────────────────
@@ -119,17 +162,25 @@ def _should_skip(path: str) -> bool:
 # ─────────────────────────── IP 提取 ────────────────────────────
 
 def _client_ip(request: Request) -> str:
-    """优先取代理头里的真实客户端 IP。"""
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        # XFF 是 "client, proxy1, proxy2" 形式，第一个就是原始客户端
-        return xff.split(",")[0].strip()
-    real = request.headers.get("x-real-ip")
-    if real:
-        return real.strip()
-    if request.client and request.client.host:
-        return request.client.host
-    return "unknown"
+    """
+    取请求方真实 IP。
+      - 直连 IP 在 TRUSTED_PROXIES 内 → 用 XFF/X-Real-IP(反代场景)
+      - 否则一律用直连 IP(防 XFF 伪造绕过 admin_ip 白名单)
+    """
+    direct = (request.client.host
+              if request.client and request.client.host
+              else "")
+
+    if _is_from_trusted_proxy(direct):
+        xff = request.headers.get("x-forwarded-for")
+        if xff:
+            # XFF 是 "client, proxy1, proxy2" 形式,第一个是原始客户端
+            return xff.split(",")[0].strip()
+        real = request.headers.get("x-real-ip")
+        if real:
+            return real.strip()
+
+    return direct or "unknown"
 
 
 # ────────────────────────── UA 轻量解析 ─────────────────────────

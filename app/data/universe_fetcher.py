@@ -89,6 +89,13 @@ def fetch_via_xuangu() -> pd.DataFrame:
 
     用 data.eastmoney.com（不同于 push2 子域名），线上代理拦截率最低，
     是项目的主线数据源。
+
+    分页策略说明:
+      - ps=500(原 1000 易被限流截断,云服务器 IP 拉到 1300 左右就停)
+      - 不再依赖 result.nextpage 字段(行为不稳定,有时残缺时仍返回 True)
+      - 用 ``count``/``total`` 字段(若接口返回)+ 实际累计 records 双重判断
+      - 每页有进度日志,出现"页内全是空数据"时早停防死循环
+      - 总数 < 全市场预期(MIN_EXPECTED)时打 WARNING,daily_update 可据此降级
     """
     session = _req.Session()
     session.trust_env = False
@@ -103,8 +110,11 @@ def fetch_via_xuangu() -> pd.DataFrame:
     })
 
     records: list = []
-    ps = 1000
-    MAX_PAGES = 20  # 5500 只 A 股，20 页足够
+    ps = 500            # 改小,降低单页被限流的概率
+    MAX_PAGES = 30      # 5500 只 / 500 = 11 页,余量到 30 防 API 行为变化
+
+    expected_total: Optional[int] = None
+    consecutive_empty_pages = 0
 
     for page in range(1, MAX_PAGES + 1):
         params = {
@@ -116,13 +126,28 @@ def fetch_via_xuangu() -> pd.DataFrame:
             "source": "SELECT_SECURITIES",
             "client": "WEB",
         }
-        resp = session.get(_XUANGU_URL, params=params, timeout=20)
-        resp.raise_for_status()
-        payload = resp.json()
+        try:
+            resp = session.get(_XUANGU_URL, params=params, timeout=20)
+            resp.raise_for_status()
+            payload = resp.json()
+        except Exception as e:
+            logger.warning("xuangu 第 %d 页请求失败: %s", page, e)
+            if records:
+                break   # 至少已拿到部分,降级返回
+            raise
 
         result = payload.get("result") or {}
         items = result.get("data") or []
+        # 接口通常返回 count(总条数),用它判断"该停了没"
+        if expected_total is None:
+            for key in ("count", "total", "TOTAL"):
+                v = result.get(key)
+                if isinstance(v, int) and v > 0:
+                    expected_total = v
+                    logger.info("xuangu API 声明总数 %d 只", expected_total)
+                    break
 
+        page_added = 0
         for item in items:
             try:
                 code = str(item.get("SECURITY_CODE", "")).zfill(6)
@@ -138,15 +163,42 @@ def fetch_via_xuangu() -> pd.DataFrame:
                         "price": float(price),
                         "market_cap": float(cap_yuan) / 1e8,
                     })
+                    page_added += 1
             except (TypeError, ValueError):
                 continue
 
-        if not result.get("nextpage") or not items or len(items) < ps:
+        logger.info(
+            "xuangu page=%d items=%d added=%d running_total=%d",
+            page, len(items), page_added, len(records),
+        )
+
+        if not items:
+            consecutive_empty_pages += 1
+            if consecutive_empty_pages >= 2:
+                logger.info("xuangu 连续 2 页无数据,停止分页")
+                break
+        else:
+            consecutive_empty_pages = 0
+
+        # 终止条件:接口声明的总数已拿完,或本页不满 ps 且累计 > 0
+        if expected_total is not None and len(records) >= expected_total:
+            break
+        if 0 < len(items) < ps:
+            logger.info("xuangu 本页不满 %d 条(实际 %d),已是末页",
+                        ps, len(items))
             break
         time.sleep(0.15)
 
     if not records:
         raise RuntimeError("xuangu API 返回空数据")
+
+    MIN_EXPECTED = 4500   # A 股 ~5500,低于 4500 说明被限流 / API 改了
+    if len(records) < MIN_EXPECTED:
+        logger.warning(
+            "xuangu 仅拿到 %d 只(预期 ≥ %d),市值快照不完整 — "
+            "下游 universe 过滤会显著少。建议:1) 重试 2) 接 tushare 备份源",
+            len(records), MIN_EXPECTED,
+        )
 
     return pd.DataFrame(records)
 
