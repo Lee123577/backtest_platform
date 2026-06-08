@@ -24,9 +24,82 @@ from datetime import date as _Date
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..data.data_loader import _get_pool
+from ..data import dividend
 from ..data.filters import is_allowed_board, is_st_name
 from ..strategies.small_cap import SmallCapStrategy
 from . import db
+
+
+def _apply_dividends_for_holdings(
+    holdings: Dict[str, Dict[str, Any]],
+    trade_date: _Date,
+    dry_run: bool,
+) -> float:
+    """
+    对每只持仓扫一遍 stock_dividend 表,从 last_dividend_check_date 起
+    (NULL 则从 buy_date)到 trade_date 之间的事件全部应用。
+
+    Returns: 累计现金分红总额(应该加到账户 cash 里)。
+    """
+    try:
+        dividend.ensure_table()
+    except Exception as e:
+        logger.debug("ensure stock_dividend table 失败,跳过除权扫描: %s", e)
+        return 0.0
+
+    total_cash_gain = 0.0
+    for code, h in list(holdings.items()):
+        shares = int(h.get("shares") or 0)
+        if shares <= 0:
+            continue
+        buy_price = float(h.get("buy_price") or 0)
+        cost = float(h.get("cost") or 0)
+        last_check = h.get("last_dividend_check_date") or h.get("buy_date")
+        if last_check is None:
+            continue
+
+        result = dividend.apply_to_holding(
+            code=code,
+            shares=shares,
+            buy_price=buy_price,
+            cost=cost,
+            last_check=last_check,
+            today=trade_date,
+        )
+        if result is None:
+            # 没事件 → 推进检查日,下次跳过这段
+            if not dry_run:
+                try:
+                    db.touch_dividend_check_date(code, trade_date)
+                except Exception:
+                    pass
+            continue
+
+        # 在内存 holdings 立即生效,后续 step1/3 用的就是除权后口径
+        h["shares"] = result["shares"]
+        h["buy_price"] = result["buy_price"]
+        h["last_dividend_check_date"] = result["last_event_date"]
+        total_cash_gain += result.get("cash_gain", 0.0)
+        if not dry_run:
+            try:
+                db.update_holding_after_dividend(
+                    code=code,
+                    shares=result["shares"],
+                    buy_price=result["buy_price"],
+                    last_event_date=result["last_event_date"],
+                )
+            except Exception as e:
+                logger.warning("[%s] 除权调整入库失败: %s", code, e)
+
+        logger.info(
+            "[%s] 除权调整: shares %d→%d, buy_price→%.4f, cash_gain=%.2f",
+            code, shares, result["shares"], result["buy_price"],
+            result.get("cash_gain", 0.0),
+        )
+
+    if total_cash_gain > 0:
+        logger.info("除权累计现金分红入账: %.2f 元", total_cash_gain)
+    return total_cash_gain
 
 logger = logging.getLogger(__name__)
 
@@ -411,6 +484,13 @@ def _run_once_body(
     positions_log, result, dry_run, _commit,
 ) -> RunResult:
     """run_once 的实际主体,提出来避免给整段代码加一层 try/with 缩进。"""
+    # ── 步骤 0: 持仓除权扫描 ─────────────────────────────────────────────
+    # 自上次扫描日到 trade_date 之间持仓上的 ex_div 事件,自动调整
+    # shares / buy_price 同口径 qfq,把现金分红加进 cash。
+    # 不做这步:持仓 buy_price 不变而 stock_kline.close 因 qfq 下调
+    # → (close-buy)/buy 误判为亏损 → 误触发止损 + 浮亏显示失真。
+    cash += _apply_dividends_for_holdings(holdings, trade_date, dry_run)
+
     # ── 步骤 1: 止损检查（任何一天都做） ──────────────────────────────────
     stop_loss_ratio = stop_loss_pct / 100.0
     for code, h in list(holdings.items()):

@@ -77,6 +77,10 @@ app.include_router(data_status_router)
 from .cloudmap.api import router as cloudmap_router  # noqa: E402
 app.include_router(cloudmap_router)
 
+# LLM 股票分析(远程 MCP 服务 elsejj/mcp-cn-a-stock 转发)
+from .llm_assistant.api import router as llm_router  # noqa: E402
+app.include_router(llm_router)
+
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 

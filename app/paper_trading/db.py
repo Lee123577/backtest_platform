@@ -127,6 +127,12 @@ def ensure_tables() -> None:
     _migrate_table_columns(conn, "paper_signal_run", [
         ("notes_struct", "JSON COMMENT '结构化摘要：{buy:[],sell:[],stop_loss:[],reason:\"\"}'"),
     ])
+    # paper_holdings 加 last_dividend_check_date:用于 dividend.apply_to_holding
+    # 增量检查"上次检查后到今天的 ex_div 事件",避免重复应用
+    _migrate_table_columns(conn, "paper_holdings", [
+        ("last_dividend_check_date",
+         "DATE NULL COMMENT '上次扫描除权事件到的日期(NULL→用 buy_date)'"),
+    ])
     logger.info("paper_trading 表已就绪")
 
 
@@ -261,19 +267,24 @@ def add_holding(
     buy_date: _Date,
     cost: float,
 ) -> None:
+    """新买入时 last_dividend_check_date 初始化为 buy_date —— 之后 runner
+    扫描除权事件时只看 (buy_date, today] 区间,不会回看买入前的历史除权。"""
     conn = _get_pool()
     conn.ping(reconnect=True)
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO paper_holdings (code, name, shares, buy_price, buy_date, cost)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO paper_holdings
+                (code, name, shares, buy_price, buy_date, cost,
+                 last_dividend_check_date)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
                 name=VALUES(name), shares=VALUES(shares),
                 buy_price=VALUES(buy_price), buy_date=VALUES(buy_date),
-                cost=VALUES(cost)
+                cost=VALUES(cost),
+                last_dividend_check_date=VALUES(last_dividend_check_date)
             """,
-            (code, name, shares, buy_price, buy_date, cost),
+            (code, name, shares, buy_price, buy_date, cost, buy_date),
         )
 
 
@@ -282,6 +293,40 @@ def remove_holding(code: str) -> None:
     conn.ping(reconnect=True)
     with conn.cursor() as cur:
         cur.execute("DELETE FROM paper_holdings WHERE code=%s", (code,))
+
+
+def update_holding_after_dividend(
+    code: str,
+    shares: int,
+    buy_price: float,
+    last_event_date: _Date,
+) -> None:
+    """除权后调整持仓:shares 改、buy_price 改、last_dividend_check_date 推进。
+    cost 不动 — 它是原始投入,反映真实成本。"""
+    conn = _get_pool()
+    if conn is None:
+        return
+    conn.ping(reconnect=True)
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE paper_holdings "
+            "SET shares=%s, buy_price=%s, last_dividend_check_date=%s "
+            "WHERE code=%s",
+            (shares, buy_price, last_event_date, code),
+        )
+
+
+def touch_dividend_check_date(code: str, when: _Date) -> None:
+    """没有事件发生时也推进检查日,避免每次 run_once 都重扫历史。"""
+    conn = _get_pool()
+    if conn is None:
+        return
+    conn.ping(reconnect=True)
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE paper_holdings SET last_dividend_check_date=%s WHERE code=%s",
+            (when, code),
+        )
 
 
 # ── 运行记录 / 持仓明细 / 净值 ───────────────────────────────────────────────
