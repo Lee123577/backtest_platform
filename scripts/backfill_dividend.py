@@ -81,7 +81,20 @@ def main():
                    help="跳过最近 N 天 dividend 表已有记录的 code(增量补)")
     p.add_argument("--sleep", type=float, default=0.3,
                    help="每只之间的休眠(秒),防 akshare 限流")
+    p.add_argument("--day-of-month", type=int, default=0,
+                   help="仅当今天是该日(1-28)才执行,否则立即退出。"
+                        "给 cron 用,scheduler 的 schedule 只能精确到 daily,"
+                        "实际频率(月初一次)由本参数控制。0=不限制天天跑")
     args = p.parse_args()
+
+    # ── 自查日期(给 cron 月级粒度用) ────────────────────────────────────
+    if args.day_of_month > 0:
+        from datetime import date as _D
+        today = _D.today()
+        if today.day != args.day_of_month:
+            log.info("今天是 %d 号,非指定日 %d 号,跳过",
+                     today.day, args.day_of_month)
+            return
 
     from app.data import dividend
     dividend.ensure_table()

@@ -63,6 +63,17 @@ TASKS: Dict[str, TaskDef] = {
         "depends_on": None,
         "description": "回填 user_visit_log 的 country/city/isp（每天 0:00，离线 xdb）",
     },
+    # 每月 1 号凌晨跑全市场 ex_div 兜底:cninfo 接口长期不稳,光靠 daily_update
+    # 周一的增量不能覆盖所有 code。本任务每天 02:00 被 scheduler 唤醒,但
+    # backfill_dividend.py 内部 --day-of-month=1 自查日期,非 1 号立即退出
+    # (秒级),只在 1 号当天真跑 30-50 分钟全市场。
+    "backfill_dividend_full": {
+        "cmd": ["python", "scripts/backfill_dividend.py", "--day-of-month", "1"],
+        "schedule": "daily:02:00",
+        "timeout_sec": 90 * 60,
+        "depends_on": None,
+        "description": "全市场 ex_div 事件兜底回填(每月 1 号 02:00)",
+    },
 }
 
 
