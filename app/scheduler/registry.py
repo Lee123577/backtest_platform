@@ -75,6 +75,16 @@ TASKS: Dict[str, TaskDef] = {
         "depends_on": None,
         "description": "全市场 ex_div 事件兜底回填(每月 1 号 02:00)",
     },
+    # 每月 1 号 03:00(分红回填之后)补全 stock_kline 历史估值列。
+    # 东财 stock_value_em 覆盖 2018+;daily_update 每天写当日,本任务补深历史
+    # + 新上市股。手动"立即触发"无视日期当场跑。
+    "backfill_market_cap_full": {
+        "cmd": ["python", "scripts/backfill_market_cap.py"],
+        "schedule": "monthly:01:03:00",
+        "timeout_sec": 90 * 60,
+        "depends_on": None,
+        "description": "全市场历史 market_cap/PE/PB 回填(每月 1 号 03:00)",
+    },
 }
 
 
