@@ -855,117 +855,59 @@ def update_stock_finance(conn, trade_date: str):
         time.sleep(1)
 
 
-# ── 6. 更新 stock_dividend（分红，每周一拉最近90天） ────────────────────────
+# ── 6. 更新 stock_dividend（分红，每周一刷新持仓相关股票） ──────────────────
 
 def update_stock_dividend(conn, trade_date: str):
     """
-    每周一执行：拉取 cninfo 全市场分红表，
-    把"最近 90 天内有除权除息日"的事件写入 stock_dividend(新 schema)。
-    其他工作日跳过（分红事件变化频率低,每天跑没必要）。
+    每周一执行：刷新**当前模拟持仓**股票的分红事件。
 
-    新 schema (code, ex_date) PK,INSERT IGNORE 自动去重。
-    历史数据用 scripts/backfill_dividend.py 一次性回填。
+    历史经验:cninfo 全量接口 ``stock_dividend_cninfo(symbol="全部")``
+    akshare 字段名频繁变更(KeyError '实施方案分红说明' 等)且易被风控,
+    长期不可靠。改用单股接口 ``stock_history_dividend_detail``(稳定,
+    backfill_dividend.py 同款),只刷新 paper_holdings 里的股票 —— 这些
+    才是 paper_trading 除权调整真正需要的,持仓数少(通常 < 10 只),
+    每周一拉一次开销可忽略。
+
+    全市场历史 / 缺漏由 scripts/backfill_dividend.py 兜底
+    (scheduler 注册的 backfill_dividend_full 每月 1 号全量跑)。
     """
     target = date.fromisoformat(trade_date)
     if target.weekday() != 0:
         log.info(f"stock_dividend: 非周一（{target}），跳过")
         return
 
-    log.info(f"更新 stock_dividend: {trade_date}")
-    df = None
+    log.info(f"更新 stock_dividend(持仓相关): {trade_date}")
 
-    # cninfo 全量接口(akshare 偶发字段名变更或接口被风控)
+    # 取当前持仓 code(paper_holdings 可能不存在 → 静默跳过)
+    holding_codes = []
     try:
-        df = ak.stock_dividend_cninfo(symbol="全部")
-        if df is None or df.empty:
-            df = None
+        with conn.cursor() as cur:
+            cur.execute("SELECT DISTINCT code FROM paper_holdings")
+            holding_codes = [
+                (r[0] if isinstance(r, (list, tuple)) else r["code"])
+                for r in cur.fetchall()
+            ]
     except Exception as e:
-        log.warning(f"stock_dividend_cninfo 失败: {e}")
-        df = None
-
-    # cninfo 不可用时跳过本周。老 stock_history_dividend 兜底已删
-    # (它只给"最近一次派息汇总",拿不到逐次 ex_date,跟 (code, ex_date)
-    # PK 不兼容)。历史 / 缺漏由 scripts/backfill_dividend.py 单股回填补全
-    # (akshare stock_history_dividend_detail 有精确 ex_date,
-    # scheduler 已注册 backfill_dividend_full 每月 1 号自动跑)。
-    if df is None or df.empty:
-        log.warning("stock_dividend cninfo 接口不可用,本周跳过 — "
-                    "等 backfill_dividend_full(每月 1 号)兜底")
+        log.info(f"stock_dividend: 读 paper_holdings 失败(可能未初始化),跳过: {e}")
         return
 
-    # 字段名兼容——不同接口/版本列名不同，按关键词匹配
-    def _find_col(df, *keywords):
-        for kw in keywords:
-            for c in df.columns:
-                if kw in str(c):
-                    return c
-        return None
-
-    code_col    = _find_col(df, "证券代码", "股票代码", "代码")
-    ann_col     = _find_col(df, "公告日期", "实施方案公告日期", "宣布日")
-    pay_col     = _find_col(df, "除权除息日", "派息日", "实施日")
-    div_col     = _find_col(df, "每股派息", "每股红利", "派息(元)")  # 注:单位是"每股"
-    bonus_col   = _find_col(df, "每10股送股", "送股")    # 单位"每10股"
-    allot_col   = _find_col(df, "每10股转增", "转增")    # 单位"每10股"
-
-    # ex_date(派息日)是核心 — paper_trading 按这日判断除权;没有它的行没法用
-    if not code_col or not pay_col:
-        log.error(f"stock_dividend: 无 code/除权除息日 列,columns={list(df.columns)}")
+    if not holding_codes:
+        log.info("stock_dividend: 当前无持仓,跳过")
         return
 
-    col_map = {}
-    for src, dst in [(code_col, "code"), (ann_col, "ann_date"),
-                     (pay_col, "ex_date"),
-                     (div_col, "div_ps"), (bonus_col, "bonus10"),
-                     (allot_col, "allot10")]:
-        if src:
-            col_map[src] = dst
-    df = df.rename(columns=col_map)
-    df["code"] = df["code"].astype(str).str.zfill(6)
-
-    def _to_date_str(v):
+    # 复用 app.data.dividend 的单股抓取 + 落库(已验证接口稳定)
+    from app.data import dividend as _div
+    total_new = 0
+    for code in holding_codes:
         try:
-            return pd.to_datetime(str(v)).strftime("%Y-%m-%d") if pd.notna(v) else None
-        except Exception:
-            return None
+            events = _div.fetch_from_akshare(code)
+            if events:
+                total_new += _div.upsert_dividend(code, events)
+        except Exception as e:
+            log.warning(f"stock_dividend {code} 抓取失败: {e}")
+        time.sleep(0.3)
 
-    cutoff = (target - timedelta(days=90)).strftime("%Y-%m-%d")
-
-    rows = []
-    for _, r in df.iterrows():
-        ex = _to_date_str(r.get("ex_date"))
-        if not ex:
-            continue   # 没正式除权日(方案未实施)的行,跳过
-        ann = _to_date_str(r.get("ann_date"))
-        # 只保留最近 90 天的事件:用 ann 或退化为 ex 自身比 cutoff
-        if (ann and ann < cutoff) and ex < cutoff:
-            continue
-        # 单位统一到"每 10 股":div_per_share(每股)×10 = cash_dividend(每10股)
-        div_per_share = _safe(r, "div_ps")
-        cash_per10 = (div_per_share * 10.0
-                      if div_per_share is not None else None)
-        rows.append((
-            r["code"],
-            ex,
-            _safe(r, "bonus10") or 0,
-            _safe(r, "allot10") or 0,
-            cash_per10 or 0,
-            ann,
-        ))
-
-    if not rows:
-        log.info("stock_dividend 最近 90 天无新增记录")
-        return
-
-    # 新 schema (code, ex_date) 是 PK,INSERT IGNORE 自动去重,不需要先 DELETE
-    sql = """
-        INSERT IGNORE INTO stock_dividend
-            (code, ex_date, bonus_shares, converted_shares,
-             cash_dividend, announcement_date)
-        VALUES (%s,%s,%s,%s,%s,%s)
-    """
-    n = batch_insert(conn, sql, rows)
-    log.info(f"stock_dividend 写入 {n} 条(最近 90 天 ex_date 事件)")
+    log.info(f"stock_dividend 持仓 {len(holding_codes)} 只刷新完成,新增 {total_new} 条")
 
 
 # ── 7. 更新 index_constituent（指数成分，每月初拉一次） ────────────────────
