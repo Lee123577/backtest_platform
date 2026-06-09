@@ -624,11 +624,24 @@ def _fetch_index_bar(idx_code: str, date_nodash: str):
         except Exception:
             continue
 
+    # ── 接口 3: sina stock_zh_index_daily(云服务器 push 端点被拦时兜底) ─────
+    if raw2 is None:
+        def _call_iface3():
+            return ak.stock_zh_index_daily(symbol=prefixed)
+        for caller in (lambda: _call_no_proxy(_call_iface3), _call_iface3):
+            try:
+                r = caller()
+                if r is not None and not r.empty:
+                    raw2 = r
+                    break
+            except Exception:
+                continue
+
     if raw2 is None:
         return None
     raw2["date"] = pd.to_datetime(raw2["date"])
     raw2 = raw2.sort_values("date").reset_index(drop=True)
-    # 接口 2 不返回 pct_change,Python 侧算(用全序列再过滤,保留首日 NaN)
+    # 接口 2/3 都不返回 pct_change,Python 侧算(用全序列再过滤,保留首日 NaN)
     raw2["pct_change"] = raw2["close"].pct_change() * 100
     # 过滤到目标日期
     target_dt = pd.to_datetime(date_nodash, format="%Y%m%d")

@@ -707,10 +707,30 @@ def _fetch_index_history(idx_code: str, idx_name: str):
             log.warning(f"index_daily {idx_name} 接口2-{label} 失败: "
                         f"{type(e).__name__}: {str(e)[:120]}")
 
+    # ── 接口 3: sina stock_zh_index_daily(云服务器最稳兜底,push 端点被拦时用)
+    # sina 字段:date/open/high/low/close/volume(无 amount/pct_change)
+    if raw2 is None:
+        def _call_iface3():
+            return ak.stock_zh_index_daily(symbol=prefixed)
+        for label, caller in [
+            ("E 无代理", lambda: _call_no_proxy(_call_iface3)),
+            ("F 系统代理", _call_iface3),
+        ]:
+            try:
+                r = caller()
+                if r is not None and not r.empty:
+                    raw2 = r
+                    log.info(f"index_daily {idx_name} 接口3-{label} sina({prefixed}) "
+                             f"拿到 {len(r)} 行")
+                    break
+            except Exception as e:
+                log.warning(f"index_daily {idx_name} 接口3-{label} 失败: "
+                            f"{type(e).__name__}: {str(e)[:120]}")
+
     if raw2 is None:
         return None
 
-    # 接口 2 列名已是 english,但不返回 pct_change,Python 侧用 close 算
+    # 后处理:date → datetime, 自算 pct_change(接口 2/3 都不返回)
     raw2["date"] = pd.to_datetime(raw2["date"])
     raw2 = raw2.sort_values("date").reset_index(drop=True)
     raw2["pct_change"] = raw2["close"].pct_change() * 100
