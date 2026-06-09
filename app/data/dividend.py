@@ -77,9 +77,9 @@ def ensure_table() -> None:
 
 # ── 抓取 ──────────────────────────────────────────────────────────────────────
 
-# 新浪历史分红页(akshare 内部也用它,但 ak 的 requests.get 不带 UA,
-# 云服务器拿到的是简化页 → 表格数不足 → pd.read_html(...)[12] 越界报
-# "No tables found"。我们自己带 UA 直抓,绕过这个坑)。
+# 东财 datacenter JSON 分红接口(主路径 — 与 xuangu 同域,云服务器最稳)
+_EM_DIV_URL = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+# 新浪历史分红页(降级路径)
 _SINA_DIV_URL = (
     "https://vip.stock.finance.sina.com.cn/corp/go.php/"
     "vISSUE_ShareBonus/stockid/{code}.phtml"
@@ -92,16 +92,24 @@ def fetch_from_akshare(code: str) -> List[Dict[str, Any]]:
     """
     拉某只股票的全部历史分红记录,返回标准化事件列表。
 
-    主路径:自抓新浪分红页(带 UA),解析"分红"表(含'除权除息日'列)。
-    降级:akshare stock_history_dividend_detail(本地环境通常可用)。
+    三路径降级(函数名保留 _akshare 是历史兼容,实际主路径已换):
+      1. 东财 datacenter JSON(datacenter-web.eastmoney.com,云上最稳)
+      2. 新浪分红页(自带 UA,绕过 akshare 无 UA 空页问题)
+      3. akshare stock_history_dividend_detail(本地兜底)
 
-    返回空列表表示该股无分红记录(或两条路径都失败)。
+    返回空列表表示该股无分红记录(或全部路径失败)。
     """
+    # ── 路径 1: 东财 JSON ───────────────────────────────────────────────
+    rows = _fetch_em_dividend(code)
+    if rows is not None:
+        return rows
+
+    # ── 路径 2: 新浪页 ──────────────────────────────────────────────────
     rows = _fetch_sina_dividend(code)
     if rows is not None:
         return rows
 
-    # 降级:akshare(本地有缓存/不同环境时可能成功)
+    # ── 路径 3: akshare ─────────────────────────────────────────────────
     try:
         df = ak.stock_history_dividend_detail(symbol=code, indicator="分红")
     except Exception as e:
@@ -114,6 +122,63 @@ def fetch_from_akshare(code: str) -> List[Dict[str, Any]]:
     if df is None or df.empty:
         return []
     return _parse_div_df(df)
+
+
+def _fetch_em_dividend(code: str) -> "List[Dict[str, Any]] | None":
+    """
+    东财 datacenter JSON 分红接口。返回:
+      - List(可能空)— 成功(空表示真无分红)
+      - None         — 抓取失败,调用方降级
+
+    字段(单位均为"每 10 股",与 schema 一致):
+      EX_DIVIDEND_DATE 除权除息日 / BONUS_RATIO 送股 / TRANSFER_RATIO 转增 /
+      PRETAX_BONUS_RMB 派息(税前) / NOTICE_DATE 公告日
+    """
+    import requests
+    params = {
+        "reportName": "RPT_SHAREBONUS_DET",
+        "columns": "ALL",
+        "filter": f'(SECURITY_CODE="{code}")',
+        "pageNumber": 1,
+        "pageSize": 100,
+        "sortColumns": "EX_DIVIDEND_DATE",
+        "sortTypes": -1,
+    }
+    try:
+        r = requests.get(
+            _EM_DIV_URL, params=params,
+            headers={"User-Agent": _UA,
+                     "Referer": "https://data.eastmoney.com/"},
+            timeout=15,
+        )
+        r.raise_for_status()
+        data = (r.json().get("result") or {}).get("data") or []
+    except Exception as e:
+        logger.debug("[%s] 东财分红接口失败: %s", code, e)
+        return None
+
+    rows: List[Dict[str, Any]] = []
+    for d in data:
+        ex_raw = d.get("EX_DIVIDEND_DATE")
+        if not ex_raw:
+            continue   # 方案未实施(无除权日)
+        try:
+            ex_date = pd.to_datetime(ex_raw).date()
+        except Exception:
+            continue
+        ann_raw = d.get("NOTICE_DATE") or d.get("PLAN_NOTICE_DATE")
+        try:
+            ann_date = pd.to_datetime(ann_raw).date() if ann_raw else None
+        except Exception:
+            ann_date = None
+        rows.append({
+            "ex_date": ex_date,
+            "bonus_shares": _safe_float(d.get("BONUS_RATIO")),
+            "converted_shares": _safe_float(d.get("TRANSFER_RATIO")),
+            "cash_dividend": _safe_float(d.get("PRETAX_BONUS_RMB")),
+            "announcement_date": ann_date,
+        })
+    return rows
 
 
 def _fetch_sina_dividend(code: str) -> "List[Dict[str, Any]] | None":
