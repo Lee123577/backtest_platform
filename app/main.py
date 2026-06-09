@@ -4,7 +4,6 @@ from datetime import date as _date
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import numpy as np
 import pandas as pd
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
@@ -915,49 +914,17 @@ def _build_index_benchmark(
         for r in idx_df.to_dict("records")
     ]
 
+    # 风险指标走共用实现(engine/metrics.py);基准是买入持有,无 win_rate
+    from .engine.metrics import compute_risk_metrics
     vals = [e["value"] for e in equity_curve]
-    bm_s = pd.Series(vals)
-    total_ret = (vals[-1] - initial_capital) / initial_capital
-    days = len(vals)
-    annual_ret = (1 + total_ret) ** (252 / days) - 1 if days > 0 else 0.0
-
-    dd_series = (bm_s - bm_s.cummax()) / bm_s.cummax()
-    max_dd = float(dd_series.min())
-
-    underwater = dd_series < 0
-    max_dd_days, cur = 0, 0
-    for u in underwater:
-        cur = cur + 1 if u else 0
-        max_dd_days = max(max_dd_days, cur)
-
-    rf_daily = 0.03 / 252
-    dr = bm_s.pct_change().dropna()
-    sharpe = (
-        float((dr.mean() - rf_daily) / dr.std() * np.sqrt(252))
-        if dr.std() > 0 else 0.0
-    )
-    downside = dr[dr < rf_daily] - rf_daily
-    sortino = (
-        float((dr.mean() - rf_daily) / downside.std() * np.sqrt(252))
-        if len(downside) > 1 and downside.std() > 0 else 0.0
-    )
-    calmar = round(annual_ret / abs(max_dd), 3) if max_dd != 0 else 0.0
+    metrics = compute_risk_metrics(pd.Series(vals), initial_capital)
+    metrics["win_rate"] = None
+    metrics["trade_count"] = 1
+    metrics["initial_capital"] = initial_capital
 
     return {
         "strategy_name": name,
-        "metrics": {
-            "total_return": round(total_ret * 100, 2),
-            "annual_return": round(annual_ret * 100, 2),
-            "max_drawdown": round(max_dd * 100, 2),
-            "max_drawdown_days": max_dd_days,
-            "sharpe_ratio": round(sharpe, 3),
-            "sortino_ratio": round(sortino, 3),
-            "calmar_ratio": calmar,
-            "win_rate": None,
-            "trade_count": 1,
-            "final_value": round(vals[-1], 2),
-            "initial_capital": initial_capital,
-        },
+        "metrics": metrics,
         "equity_curve": equity_curve,
         "trades": [],
     }

@@ -5,51 +5,17 @@ import pandas as pd
 
 from ..strategies.base import BaseStrategy
 from .fees import COMMISSION_RATE, MIN_COMMISSION, SLIPPAGE_RATE, STAMP_TAX_RATE
+from .metrics import compute_risk_metrics
 from .money import D, ONE, ZERO, round_cent, to_float_cent
 
 
 # ── Metrics ───────────────────────────────────────────────────────────────────
 
 def _calc_metrics(equity: pd.Series, initial_capital: float, trades: list) -> dict:
-    total_return = (equity.iloc[-1] - initial_capital) / initial_capital
-    days = len(equity)
-    annual_return = (1 + total_return) ** (252 / days) - 1 if days > 0 else 0.0
+    # 风险指标走共用实现(engine/metrics.py),这里只补单股特有的 win_rate
+    metrics = compute_risk_metrics(equity, initial_capital)
 
-    cummax = equity.cummax()
-    drawdown = (equity - cummax) / cummax
-    max_drawdown = float(drawdown.min())
-
-    # Max drawdown duration (consecutive days below peak)
-    underwater = drawdown < 0
-    max_dd_days = 0
-    cur = 0
-    for u in underwater:
-        cur = cur + 1 if u else 0
-        max_dd_days = max(max_dd_days, cur)
-
-    daily_ret = equity.pct_change().dropna()
-    rf_daily = 0.03 / 252
-
-    # Sharpe
-    sharpe = (
-        float((daily_ret.mean() - rf_daily) / daily_ret.std() * np.sqrt(252))
-        if daily_ret.std() > 0 else 0.0
-    )
-
-    # Sortino — downside deviation only
-    downside = daily_ret[daily_ret < rf_daily] - rf_daily
-    sortino = (
-        float((daily_ret.mean() - rf_daily) / downside.std() * np.sqrt(252))
-        if len(downside) > 1 and downside.std() > 0 else 0.0
-    )
-
-    # Calmar
-    calmar = (
-        round(annual_return / abs(max_drawdown), 3)
-        if max_drawdown != 0 else 0.0
-    )
-
-    # Win rate from round-trip trades
+    # Win rate from round-trip trades(FIFO 配对)
     buy_prices: List[float] = []
     win, total = 0, 0
     for t in trades:
@@ -61,19 +27,10 @@ def _calc_metrics(equity: pd.Series, initial_capital: float, trades: list) -> di
                 win += 1
             total += 1
 
-    return {
-        "total_return": round(total_return * 100, 2),
-        "annual_return": round(annual_return * 100, 2),
-        "max_drawdown": round(max_drawdown * 100, 2),
-        "max_drawdown_days": max_dd_days,
-        "sharpe_ratio": round(sharpe, 3),
-        "sortino_ratio": round(sortino, 3),
-        "calmar_ratio": round(calmar, 3),
-        "win_rate": round(win / total * 100, 2) if total > 0 else 0.0,
-        "trade_count": total,
-        "final_value": round(float(equity.iloc[-1]), 2),
-        "initial_capital": initial_capital,
-    }
+    metrics["win_rate"] = round(win / total * 100, 2) if total > 0 else 0.0
+    metrics["trade_count"] = total
+    metrics["initial_capital"] = initial_capital
+    return metrics
 
 
 # ── Single-stock backtest ─────────────────────────────────────────────────────

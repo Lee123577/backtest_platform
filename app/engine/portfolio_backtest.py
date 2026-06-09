@@ -19,12 +19,12 @@ from collections import defaultdict
 from decimal import Decimal
 from typing import Any, Dict, List
 
-import numpy as np
 import pandas as pd
 
 from ..data.universe import eligible_codes_at
 from ..strategies.portfolio_base import PortfolioBaseStrategy
 from .fees import COMMISSION_RATE, MIN_COMMISSION, SLIPPAGE_RATE, STAMP_TAX_RATE
+from .metrics import compute_risk_metrics
 from .money import D, ONE, ZERO, round_cent, to_float_cent
 
 logger = logging.getLogger(__name__)
@@ -305,36 +305,9 @@ def run_portfolio_backtest(
             equity_curve[-1]["value"] = to_float_cent(capital)
 
     # ── Performance metrics ───────────────────────────────────────────────────
+    # 风险指标走共用实现(engine/metrics.py),win_rate 按"每 code FIFO 配对"补
     equity = pd.Series([e["value"] for e in equity_curve])
-    total_ret = (equity.iloc[-1] - initial_capital) / initial_capital
-    days = len(equity)
-    annual_ret = (1 + total_ret) ** (252 / days) - 1 if days > 0 else 0.0
-
-    drawdown_series = (equity - equity.cummax()) / equity.cummax()
-    max_dd = float(drawdown_series.min())
-
-    # Max drawdown duration
-    underwater = drawdown_series < 0
-    max_dd_days, cur = 0, 0
-    for u in underwater:
-        cur = cur + 1 if u else 0
-        max_dd_days = max(max_dd_days, cur)
-
-    daily_ret = equity.pct_change().dropna()
-    rf_daily = 0.03 / 252
-
-    sharpe = (
-        float((daily_ret.mean() - rf_daily) / daily_ret.std() * np.sqrt(252))
-        if daily_ret.std() > 0 else 0.0
-    )
-
-    downside = daily_ret[daily_ret < rf_daily] - rf_daily
-    sortino = (
-        float((daily_ret.mean() - rf_daily) / downside.std() * np.sqrt(252))
-        if len(downside) > 1 and downside.std() > 0 else 0.0
-    )
-
-    calmar = round(annual_ret / abs(max_dd), 3) if max_dd != 0 else 0.0
+    metrics = compute_risk_metrics(equity, initial_capital)
 
     code_buy_prices: Dict[str, List[float]] = defaultdict(list)
     win, total = 0, 0
@@ -348,21 +321,13 @@ def run_portfolio_backtest(
                     win += 1
                 total += 1
 
+    metrics["win_rate"] = round(win / total * 100, 2) if total > 0 else 0.0
+    metrics["trade_count"] = total
+    metrics["initial_capital"] = initial_capital
+
     return {
         "strategy_name": strategy.name,
-        "metrics": {
-            "total_return": round(total_ret * 100, 2),
-            "annual_return": round(annual_ret * 100, 2),
-            "max_drawdown": round(max_dd * 100, 2),
-            "max_drawdown_days": max_dd_days,
-            "sharpe_ratio": round(sharpe, 3),
-            "sortino_ratio": round(sortino, 3),
-            "calmar_ratio": calmar,
-            "win_rate": round(win / total * 100, 2) if total > 0 else 0.0,
-            "trade_count": total,
-            "final_value": round(float(equity.iloc[-1]), 2),
-            "initial_capital": initial_capital,
-        },
+        "metrics": metrics,
         "equity_curve": equity_curve,
         "trades": trades,
         "holdings_log": holdings_log,
