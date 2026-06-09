@@ -16,6 +16,9 @@ curl_cffi>=0.6.0          # fallback TLS impersonation for akshare market snapsh
 # Access-log IP geo lookup (offline xdb, no network)
 py-ip2region>=3.0.4        # import name: ip2region; uses data/ip2region_v4.xdb
 
+# Dev / test
+pytest>=7.4.0             # 纯函数测试套件 tests/(无 DB/网络依赖):python -m pytest tests/
+
 # Optional data sources (install whichever you use)
 # tqsdk>=3.6.0            # 天勤量化: pip install tqsdk
 # rqdatac                 # 米矿 rqdata: contact RiceQuant for licence
