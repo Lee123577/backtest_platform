@@ -24,6 +24,7 @@ import pandas as pd
 
 from ..data.universe import eligible_codes_at
 from ..strategies.portfolio_base import PortfolioBaseStrategy
+from .fees import COMMISSION_RATE, MIN_COMMISSION, SLIPPAGE_RATE, STAMP_TAX_RATE
 from .money import D, ONE, ZERO, round_cent, to_float_cent
 
 logger = logging.getLogger(__name__)
@@ -34,10 +35,10 @@ def run_portfolio_backtest(
     price_data: Dict[str, pd.DataFrame],       # {code: OHLCV DataFrame}
     strategy: PortfolioBaseStrategy,
     initial_capital: float = 100_000,
-    commission_rate: float = 0.0003,
-    min_commission: float = 5.0,
-    stamp_tax_rate: float = 0.001,
-    slippage_rate: float = 0.0001,
+    commission_rate: float = COMMISSION_RATE,
+    min_commission: float = MIN_COMMISSION,
+    stamp_tax_rate: float = STAMP_TAX_RATE,
+    slippage_rate: float = SLIPPAGE_RATE,
     hist_market_caps: Dict[str, Dict[str, float]] = None,  # {code: {date_str: market_cap}}
 ) -> Dict[str, Any]:
 

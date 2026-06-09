@@ -4,6 +4,13 @@ Documentation=https://github.com/Lee123577/backtest_platform
 After=network-online.target
 Wants=network-online.target
 
+# 防 Restart=on-failure 死循环:120s 内失败超过 5 次就停止重试,
+# 把单元标成 failed(而非无限 activating/auto-restart)。
+# 历史教训:漏装 httpx 时 systemd 重启计数飙到 412 次,CPU 空转。
+# 触顶后用 `systemctl reset-failed backtest && systemctl start backtest` 恢复。
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
 [Service]
 Type=simple
 

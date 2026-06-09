@@ -106,11 +106,10 @@ logger = logging.getLogger(__name__)
 
 # ── 配置 ─────────────────────────────────────────────────────────────────────
 
-# A 股交易费率（与回测引擎保持一致）
-COMMISSION_RATE = 0.0003
-MIN_COMMISSION = 5.0
-STAMP_TAX_RATE = 0.001
-SLIPPAGE_RATE = 0.0001
+# A 股交易费率 —— 单一事实来源在 engine/fees.py,这里 re-export 保持兼容
+from ..engine.fees import (  # noqa: E402
+    COMMISSION_RATE, MIN_COMMISSION, STAMP_TAX_RATE, SLIPPAGE_RATE,
+)
 
 # 上证综合指数（基准）
 BENCHMARK_INDEX = "000001"

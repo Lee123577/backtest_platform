@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 
 from ..strategies.base import BaseStrategy
+from .fees import COMMISSION_RATE, MIN_COMMISSION, SLIPPAGE_RATE, STAMP_TAX_RATE
 from .money import D, ONE, ZERO, round_cent, to_float_cent
 
 
@@ -81,10 +82,10 @@ def run_backtest(
     df: pd.DataFrame,
     strategy: BaseStrategy,
     initial_capital: float = 100_000,
-    commission_rate: float = 0.0003,
-    min_commission: float = 5.0,
-    stamp_tax_rate: float = 0.001,
-    slippage_rate: float = 0.0001,   # fraction of price added/subtracted on execution
+    commission_rate: float = COMMISSION_RATE,
+    min_commission: float = MIN_COMMISSION,
+    stamp_tax_rate: float = STAMP_TAX_RATE,
+    slippage_rate: float = SLIPPAGE_RATE,   # fraction of price added/subtracted on execution
     stop_loss: Optional[float] = None,    # e.g. 0.05 = exit when 5% below entry
     take_profit: Optional[float] = None,  # e.g. 0.20 = exit when 20% above entry
 ) -> Dict[str, Any]:
@@ -215,10 +216,10 @@ def run_backtest(
 def calc_benchmark(
     df: pd.DataFrame,
     initial_capital: float,
-    commission_rate: float = 0.0003,
-    min_commission: float = 5.0,
-    stamp_tax_rate: float = 0.001,
-    slippage_rate: float = 0.0001,
+    commission_rate: float = COMMISSION_RATE,
+    min_commission: float = MIN_COMMISSION,
+    stamp_tax_rate: float = STAMP_TAX_RATE,
+    slippage_rate: float = SLIPPAGE_RATE,
 ) -> Dict[str, Any]:
     """Buy-and-hold: buy at first open, sell at last close."""
     initial_d = D(initial_capital)
