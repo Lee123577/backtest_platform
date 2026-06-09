@@ -32,7 +32,6 @@ def _validate_date_range(start: str, end: str) -> None:
 
 from .data.calendar import count_trading_days, next_n_trading_days
 from .data.data_loader import get_kline_data, get_stock_name, normalize_code
-from .data.feed import CACHE_DIR
 from .data.market_data import (
     build_universe_hint,
     download_universe_history,
@@ -800,31 +799,19 @@ async def api_portfolio_backtest(req: PortfolioBacktestRequest):
 
         codes = universe_df["code"].tolist()
 
-        # Pre-check how many codes are already cached
-        n_cached = sum(
-            1 for c in codes
-            if (CACHE_DIR / f"{c}_{req.start_date}_{req.end_date}_qfq.csv").exists()
-        )
-        n_download = len(codes) - n_cached
-
-        if n_download == 0:
-            step2_msg = f"股票池共 {len(codes)} 只，全部命中本地缓存，加载中…"
-        else:
-            step2_msg = (
-                f"股票池共 {len(codes)} 只"
-                f"（{n_cached} 只已缓存，{n_download} 只需下载）…"
-            )
-        yield _sse({"type": "progress", "msg": step2_msg, "pct": 2})
+        # 不再做 "n_cached / n_download" 统计 —— CSV 缓存已移除,
+        # get_kline_data 内部 DB 优先 → akshare 兜底,中间无文件层。
+        # 进度速度自然反映数据来源(DB 命中 < 0.2s/只,akshare 0.5-2s/只)。
+        yield _sse({"type": "progress",
+                    "msg": f"股票池共 {len(codes)} 只,加载历史行情中…",
+                    "pct": 2})
 
         # ── Step 2: Download with live progress ──────────────────────────────
         progress_queue: asyncio.Queue = asyncio.Queue()
 
         def on_progress(done: int, total: int):
             pct = 2 + int(done / total * 88)
-            if n_download == 0:
-                msg = f"从本地缓存加载  {done} / {total}"
-            else:
-                msg = f"处理数据  {done} / {total}（下载 {n_download} 只 / 缓存 {n_cached} 只）"
+            msg = f"加载历史行情  {done} / {total}"
             loop.call_soon_threadsafe(
                 progress_queue.put_nowait,
                 {"type": "progress", "msg": msg, "pct": pct},

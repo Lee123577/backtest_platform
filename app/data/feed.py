@@ -204,15 +204,17 @@ def _akshare_index(symbol: str, start: str, end: str) -> Optional[pd.DataFrame]:
 
 
 class AkshareDataFeed(DataFeed):
-    """Default feed — akshare + file cache, no credentials required."""
+    """Default feed — akshare 直拉,不再做 CSV 文件缓存。
+
+    历史:之前在 CACHE_DIR 写 ``{code}_{start}_{end}_qfq.csv`` 做命中加速,
+    但 ``get_kline_data`` 已经先查 ``stock_kline`` 数据库,DB 命中就返回(更快、
+    永远最新)。CSV 缓存只在 DB 也没数据(走这里 akshare 兜底)时才有机会写入,
+    而那种情况通常意味着 daily_update 漏了,下次跑 daily_update 会重新写 DB,
+    CSV 反成陈旧。也让前端误显示"下载 631 只"。
+    """
 
     def get_kline(self, code: str, start_date: str, end_date: str,
                   adjust: str = "qfq") -> pd.DataFrame:
-        cache_key = f"{code}_{start_date}_{end_date}_{adjust or 'none'}"
-        cache_file = CACHE_DIR / f"{cache_key}.csv"
-        if cache_file.exists():
-            return pd.read_csv(cache_file, parse_dates=["date"])
-
         errors = []
         for label, caller in [
             ("eastmoney 无代理",  lambda: _remove_proxy(_akshare_kline, code, start_date, end_date, adjust)),
@@ -225,7 +227,6 @@ class AkshareDataFeed(DataFeed):
             try:
                 df = caller()
                 if df is not None and not df.empty:
-                    atomic_to_csv(df, cache_file)
                     return df
             except Exception as exc:
                 errors.append(f"[{label}] {type(exc).__name__}: {str(exc)[:120]}")
