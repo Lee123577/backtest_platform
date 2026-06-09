@@ -75,40 +75,106 @@ def ensure_table() -> None:
     _table_ready = True
 
 
-# ── 抓取(akshare) ───────────────────────────────────────────────────────────
+# ── 抓取 ──────────────────────────────────────────────────────────────────────
+
+# 新浪历史分红页(akshare 内部也用它,但 ak 的 requests.get 不带 UA,
+# 云服务器拿到的是简化页 → 表格数不足 → pd.read_html(...)[12] 越界报
+# "No tables found"。我们自己带 UA 直抓,绕过这个坑)。
+_SINA_DIV_URL = (
+    "https://vip.stock.finance.sina.com.cn/corp/go.php/"
+    "vISSUE_ShareBonus/stockid/{code}.phtml"
+)
+_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+       "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
+
 
 def fetch_from_akshare(code: str) -> List[Dict[str, Any]]:
     """
-    用 akshare 拉某只股票的全部历史分红记录。
+    拉某只股票的全部历史分红记录,返回标准化事件列表。
 
-    akshare 接口 ``stock_history_dividend_detail(symbol, indicator='分红')``
-    返回列(中文):
-      公告日期 / 送股 / 转增 / 派息 / 进度 / 除权除息日 / 股权登记日 / 派息日
+    主路径:自抓新浪分红页(带 UA),解析"分红"表(含'除权除息日'列)。
+    降级:akshare stock_history_dividend_detail(本地环境通常可用)。
 
-    日志策略:
-      - "No tables found":akshare 对**从来没分过红的股**(国企、新股、退市等)
-        的标准返回 → DEBUG 级别,不当报错喊
-      - 其他异常(网络 / 接口风控 / 字段格式变化)→ WARNING,需要关注
+    返回空列表表示该股无分红记录(或两条路径都失败)。
     """
+    rows = _fetch_sina_dividend(code)
+    if rows is not None:
+        return rows
+
+    # 降级:akshare(本地有缓存/不同环境时可能成功)
     try:
         df = ak.stock_history_dividend_detail(symbol=code, indicator="分红")
     except Exception as e:
         msg = str(e)
         if "No tables found" in msg or "no tables found" in msg.lower():
-            # 该股无分红记录 — 正常情况,降级日志
-            logger.debug("[%s] 无分红记录", code)
+            logger.debug("[%s] akshare 无分红记录", code)
         else:
-            logger.warning(
-                "akshare stock_history_dividend_detail(%s) 异常: %s", code, e,
-            )
+            logger.warning("akshare 分红抓取(%s)异常: %s", code, e)
         return []
     if df is None or df.empty:
+        return []
+    return _parse_div_df(df)
+
+
+def _fetch_sina_dividend(code: str) -> "List[Dict[str, Any]] | None":
+    """
+    直抓新浪分红页。返回:
+      - List(可能空)— 成功解析(空表示真的没分红)
+      - None         — 抓取/解析失败,调用方应降级到 akshare
+    """
+    import requests
+    from io import StringIO
+    try:
+        r = requests.get(
+            _SINA_DIV_URL.format(code=code),
+            headers={"User-Agent": _UA}, timeout=15,
+        )
+        r.encoding = "gb2312"
+        tables = pd.read_html(StringIO(r.text))
+    except Exception as e:
+        logger.debug("[%s] 新浪分红页抓取失败: %s", code, e)
+        return None
+
+    # 找含"除权除息日"的表(新浪页面表序号会变,不硬编码 [12])
+    target = None
+    for t in tables:
+        flat = " ".join(str(c) for c in t.columns)
+        if "除权除息日" in flat:
+            target = t
+            break
+    if target is None:
+        # 没有分红表 = 该股从未分红(正常),返回空列表而非 None
+        return []
+
+    # 多级列名 → 取末级("送股(股)" / "派息(税前)(元)" 等)
+    target = target.copy()
+    target.columns = [
+        (c[-1] if isinstance(c, tuple) else str(c)) for c in target.columns
+    ]
+    return _parse_div_df(target, sina=True)
+
+
+def _parse_div_df(df: pd.DataFrame, sina: bool = False) -> List[Dict[str, Any]]:
+    """把分红 DataFrame 标准化成事件列表。sina=True 时用新浪列名。"""
+    # 列名关键词匹配(两个源列名略有差异)
+    def _col(*keywords):
+        for kw in keywords:
+            for c in df.columns:
+                if kw in str(c):
+                    return c
+        return None
+
+    ex_col    = _col("除权除息日")
+    ann_col   = _col("公告日期")
+    bonus_col = _col("送股")
+    conv_col  = _col("转增")
+    cash_col  = _col("派息", "红利")
+    if ex_col is None:
         return []
 
     rows: List[Dict[str, Any]] = []
     for _, r in df.iterrows():
-        ex_raw = r.get("除权除息日")
-        # akshare 对未实施的分红方案会返回 "-" / 空,过滤掉
+        ex_raw = r.get(ex_col)
         if ex_raw is None or pd.isna(ex_raw) or str(ex_raw).strip() in ("", "-"):
             continue
         try:
@@ -116,20 +182,20 @@ def fetch_from_akshare(code: str) -> List[Dict[str, Any]]:
         except Exception:
             continue
 
-        ann_raw = r.get("公告日期")
-        try:
-            ann_date = (
-                pd.to_datetime(ann_raw).date()
-                if ann_raw is not None and not pd.isna(ann_raw) else None
-            )
-        except Exception:
-            ann_date = None
+        ann_date = None
+        if ann_col is not None:
+            ann_raw = r.get(ann_col)
+            try:
+                ann_date = (pd.to_datetime(ann_raw).date()
+                            if ann_raw is not None and not pd.isna(ann_raw) else None)
+            except Exception:
+                ann_date = None
 
         rows.append({
             "ex_date": ex_date,
-            "bonus_shares": _safe_float(r.get("送股")),
-            "converted_shares": _safe_float(r.get("转增")),
-            "cash_dividend": _safe_float(r.get("派息")),
+            "bonus_shares": _safe_float(r.get(bonus_col)) if bonus_col else 0.0,
+            "converted_shares": _safe_float(r.get(conv_col)) if conv_col else 0.0,
+            "cash_dividend": _safe_float(r.get(cash_col)) if cash_col else 0.0,
             "announcement_date": ann_date,
         })
     return rows
