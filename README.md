@@ -2,7 +2,7 @@
 
 基于 FastAPI + ECharts 的 A 股量化策略回测与模拟交易平台。覆盖**单股信号**、**组合选股**、**模拟盘**、**走查优化**、**大盘云图**、**LLM 股票分析**六类场景。
 
-<img width="1757" height="780" alt="界面截图" src="https://github.com/user-attachments/assets/2a29dd7c-ba0f-4e6e-aef8-46b9b420b9d0" />
+![单股策略](docs/images/01-single-stock.png)
 
 ---
 
@@ -156,6 +156,24 @@ python run.py
 | `/cloudmap` | 大盘云图 treemap |
 | `/tasks` | 调度任务监控:历史运行/状态/手动触发 |
 | `/api/llm_assistant/analyze?symbol=600000` | LLM 股票分析(markdown 报告) |
+
+### 功能截图
+
+模拟盘(`/paper_trading`)— 持仓 / 累计收益曲线 / 调仓日预告:
+
+![模拟盘](docs/images/02-paper-trading.png)
+
+大盘云图(`/cloudmap`)— ECharts treemap,按行业 + 涨跌幅着色:
+
+![大盘云图](docs/images/03-cloudmap.png)
+
+任务监控(`/tasks`)— 数据完整性概览 + 调度任务状态:
+
+![任务监控](docs/images/06-tasks.png)
+
+组合选股(`/portfolio`)— 三种内置组合策略,SSE 实时进度:
+
+![选股策略](docs/images/07-portfolio.png)
 
 ---
 
