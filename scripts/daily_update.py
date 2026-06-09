@@ -594,36 +594,46 @@ def _fetch_index_bar(idx_code: str, date_nodash: str):
         "成交额": "amount", "涨跌幅": "pct_change",
     }
 
-    # ── 接口 1: index_zh_a_hist ──────────────────────────────────────────────
-    for attempt in range(2):
+    # ── 接口 1: index_zh_a_hist 两路径(无代理 + 系统代理) ───────────────────
+    def _call_iface1():
+        return ak.index_zh_a_hist(
+            symbol=idx_code, period="daily",
+            start_date=date_nodash, end_date=date_nodash,
+        )
+    for caller in (lambda: _call_no_proxy(_call_iface1), _call_iface1):
         try:
-            raw = ak.index_zh_a_hist(
-                symbol=idx_code, period="daily",
-                start_date=date_nodash, end_date=date_nodash,
-            )
+            raw = caller()
             if raw is not None and not raw.empty:
                 return raw.rename(columns=col_map)
         except Exception:
-            if attempt == 0:
-                time.sleep(2)
-    time.sleep(0.5)
+            time.sleep(1.0)
 
-    # ── 接口 2: stock_zh_index_daily_em (不同端点，通常不受同一封锁影响) ─────
-    try:
-        raw2 = ak.stock_zh_index_daily_em(symbol=idx_code)
-        if raw2 is None or raw2.empty:
-            return None
-        raw2 = raw2.rename(columns={"date": "date", "open": "open", "close": "close",
-                                     "high": "high", "low": "low",
-                                     "volume": "volume", "amount": "amount"})
-        # 过滤到目标日期
-        target_dt = pd.to_datetime(date_nodash, format="%Y%m%d")
-        if "date" in raw2.columns:
-            raw2["date"] = pd.to_datetime(raw2["date"])
-            raw2 = raw2[raw2["date"] == target_dt]
-        return raw2 if not raw2.empty else None
-    except Exception:
+    # ── 接口 2: stock_zh_index_daily_em 两路径,需带 sh/sz 前缀 ─────────────
+    prefixed = ("sz" if idx_code.startswith("39") else "sh") + idx_code
+
+    def _call_iface2():
+        return ak.stock_zh_index_daily_em(symbol=prefixed)
+
+    raw2 = None
+    for caller in (lambda: _call_no_proxy(_call_iface2), _call_iface2):
+        try:
+            r = caller()
+            if r is not None and not r.empty:
+                raw2 = r
+                break
+        except Exception:
+            continue
+
+    if raw2 is None:
         return None
+    raw2["date"] = pd.to_datetime(raw2["date"])
+    raw2 = raw2.sort_values("date").reset_index(drop=True)
+    # 接口 2 不返回 pct_change,Python 侧算(用全序列再过滤,保留首日 NaN)
+    raw2["pct_change"] = raw2["close"].pct_change() * 100
+    # 过滤到目标日期
+    target_dt = pd.to_datetime(date_nodash, format="%Y%m%d")
+    raw2 = raw2[raw2["date"] == target_dt]
+    return raw2 if not raw2.empty else None
 
 
 def update_index_daily(conn, trade_date: str):

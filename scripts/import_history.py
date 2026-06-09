@@ -649,13 +649,15 @@ def import_stock_dividend(conn, resume: bool):
 
 def _fetch_index_history(idx_code: str, idx_name: str):
     """
-    抓单只指数的全部历史 K 线,返回标准化 DataFrame(已 rename 列名)或 None。
+    抓单只指数的全部历史 K 线,返回标准化 DataFrame 或 None。
 
-    双接口降级(同 daily_update._fetch_index_bar):
-      1. index_zh_a_hist            — eastmoney push2 主接口,云服务器易被防火墙拦
-      2. stock_zh_index_daily_em    — 不同 eastmoney 端点,通常不受同一规则限制
-                                     (不接受日期参数,返回全部历史,在 Python 侧
-                                     按 START_DATE 过滤)
+    四路径降级(跟 K 线 / 全市场 fetcher 一致):
+      A. _call_no_proxy(index_zh_a_hist)        — 主接口,临时 unset 代理
+      B. index_zh_a_hist                         — 主接口,走系统代理
+      C. _call_no_proxy(stock_zh_index_daily_em) — 备用接口(不同端点),需带 sh/sz 前缀
+      D. stock_zh_index_daily_em                 — 备用接口,走系统代理
+
+    A/B 任一成功 → 返回(列名映射成 standard);否则走 C/D 兜底。
     """
     col_map = {
         "日期": "date", "开盘": "open", "收盘": "close",
@@ -663,39 +665,59 @@ def _fetch_index_history(idx_code: str, idx_name: str):
         "成交额": "amount", "涨跌幅": "pct_change",
     }
 
-    # ── 接口 1: index_zh_a_hist ─────────────────────────────────────────────
-    try:
-        raw = ak.index_zh_a_hist(
+    # ── 接口 1: index_zh_a_hist 两路径(无代理 + 系统代理) ─────────────────
+    def _call_iface1():
+        return ak.index_zh_a_hist(
             symbol=idx_code, period="daily",
             start_date=START_DATE, end_date=END_DATE,
         )
-        if raw is not None and not raw.empty:
-            return raw.rename(columns=col_map)
-    except Exception as e:
-        log.warning(f"index_daily {idx_name} 接口1 (index_zh_a_hist) 失败: {e}")
-    time.sleep(1.0)
+    for label, caller in [
+        ("A 无代理", lambda: _call_no_proxy(_call_iface1)),
+        ("B 系统代理", _call_iface1),
+    ]:
+        try:
+            raw = caller()
+            if raw is not None and not raw.empty:
+                return raw.rename(columns=col_map)
+        except Exception as e:
+            log.warning(f"index_daily {idx_name} 接口1-{label} 失败: "
+                        f"{type(e).__name__}: {str(e)[:120]}")
+    time.sleep(0.5)
 
-    # ── 接口 2: stock_zh_index_daily_em (绕开 push2 防火墙) ──────────────────
-    try:
-        raw2 = ak.stock_zh_index_daily_em(symbol=idx_code)
-        if raw2 is None or raw2.empty:
-            return None
-        # 列已经是 english 名字,但要重映射 pct_change(它给不出来 → 留空)
-        raw2 = raw2.rename(columns={
-            "date": "date", "open": "open", "high": "high",
-            "low": "low", "close": "close",
-            "volume": "volume", "amount": "amount",
-        })
-        if "date" in raw2.columns:
-            raw2["date"] = pd.to_datetime(raw2["date"])
-            # 截到 START_DATE 之后(import_history 只导 2010-01-01 起)
-            cutoff = pd.to_datetime(START_DATE_DASH)
-            raw2 = raw2[raw2["date"] >= cutoff].copy()
-        log.info(f"index_daily {idx_name} 接口2 (stock_zh_index_daily_em) 拿到 {len(raw2)} 行")
-        return raw2 if not raw2.empty else None
-    except Exception as e:
-        log.warning(f"index_daily {idx_name} 接口2 失败: {e}")
+    # ── 接口 2: stock_zh_index_daily_em 两路径,需带 sh/sz 前缀 ─────────────
+    #   000xxx / 688xxx 上交所(sh);39xxxx 深交所(sz)
+    prefixed = ("sz" if idx_code.startswith("39") else "sh") + idx_code
+
+    def _call_iface2():
+        return ak.stock_zh_index_daily_em(symbol=prefixed)
+
+    raw2 = None
+    for label, caller in [
+        ("C 无代理", lambda: _call_no_proxy(_call_iface2)),
+        ("D 系统代理", _call_iface2),
+    ]:
+        try:
+            r = caller()
+            if r is not None and not r.empty:
+                raw2 = r
+                log.info(f"index_daily {idx_name} 接口2-{label} ({prefixed}) "
+                         f"拿到 {len(r)} 行")
+                break
+        except Exception as e:
+            log.warning(f"index_daily {idx_name} 接口2-{label} 失败: "
+                        f"{type(e).__name__}: {str(e)[:120]}")
+
+    if raw2 is None:
         return None
+
+    # 接口 2 列名已是 english,但不返回 pct_change,Python 侧用 close 算
+    raw2["date"] = pd.to_datetime(raw2["date"])
+    raw2 = raw2.sort_values("date").reset_index(drop=True)
+    raw2["pct_change"] = raw2["close"].pct_change() * 100
+    # 截到 START_DATE 之后(import_history 只导 2010-01-01 起)
+    cutoff = pd.to_datetime(START_DATE_DASH)
+    raw2 = raw2[raw2["date"] >= cutoff].copy()
+    return raw2 if not raw2.empty else None
 
 
 def import_index_daily(conn, resume: bool):
