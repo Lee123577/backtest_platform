@@ -12,6 +12,7 @@
 - ``schedule``: 何时该跑。支持以下几种字符串：
     - ``daily:HH:MM``       —— 每天 HH:MM 之后跑（不限星期）
     - ``weekday:HH:MM``     —— 周一到周五 HH:MM 之后跑（A 股自然时序）
+    - ``monthly:DD:HH:MM``  —— 每月 DD 号（1-28）HH:MM 之后跑（月级低频任务）
 - ``timeout_sec``: 超时被 kill，状态记 timeout
 - ``depends_on``: 上游任务名，今天必须已经 success，本任务才跑
 - ``description``: UI 上展示用的中文说明
@@ -63,13 +64,13 @@ TASKS: Dict[str, TaskDef] = {
         "depends_on": None,
         "description": "回填 user_visit_log 的 country/city/isp（每天 0:00，离线 xdb）",
     },
-    # 每月 1 号凌晨跑全市场 ex_div 兜底:cninfo 接口长期不稳,光靠 daily_update
-    # 周一的增量不能覆盖所有 code。本任务每天 02:00 被 scheduler 唤醒,但
-    # backfill_dividend.py 内部 --day-of-month=1 自查日期,非 1 号立即退出
-    # (秒级),只在 1 号当天真跑 30-50 分钟全市场。
+    # 每月 1 号凌晨跑全市场 ex_div 兜底:东财分红接口偶发不稳,光靠 daily_update
+    # 周一的增量不能覆盖所有 code。schedule=monthly:01 → scheduler 只在每月
+    # 1 号 02:00 之后唤醒它,非 1 号根本不启动子进程(task_run_log 零噪音)。
+    # 手动点"立即触发"则无视日期、当场跑(脚本不带 --day-of-month)。
     "backfill_dividend_full": {
-        "cmd": ["python", "scripts/backfill_dividend.py", "--day-of-month", "1"],
-        "schedule": "daily:02:00",
+        "cmd": ["python", "scripts/backfill_dividend.py"],
+        "schedule": "monthly:01:02:00",
         "timeout_sec": 90 * 60,
         "depends_on": None,
         "description": "全市场 ex_div 事件兜底回填(每月 1 号 02:00)",

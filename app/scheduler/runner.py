@@ -35,31 +35,43 @@ def _is_weekday(d: _Date) -> bool:
     return d.weekday() < 5
 
 
-def _parse_schedule(spec: str) -> tuple[str, int, int]:
+def _parse_schedule(spec: str) -> tuple[str, int, int, Optional[int]]:
     """
-    解析 'daily:17:00' / 'weekday:17:30' → (kind, hh, mm)。
-    kind ∈ {'daily', 'weekday'}。
+    解析调度表达式 → (kind, hh, mm, dom)。
+      daily:HH:MM        每天 HH:MM 之后
+      weekday:HH:MM      周一到周五 HH:MM 之后
+      monthly:DD:HH:MM   每月 DD 号(1-28)HH:MM 之后,dom=DD
+    非 monthly 的 dom 为 None。
     """
     try:
-        kind, hhmm = spec.split(":", 1)
-        hh, mm = hhmm.split(":")
-        return kind, int(hh), int(mm)
+        kind, rest = spec.split(":", 1)
+        if kind == "monthly":
+            dd, hh, mm = rest.split(":")
+            return kind, int(hh), int(mm), int(dd)
+        hh, mm = rest.split(":")
+        return kind, int(hh), int(mm), None
     except Exception:
         raise ValueError(f"无法解析调度表达式: {spec!r}")
 
 
 def _is_due(spec: str, now: _DT) -> bool:
     """到达"今天调度时刻"之后返回 True。cron 5 分钟唤醒 + 幂等保护，
-    所以"到点后任意时刻"判定为可跑都是安全的。"""
-    kind, hh, mm = _parse_schedule(spec)
+    所以"到点后任意时刻"判定为可跑都是安全的。
+
+    monthly 任务在非目标日 (now.day != dom) 直接返回 False —— 这样
+    scheduler 根本不会启动子进程,task_run_log 也不会留"每天一条空跑"
+    的噪音(月级任务每月只在 DD 号产生记录)。"""
+    kind, hh, mm, dom = _parse_schedule(spec)
     if kind == "weekday" and not _is_weekday(now.date()):
+        return False
+    if kind == "monthly" and now.day != dom:
         return False
     sched_at = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
     return now >= sched_at
 
 
 def _today_scheduled_at(spec: str, today: _Date) -> _DT:
-    _, hh, mm = _parse_schedule(spec)
+    _, hh, mm, _dom = _parse_schedule(spec)
     return _DT(today.year, today.month, today.day, hh, mm)
 
 
