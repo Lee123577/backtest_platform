@@ -532,10 +532,53 @@ def download_universe_history(
     return results
 
 
+def _query_index_from_db(
+    symbol: str, start_date: str, end_date: str
+) -> Optional[pd.DataFrame]:
+    """从 index_daily 表查指数日线,与 stock_kline 同 schema 风格。
+    数据库无该指数 / 区间无数据 → None,由调用方降级到 akshare。"""
+    conn = _get_pool()
+    if conn is None:
+        return None
+    try:
+        conn.ping(reconnect=True)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT trade_date AS date, open, high, low, close,
+                       volume, amount, pct_change
+                FROM index_daily
+                WHERE index_code = %s
+                  AND trade_date BETWEEN %s AND %s
+                ORDER BY trade_date
+                """,
+                (symbol, start_date, end_date),
+            )
+            rows = cur.fetchall()
+        if not rows:
+            return None
+        df = pd.DataFrame(rows)
+        for col in ("open", "high", "low", "close",
+                    "volume", "amount", "pct_change"):
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        df["date"] = pd.to_datetime(df["date"])
+        return df
+    except Exception:
+        return None
+
+
 def get_index_history(
     symbol: str, start_date: str, end_date: str
 ) -> Optional[pd.DataFrame]:
-    """Fetch daily history for a broad index (e.g. 000905 = CSI 500)."""
+    """Fetch daily history for a broad index (e.g. 000905 = CSI 500).
+
+    DB 优先(index_daily 表) → akshare 兜底。跟 K 线 ``get_kline_data``
+    保持一致的两层结构,无文件缓存层。
+    """
+    df = _query_index_from_db(symbol, start_date, end_date)
+    if df is not None and not df.empty:
+        return df
     return get_feed().get_index_history(symbol, start_date, end_date)
 
 

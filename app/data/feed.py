@@ -29,28 +29,6 @@ CACHE_DIR = Path(__file__).parent.parent.parent / "data" / "cache"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def atomic_to_csv(df: pd.DataFrame, target: Path) -> None:
-    """Atomic CSV write: write to .tmp sibling then os.replace.
-
-    Prevents corrupted cache files when multiple threads/processes
-    write the same path concurrently (see ThreadPoolExecutor in
-    market_data.download_universe_history).
-
-    On any failure the .tmp file is cleaned up so we don't litter
-    the cache dir with orphans (e.g. when target is locked on Windows).
-    """
-    tmp = target.with_suffix(target.suffix + f".{os.getpid()}.tmp")
-    try:
-        df.to_csv(tmp, index=False)
-        os.replace(tmp, target)
-    except Exception:
-        try:
-            tmp.unlink(missing_ok=True)
-        except Exception:
-            pass
-        raise
-
-
 # ── Abstract base ──────────────────────────────────────────────────────────────
 
 class DataFeed(ABC):
@@ -170,10 +148,8 @@ def _tencent_kline(code: str, start: str, end: str, adjust: str) -> pd.DataFrame
 
 
 def _akshare_index(symbol: str, start: str, end: str) -> Optional[pd.DataFrame]:
-    cache = CACHE_DIR / f"index_{symbol}_{start}_{end}.csv"
-    if cache.exists():
-        return pd.read_csv(cache, parse_dates=["date"])
-
+    """akshare 直拉指数日线,不再做 CSV 缓存(``market_data.get_index_history``
+    已经在上层做 ``index_daily`` DB 优先)。"""
     def _fetch():
         return ak.index_zh_a_hist(
             symbol=symbol, period="daily",
@@ -198,9 +174,7 @@ def _akshare_index(symbol: str, start: str, end: str) -> Optional[pd.DataFrame]:
     df = raw.rename(columns=col_map)
     df = df[[c for c in col_map.values() if c in df.columns]].copy()
     df["date"] = pd.to_datetime(df["date"])
-    df = df.sort_values("date").reset_index(drop=True)
-    atomic_to_csv(df, cache)
-    return df
+    return df.sort_values("date").reset_index(drop=True)
 
 
 class AkshareDataFeed(DataFeed):
