@@ -288,7 +288,7 @@ class VisitLogMiddleware(BaseHTTPMiddleware):
             }
 
             # 丢到线程池，不阻塞响应发送
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             loop.run_in_executor(None, _insert_log_sync, payload)
         except Exception as e:
             logger.warning("访问日志埋点异常: %s", e)

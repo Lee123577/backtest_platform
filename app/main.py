@@ -154,7 +154,7 @@ async def api_paper_account():
     codes = [h["code"] for h in holdings if h.get("code")]
     realtime: Dict[str, float] = {}
     if codes:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             realtime = await loop.run_in_executor(
                 None, lambda: get_realtime_prices(codes)
@@ -262,7 +262,7 @@ async def api_paper_universe_preview(cap_min: float, cap_max: float):
     """
     if cap_min < 0 or cap_max < 0 or cap_min >= cap_max:
         raise HTTPException(400, "需满足 0 ≤ cap_min < cap_max")
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     stats = await loop.run_in_executor(
         None, lambda: get_universe_stats(cap_min, cap_max)
     )
@@ -498,7 +498,7 @@ async def api_tasks_run(
             return {"task": name, "status": "skipped", "reason": check["reason"],
                     "hint": "可调用 POST /api/tasks/{name}/run?force=1 跳过依赖检查"}
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     trigger = "manual-force" if force else "manual"
     # subprocess 阻塞调用，丢线程池；不 await，立即返回
     loop.run_in_executor(None, lambda: scheduler_runner.run_one(name, trigger))
@@ -734,6 +734,28 @@ async def api_backtest(req: BacktestRequest):
 
 # ── Portfolio backtest ────────────────────────────────────────────────────────
 
+# 指数代码 → 展示名(基准下拉用)
+_BENCHMARK_NAMES = {
+    "000300": "沪深300", "000905": "中证500", "000852": "中证1000",
+    "000016": "上证50", "000001": "上证指数", "399006": "创业板指",
+    "399303": "国证2000",
+}
+# 策略 → 默认基准(选对标的:小市值/低波/动量 这类全市场选股偏小盘,
+# 对标中证1000 比中证500 更贴切;否则默认中证500)
+_STRATEGY_DEFAULT_BENCHMARK = {
+    "small_cap": "000852",
+    "low_vol":   "000852",
+    "momentum":  "000852",
+}
+
+
+def _resolve_benchmark(strategy_id: str, override: Optional[str]) -> tuple[str, str]:
+    """返回 (指数代码, 展示名)。override 优先,否则按策略默认,再否则中证500。"""
+    code = override or _STRATEGY_DEFAULT_BENCHMARK.get(strategy_id, "000905")
+    name = _BENCHMARK_NAMES.get(code, code)
+    return code, f"{name}（基准）"
+
+
 class PortfolioBacktestRequest(BaseModel):
     strategy_id: str
     params: Optional[Dict[str, Any]] = None
@@ -742,6 +764,7 @@ class PortfolioBacktestRequest(BaseModel):
     end_date: str
     initial_capital: float = 100_000
     slippage_rate: float = 0.0001
+    benchmark_code: Optional[str] = None  # 不传则按策略选默认(小市值→中证1000)
 
 
 @app.post("/api/portfolio_backtest")
@@ -763,7 +786,7 @@ async def api_portfolio_backtest(req: PortfolioBacktestRequest):
         return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
     async def generate():
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         # ── Validate strategy ────────────────────────────────────────────────
         try:
@@ -867,14 +890,17 @@ async def api_portfolio_backtest(req: PortfolioBacktestRequest):
             yield _sse({"type": "error", "msg": f"回测执行失败：{e}"})
             return
 
-        yield _sse({"type": "progress", "msg": "获取基准指数数据…", "pct": 97})
-
-        # ── Step 4: CSI 500 benchmark ────────────────────────────────────────
+        # ── Step 4: 基准指数(按策略选默认,前端可 benchmark_code 覆盖)────
+        bench_code, bench_name = _resolve_benchmark(
+            req.strategy_id, req.benchmark_code
+        )
+        yield _sse({"type": "progress",
+                    "msg": f"获取基准指数 {bench_name}…", "pct": 97})
         benchmark = await loop.run_in_executor(
             None,
             lambda: _build_index_benchmark(
-                symbol="000905",
-                name="中证500（基准）",
+                symbol=bench_code,
+                name=bench_name,
                 start_date=req.start_date,
                 end_date=req.end_date,
                 initial_capital=req.initial_capital,
