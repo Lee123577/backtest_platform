@@ -647,6 +647,57 @@ def import_stock_dividend(conn, resume: bool):
 
 # ── Step 5: index_daily ──────────────────────────────────────────────────────
 
+def _fetch_index_history(idx_code: str, idx_name: str):
+    """
+    抓单只指数的全部历史 K 线,返回标准化 DataFrame(已 rename 列名)或 None。
+
+    双接口降级(同 daily_update._fetch_index_bar):
+      1. index_zh_a_hist            — eastmoney push2 主接口,云服务器易被防火墙拦
+      2. stock_zh_index_daily_em    — 不同 eastmoney 端点,通常不受同一规则限制
+                                     (不接受日期参数,返回全部历史,在 Python 侧
+                                     按 START_DATE 过滤)
+    """
+    col_map = {
+        "日期": "date", "开盘": "open", "收盘": "close",
+        "最高": "high", "最低": "low", "成交量": "volume",
+        "成交额": "amount", "涨跌幅": "pct_change",
+    }
+
+    # ── 接口 1: index_zh_a_hist ─────────────────────────────────────────────
+    try:
+        raw = ak.index_zh_a_hist(
+            symbol=idx_code, period="daily",
+            start_date=START_DATE, end_date=END_DATE,
+        )
+        if raw is not None and not raw.empty:
+            return raw.rename(columns=col_map)
+    except Exception as e:
+        log.warning(f"index_daily {idx_name} 接口1 (index_zh_a_hist) 失败: {e}")
+    time.sleep(1.0)
+
+    # ── 接口 2: stock_zh_index_daily_em (绕开 push2 防火墙) ──────────────────
+    try:
+        raw2 = ak.stock_zh_index_daily_em(symbol=idx_code)
+        if raw2 is None or raw2.empty:
+            return None
+        # 列已经是 english 名字,但要重映射 pct_change(它给不出来 → 留空)
+        raw2 = raw2.rename(columns={
+            "date": "date", "open": "open", "high": "high",
+            "low": "low", "close": "close",
+            "volume": "volume", "amount": "amount",
+        })
+        if "date" in raw2.columns:
+            raw2["date"] = pd.to_datetime(raw2["date"])
+            # 截到 START_DATE 之后(import_history 只导 2010-01-01 起)
+            cutoff = pd.to_datetime(START_DATE_DASH)
+            raw2 = raw2[raw2["date"] >= cutoff].copy()
+        log.info(f"index_daily {idx_name} 接口2 (stock_zh_index_daily_em) 拿到 {len(raw2)} 行")
+        return raw2 if not raw2.empty else None
+    except Exception as e:
+        log.warning(f"index_daily {idx_name} 接口2 失败: {e}")
+        return None
+
+
 def import_index_daily(conn, resume: bool):
     log.info("=== Step 5: index_daily ===")
 
@@ -671,20 +722,11 @@ def import_index_daily(conn, resume: bool):
                     continue
 
         try:
-            raw = ak.index_zh_a_hist(
-                symbol=idx_code, period="daily",
-                start_date=START_DATE, end_date=END_DATE,
-            )
+            raw = _fetch_index_history(idx_code, idx_name)
             if raw is None or raw.empty:
-                log.warning(f"{idx_name} 数据为空")
+                log.warning(f"{idx_name} 两个接口均无数据,跳过")
                 continue
 
-            col_map = {
-                "日期": "date", "开盘": "open", "收盘": "close",
-                "最高": "high", "最低": "low", "成交量": "volume",
-                "成交额": "amount", "涨跌幅": "pct_change",
-            }
-            raw = raw.rename(columns=col_map)
             rows = []
             for _, r in raw.iterrows():
                 rows.append((
@@ -693,7 +735,7 @@ def import_index_daily(conn, resume: bool):
                     _safe(r, "open"), _safe(r, "high"),
                     _safe(r, "low"), _safe(r, "close"),
                     _safe_int(r, "volume"), _safe(r, "amount"),
-                    _safe(r, "pct_change"),
+                    _safe(r, "pct_change"),   # 接口 2 时可能为 None,SQL 允许
                 ))
             batch_insert(conn, sql, rows)
             log.info(f"index_daily {idx_name}({idx_code}) 写入 {len(rows)} 条")
