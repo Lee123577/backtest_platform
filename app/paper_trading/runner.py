@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from ..data.data_loader import _get_pool
 from ..data import dividend
 from ..data.filters import is_allowed_board, is_st_name
+from ..engine.money import D, ONE, ZERO, round_cent, to_float_cent
 from ..strategies.small_cap import SmallCapStrategy
 from . import db
 
@@ -483,12 +484,21 @@ def _run_once_body(
     positions_log, result, dry_run, _commit,
 ) -> RunResult:
     """run_once 的实际主体,提出来避免给整段代码加一层 try/with 缩进。"""
+    # 资金全程 Decimal,与回测引擎(engine/money.py)口径一致。费率也转 Decimal
+    # 以便和 cash 做精确加减(Decimal 与 float 不能混算)。
+    cash = D(cash)
+    commission_rate_d = D(COMMISSION_RATE)
+    min_commission_d = D(MIN_COMMISSION)
+    stamp_tax_rate_d = D(STAMP_TAX_RATE)
+    slippage_buy = ONE + D(SLIPPAGE_RATE)
+    slippage_sell = ONE - D(SLIPPAGE_RATE)
+
     # ── 步骤 0: 持仓除权扫描 ─────────────────────────────────────────────
     # 自上次扫描日到 trade_date 之间持仓上的 ex_div 事件,自动调整
     # shares / buy_price 同口径 qfq,把现金分红加进 cash。
     # 不做这步:持仓 buy_price 不变而 stock_kline.close 因 qfq 下调
     # → (close-buy)/buy 误判为亏损 → 误触发止损 + 浮亏显示失真。
-    cash += _apply_dividends_for_holdings(holdings, trade_date, dry_run)
+    cash += D(_apply_dividends_for_holdings(holdings, trade_date, dry_run))
 
     # ── 步骤 1: 止损检查（任何一天都做） ──────────────────────────────────
     stop_loss_ratio = stop_loss_pct / 100.0
@@ -514,14 +524,14 @@ def _run_once_body(
             if px.get("pct_change", 0) <= -9.8:
                 logger.warning("[%s] 触发止损但当日跌停，无法卖出，等下个交易日", code)
                 continue
-            sell_price = close_px * (1 - SLIPPAGE_RATE)
+            sell_price_d = D(close_px) * slippage_sell
             shares = int(h["shares"])
-            revenue = shares * sell_price
-            comm = max(revenue * COMMISSION_RATE, MIN_COMMISSION)
-            tax = revenue * STAMP_TAX_RATE
+            revenue = D(shares) * sell_price_d
+            comm = max(revenue * commission_rate_d, min_commission_d)
+            tax = revenue * stamp_tax_rate_d
             net_revenue = revenue - comm - tax
             cash += net_revenue
-            cost = float(h.get("cost") or 0)
+            cost = D(h.get("cost") or 0)
             _buy_px = float(h["buy_price"])
             _pnl = net_revenue - cost
             _pnl_pct = _pnl / cost if cost > 0 else None
@@ -530,14 +540,14 @@ def _run_once_body(
             positions_log.append({
                 "code": code,
                 "name": h.get("name"),
-                "price": round(sell_price, 3),
+                "price": round(float(sell_price_d), 3),
                 "shares": shares,
-                "amount": round(revenue, 2),
+                "amount": to_float_cent(revenue),
                 "action": "止损卖出",
                 "buy_price":  round(_buy_px, 3),
-                "commission": round(comm + tax, 2),
-                "pnl":        round(_pnl, 2),
-                "pnl_pct":    round(_pnl_pct, 6) if _pnl_pct is not None else None,
+                "commission": to_float_cent(comm + tax),
+                "pnl":        to_float_cent(_pnl),
+                "pnl_pct":    round(float(_pnl_pct), 6) if _pnl_pct is not None else None,
             })
             if not dry_run:
                 db.remove_holding(code)
@@ -609,14 +619,14 @@ def _run_once_body(
                     "action": "持有(卖出失败:跌停)",
                 })
                 continue
-            sell_price = px["open"] * (1 - SLIPPAGE_RATE)
+            sell_price_d = D(px["open"]) * slippage_sell
             shares = int(h["shares"])
-            revenue = shares * sell_price
-            comm = max(revenue * COMMISSION_RATE, MIN_COMMISSION)
-            tax = revenue * STAMP_TAX_RATE
+            revenue = D(shares) * sell_price_d
+            comm = max(revenue * commission_rate_d, min_commission_d)
+            tax = revenue * stamp_tax_rate_d
             net_revenue = revenue - comm - tax
             cash += net_revenue
-            cost = float(h.get("cost") or 0)
+            cost = D(h.get("cost") or 0)
             _buy_px = float(h.get("buy_price") or 0)
             _pnl = net_revenue - cost
             _pnl_pct = _pnl / cost if cost > 0 else None
@@ -624,14 +634,14 @@ def _run_once_body(
             positions_log.append({
                 "code": code,
                 "name": h.get("name"),
-                "price": round(sell_price, 3),
+                "price": round(float(sell_price_d), 3),
                 "shares": shares,
-                "amount": round(revenue, 2),
+                "amount": to_float_cent(revenue),
                 "action": "卖出",
                 "buy_price":  round(_buy_px, 3),
-                "commission": round(comm + tax, 2),
-                "pnl":        round(_pnl, 2),
-                "pnl_pct":    round(_pnl_pct, 6) if _pnl_pct is not None else None,
+                "commission": to_float_cent(comm + tax),
+                "pnl":        to_float_cent(_pnl),
+                "pnl_pct":    round(float(_pnl_pct), 6) if _pnl_pct is not None else None,
             })
             if not dry_run:
                 db.remove_holding(code)
@@ -647,39 +657,41 @@ def _run_once_body(
         selected = [s for s in selected if s not in retained_codes][:slots_left]
         result.selected = selected   # 反映真实买入,_build_notes/前端用这个
 
-        if selected and cash > 0:
-            cash_per = cash / len(selected)
+        if selected and cash > ZERO:
+            cash_per = cash / D(len(selected))
             for code in selected:
                 px = sel_prices.get(code)
                 if not px or px["open"] <= 0:
                     continue
-                buy_price = px["open"] * (1 + SLIPPAGE_RATE)
-                shares = int(cash_per / buy_price / 100) * 100
+                buy_price_d = D(px["open"]) * slippage_buy
+                shares = int(cash_per / (buy_price_d * D(100))) * 100
                 if shares <= 0:
                     logger.warning("[%s] 单股资金不足 1 手，跳过 cash_per=%.2f price=%.3f",
-                                   code, cash_per, buy_price)
+                                   code, float(cash_per), float(buy_price_d))
                     continue
-                cost = shares * buy_price
-                comm = max(cost * COMMISSION_RATE, MIN_COMMISSION)
+                cost = D(shares) * buy_price_d
+                comm = max(cost * commission_rate_d, min_commission_d)
                 if cost + comm > cash:
                     continue
                 cash -= cost + comm
                 name = next((u["name"] for u in universe if u["code"] == code), "")
+                buy_price_f = round(float(buy_price_d), 3)
+                cost_f = to_float_cent(cost)
                 if not dry_run:
-                    db.add_holding(code, name, shares, buy_price, trade_date, cost)
+                    db.add_holding(code, name, shares, buy_price_f, trade_date, cost_f)
                 holdings[code] = {
                     "code": code, "name": name,
-                    "shares": shares, "buy_price": buy_price,
-                    "buy_date": trade_date, "cost": cost,
+                    "shares": shares, "buy_price": buy_price_f,
+                    "buy_date": trade_date, "cost": cost_f,
                 }
                 positions_log.append({
                     "code": code,
                     "name": name,
                     "market_cap": next((u["market_cap"] for u in universe
                                         if u["code"] == code), None),
-                    "price": round(buy_price, 3),
+                    "price": buy_price_f,
                     "shares": shares,
-                    "amount": round(cost, 2),
+                    "amount": cost_f,
                     "action": "买入",
                 })
 
@@ -709,13 +721,15 @@ def _run_once_body(
     # 重新拉所有当前持仓的今日收盘价
     all_codes = list(holdings.keys())
     final_prices = _get_day_prices(all_codes, trade_date) if all_codes else {}
-    pos_value = 0.0
+    pos_value = 0.0  # 持仓市值用 float 足够(逐项收盘价×股数,不累积长链)
     for code, h in holdings.items():
         px = final_prices.get(code)
         if px:
             pos_value += int(h["shares"]) * px["close"]
         else:
             pos_value += int(h["shares"]) * float(h["buy_price"])  # 停牌按成本
+    # cash 是 Decimal,出口转 float 与 pos_value 合并
+    cash = float(round_cent(cash))
     total_value = cash + pos_value
     cum_return = (total_value - initial_capital) / initial_capital
 
