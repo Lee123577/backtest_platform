@@ -649,40 +649,113 @@ def _fetch_index_bar(idx_code: str, date_nodash: str):
     return raw2 if not raw2.empty else None
 
 
+_INDEX_SQL = """
+    INSERT INTO index_daily
+        (index_code, trade_date, open, high, low, close, volume, amount, pct_change)
+    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+    ON DUPLICATE KEY UPDATE
+        open=VALUES(open), high=VALUES(high), low=VALUES(low),
+        close=VALUES(close), volume=VALUES(volume),
+        amount=VALUES(amount), pct_change=VALUES(pct_change)
+"""
+
+
+def _fetch_index_bar_retry(idx_code: str, date_nodash: str, attempts: int = 3):
+    """_fetch_index_bar 外层重试:六路径全抖一下就漏的情况下,多试几轮。"""
+    for i in range(attempts):
+        try:
+            raw = _fetch_index_bar(idx_code, date_nodash)
+            if raw is not None and not raw.empty:
+                return raw
+        except Exception as e:
+            log.debug(f"index {idx_code} 第 {i+1} 次重试异常: {e}")
+        time.sleep(1.0 * (i + 1))
+    return None
+
+
+def _index_rows_from_raw(idx_code: str, trade_date: str, raw):
+    return [
+        (idx_code, trade_date,
+         _safe(r, "open"), _safe(r, "high"), _safe(r, "low"), _safe(r, "close"),
+         _safe_int(r, "volume"), _safe(r, "amount"), _safe(r, "pct_change"))
+        for _, r in raw.iterrows()
+    ]
+
+
+def _backfill_index_gaps(conn):
+    """
+    缺口检测 + 自动补:任一指数 index_daily 落后 stock_kline 最新交易日,
+    就把缺的交易日逐日补上(用 stock_kline 的交易日当日历)。
+    根治"某指数某天全路径抖一下漏了,之后一直落后"的问题。
+    """
+    with conn.cursor() as cur:
+        cur.execute("SELECT MAX(trade_date) FROM stock_kline")
+        kmax = cur.fetchone()[0]
+    if kmax is None:
+        return
+
+    total_fixed = 0
+    for idx_code in MAJOR_INDICES:
+        with conn.cursor() as cur:
+            cur.execute("SELECT MAX(trade_date) FROM index_daily WHERE index_code=%s",
+                        (idx_code,))
+            imax = cur.fetchone()[0]
+        if imax is None:
+            log.warning(f"index_daily {idx_code} 无任何数据,跳过缺口补全"
+                        f"(需先跑 import_history.py --step index)")
+            continue
+        if imax >= kmax:
+            continue  # 已最新
+
+        # 缺失交易日 = stock_kline 在 (imax, kmax] 的交易日
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT DISTINCT trade_date FROM stock_kline "
+                "WHERE trade_date > %s AND trade_date <= %s ORDER BY trade_date",
+                (imax, kmax),
+            )
+            missing = [r[0] for r in cur.fetchall()]
+        log.info(f"index_daily {idx_code} 落后(最新 {imax} < {kmax}),补 {len(missing)} 天")
+        rows = []
+        for d in missing:
+            raw = _fetch_index_bar_retry(idx_code, d.strftime("%Y%m%d"))
+            if raw is not None and not raw.empty:
+                rows.append((idx_code, d.strftime("%Y-%m-%d"), raw))
+        flat = []
+        for ic, ds, raw in rows:
+            flat.extend(_index_rows_from_raw(ic, ds, raw))
+        if flat:
+            n = batch_insert(conn, _INDEX_SQL, flat)
+            total_fixed += n
+            log.info(f"index_daily {idx_code} 补全 {n} 条")
+    if total_fixed:
+        log.info(f"index_daily 缺口补全合计 {total_fixed} 条")
+
+
 def update_index_daily(conn, trade_date: str):
     log.info(f"更新 index_daily: {trade_date}")
     date_nodash = trade_date.replace("-", "")
 
-    sql = """
-        INSERT INTO index_daily
-            (index_code, trade_date, open, high, low, close, volume, amount, pct_change)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
-        ON DUPLICATE KEY UPDATE
-            open=VALUES(open), high=VALUES(high), low=VALUES(low),
-            close=VALUES(close), volume=VALUES(volume),
-            amount=VALUES(amount), pct_change=VALUES(pct_change)
-    """
     rows = []
     for idx_code in MAJOR_INDICES:
         try:
-            raw = _fetch_index_bar(idx_code, date_nodash)
+            raw = _fetch_index_bar_retry(idx_code, date_nodash)
             if raw is None or raw.empty:
-                log.warning(f"index_daily {idx_code} 两个接口均无数据")
+                log.warning(f"index_daily {idx_code} 当日抓取失败(将由缺口补全兜底)")
                 continue
-            for _, r in raw.iterrows():
-                rows.append((
-                    idx_code, trade_date,
-                    _safe(r, "open"), _safe(r, "high"),
-                    _safe(r, "low"), _safe(r, "close"),
-                    _safe_int(r, "volume"), _safe(r, "amount"),
-                    _safe(r, "pct_change"),
-                ))
+            rows.extend(_index_rows_from_raw(idx_code, trade_date, raw))
             time.sleep(0.2)
         except Exception as e:
             log.warning(f"index_daily {idx_code} 失败: {e}")
 
-    n = batch_insert(conn, sql, rows)
-    log.info(f"index_daily 写入 {n} 条")
+    n = batch_insert(conn, _INDEX_SQL, rows)
+    log.info(f"index_daily 当日写入 {n} 条")
+
+    # 缺口检测 + 自动补全(根治偶发漏抓导致的持续落后)
+    try:
+        _backfill_index_gaps(conn)
+    except Exception as e:
+        log.warning(f"index_daily 缺口补全异常(不阻断): {e}")
 
 
 # ── 4. 更新 north_fund_flow ──────────────────────────────────────────────────
