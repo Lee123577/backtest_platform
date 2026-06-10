@@ -80,4 +80,5 @@ class PortfolioBaseStrategy(ABC):
             "description": cls.description,
             "strategy_type": cls.strategy_type,
             "params": cls.param_schema,
+            "detail": getattr(cls, "detail", None),  # 可选结构化详情(前端说明面板)
         }

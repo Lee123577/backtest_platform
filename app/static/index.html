@@ -94,7 +94,7 @@
   <div id="portfolioMode" style="display:none">
     <div class="panel">
       <div class="panel-title">选股策略回测设置
-        <span class="tip-badge">全市场扫描，首次运行需下载数据，约需 1~3 分钟</span>
+        <span class="tip-badge" id="pTipBadge">无偏历史回测：按每个调仓日真实市值选股，需下载候选股行情，约 2~5 分钟</span>
       </div>
 
       <div class="form-row">
@@ -116,9 +116,37 @@
       <div class="strategy-section-label">选股策略（点击选择）</div>
       <div class="strategy-grid" id="portfolioStrategyGrid"></div>
 
+      <!-- 策略详细说明（选中后渲染） -->
+      <div id="portfolioStrategyDetail"></div>
+
       <div id="portfolioSelectedArea" style="display:none">
         <div class="strategy-section-label">策略参数</div>
         <div id="portfolioInstanceCard"></div>
+
+        <!-- 回测口径（无偏 / 板块 / ST） -->
+        <div class="strategy-section-label" style="margin-top:14px">回测口径</div>
+        <div class="method-controls">
+          <label class="method-check">
+            <input type="checkbox" id="pPointInTime" checked>
+            <span>无偏历史回测 <em>（推荐）</em></span>
+            <small>用每个调仓日「真实在市值区间」的股票池，消除幸存者偏差（不会漏掉当年小、现在涨大的赢家）。取消则用<strong>今日快照池</strong>——更快，但会系统性低估收益。</small>
+          </label>
+
+          <div class="method-boards">
+            <span class="method-boards-label">允许板块</span>
+            <label><input type="checkbox" class="pBoard" value="main" checked> 主板</label>
+            <label><input type="checkbox" class="pBoard" value="gem"> 创业板</label>
+            <label><input type="checkbox" class="pBoard" value="star"> 科创板</label>
+            <label><input type="checkbox" class="pBoard" value="bj"> 北交所</label>
+            <small class="method-boards-hint">实盘 9 万本金通常只开得了主板；创业板/科创板需 50 万+2 年经验。</small>
+          </div>
+
+          <label class="method-check">
+            <input type="checkbox" id="pExcludeSt" checked>
+            <span>剔除 ST 股</span>
+            <small>排除风险警示股。<em>局限：仅按当前 ST 状态近似，无历史 ST 数据。</em></small>
+          </label>
+        </div>
       </div>
 
       <div id="portfolioError"></div>

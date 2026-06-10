@@ -438,3 +438,43 @@ table.holdings-tbl { width: 100%; border-collapse: collapse; font-size: 12px; mi
 /* code column in trades for portfolio results */
 .trades-tbl td.code-cell { font-family: monospace; color: var(--accent); }
 .no-data { color: var(--txt2); font-size: 13px; padding: 20px; text-align: center; }
+
+/* ── 选股策略：策略说明 + 回测口径(2026 优化) ───────────────────────────── */
+.strategy-detail-box {
+  margin: 12px 0 4px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  background: var(--bg2);
+  padding: 12px 14px;
+}
+.sd-row { display: flex; gap: 10px; padding: 5px 0; font-size: 13px; line-height: 1.55; }
+.sd-row + .sd-row { border-top: 1px dashed var(--border); }
+.sd-label {
+  flex: 0 0 64px; font-weight: 700; color: var(--accent);
+  font-size: 12px; padding-top: 1px;
+}
+.sd-text { color: var(--txt); flex: 1; }
+.sd-row.sd-warn .sd-label { color: var(--warn); }
+.sd-row.sd-warn .sd-text { color: var(--warn); }
+
+.method-controls {
+  display: flex; flex-direction: column; gap: 12px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg); padding: 12px 14px;
+}
+.method-check { display: block; cursor: pointer; }
+.method-check > input { margin-right: 6px; vertical-align: middle; }
+.method-check > span { font-weight: 600; font-size: 13px; color: var(--txt); }
+.method-check > span em { color: var(--accent); font-style: normal; font-size: 11px; }
+.method-check > small {
+  display: block; margin: 3px 0 0 22px;
+  font-size: 12px; color: var(--txt2); line-height: 1.5;
+}
+.method-check small strong { color: var(--red); font-weight: 600; }
+.method-check small em { color: var(--warn); font-style: normal; }
+.method-boards { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.method-boards-label { font-weight: 600; font-size: 13px; color: var(--txt); }
+.method-boards label { font-size: 13px; color: var(--txt); cursor: pointer; }
+.method-boards label input { margin-right: 4px; vertical-align: middle; }
+.method-boards-hint { flex-basis: 100%; font-size: 12px; color: var(--txt2); margin-left: 0; }

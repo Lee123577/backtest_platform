@@ -112,9 +112,28 @@ function selectPortfolioStrategy(id) {
   selectedPortfolio = { id, strategy, params, label: strategy.name };
 
   renderPortfolioStrategyGrid(); // re-render to show selected state
+  renderPortfolioStrategyDetail();
   renderPortfolioInstanceCard();
   document.getElementById('portfolioSelectedArea').style.display = '';
   document.getElementById('runPortfolioBtn').disabled = false;
+}
+
+// 渲染「策略说明」面板(用后端 detail 结构化字段)
+function renderPortfolioStrategyDetail() {
+  const el = document.getElementById('portfolioStrategyDetail');
+  const d = selectedPortfolio?.strategy?.detail;
+  if (!d) { el.innerHTML = ''; return; }
+  const row = (label, text, cls = '') => text
+    ? `<div class="sd-row ${cls}"><span class="sd-label">${label}</span><span class="sd-text">${escHtml(text)}</span></div>`
+    : '';
+  el.innerHTML = `
+    <div class="strategy-detail-box">
+      ${row('选股逻辑', d.logic)}
+      ${row('调仓规则', d.rebalance)}
+      ${row('回测口径', d.selection)}
+      ${row('基准对标', d.benchmark)}
+      ${row('风险提示', d.risk, 'sd-warn')}
+    </div>`;
 }
 
 function renderPortfolioInstanceCard() {
@@ -155,6 +174,7 @@ function updatePortfolioParam(key, rawVal, type) {
 function clearPortfolioStrategy() {
   selectedPortfolio = null;
   document.getElementById('portfolioSelectedArea').style.display = 'none';
+  document.getElementById('portfolioStrategyDetail').innerHTML = '';
   document.getElementById('runPortfolioBtn').disabled = true;
   renderPortfolioStrategyGrid();
 }
@@ -379,6 +399,10 @@ async function runPortfolioBacktest() {
   showLoading('正在准备回测…');
   showProgressBar(0);
 
+  // 回测口径
+  const boards = Array.from(document.querySelectorAll('.pBoard:checked')).map(c => c.value);
+  if (boards.length === 0) return showPortfolioError('请至少选择一个板块');
+
   const payload = {
     strategy_id: selectedPortfolio.id,
     params: selectedPortfolio.params,
@@ -386,6 +410,9 @@ async function runPortfolioBacktest() {
     start_date: start,
     end_date: end,
     initial_capital: capital,
+    point_in_time: document.getElementById('pPointInTime').checked,
+    allow_boards: boards,
+    exclude_st: document.getElementById('pExcludeSt').checked,
   };
 
   const runBtn = document.getElementById('runPortfolioBtn');

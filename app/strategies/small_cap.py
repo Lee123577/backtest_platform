@@ -19,9 +19,22 @@ from .portfolio_base import PortfolioBaseStrategy
 class SmallCapStrategy(PortfolioBaseStrategy):
     name = "小市值"
     description = (
-        "筛选总市值在指定范围内的A股，持有其中市值最小的N只股票，"
-        "每隔固定交易日换仓。基于市值与价格比例关系估算历史市值。"
+        "每隔固定交易日，等权买入全市场总市值最小的 N 只股票"
+        "（限定在指定市值区间内）。A 股小市值因子长期有显著超额收益，"
+        "但波动与回撤偏大。"
     )
+    # 前端「策略说明」面板用的结构化详情(API 透传)
+    detail = {
+        "logic": "每个调仓日，从全市场筛选总市值落在 [下限,上限] 区间的 A 股，"
+                 "按市值从小到大排序，等权买入最小的 N 只。",
+        "rebalance": "每隔「调仓周期」个交易日换仓一次：卖出全部旧持仓，"
+                     "买入当期新选出的 N 只。中间持有不动。",
+        "selection": "选股使用每个调仓日的【真实历史市值】(已回填，无幸存者偏差)，"
+                     "且用前一交易日市值排序(无未来函数)；跳过开盘涨停(买不进)。",
+        "risk": "小市值股流动性弱、波动大，历史最大回撤可达 30%~40%，"
+                "回撤持续期可能数月。仓位集中(默认仅 3 只)，单股冲击大。",
+        "benchmark": "默认对标中证 1000(更贴近小盘),而非沪深 300/中证 500。",
+    }
     strategy_type = "portfolio"
 
     param_schema = {
@@ -35,15 +48,15 @@ class SmallCapStrategy(PortfolioBaseStrategy):
         },
         "stock_num": {
             "default": 3, "min": 1, "max": 20,
-            "description": "持仓股票数量", "type": "int",
+            "description": "持仓数量（只）", "type": "int",
         },
         "hold_days": {
             "default": 5, "min": 1, "max": 60,
-            "description": "持仓天数（交易日）", "type": "int",
+            "description": "调仓周期（交易日）", "type": "int",
         },
         "stop_loss_pct": {
             "default": 10, "min": 0, "max": 50,
-            "description": "止损阈值（%），亏损达到该比例立即卖出，0=不止损", "type": "float",
+            "description": "止损阈值（%，0=关闭）", "type": "float",
         },
     }
 
