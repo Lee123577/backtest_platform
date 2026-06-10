@@ -403,6 +403,9 @@ def get_universe_stocks(cap_min: float, cap_max: float) -> pd.DataFrame:
     """Filter universe to [cap_min, cap_max] 亿元, sorted by market cap ascending.
 
     NaN market_cap 一律剔除（不会因为 NaN 比较而出现"看似空池"的假阳性）。
+
+    注意:这是**今日快照**池 —— 用于历史回测会引入幸存者偏差(漏掉"当年小、
+    现在大"的赢家)。无偏历史回测请用 get_historical_universe()。
     """
     df = get_universe_snapshot()
     if "market_cap" not in df.columns:
@@ -410,6 +413,81 @@ def get_universe_stocks(cap_min: float, cap_max: float) -> pd.DataFrame:
     df = df.dropna(subset=["market_cap"])
     mask = (df["market_cap"] >= cap_min) & (df["market_cap"] <= cap_max)
     return df[mask].sort_values("market_cap").reset_index(drop=True)
+
+
+def get_historical_universe(
+    cap_min: float,
+    cap_max: float,
+    start_date: str,
+    end_date: str,
+    boards: Optional[List[str]] = None,
+    exclude_st: bool = True,
+) -> pd.DataFrame:
+    """
+    Point-in-time 历史 universe:回测期内**任意一个交易日**市值真实落在
+    [cap_min, cap_max] 的全部股。消除"用今日小市值池回测"的幸存者偏差。
+
+    需 stock_kline.market_cap 已回填(scripts/backfill_market_cap.py,覆盖 2018+)。
+
+    Args:
+        boards: 限定板块,如 ("main",);None=全部。按 filters.board_of 判定。
+        exclude_st: 排除当前 ST 股(stock_info.is_st=1)。**局限**:DB 仅有当前
+            ST 状态,历史 ST 不可知,故此过滤为近似(轻微未来函数)。
+
+    Returns:
+        ref_data DataFrame(code/name/price/market_cap)。price/market_cap 取期内
+        最新值,仅占位 —— 回测内部每个调仓日用 hist_market_caps 当日真实值替换。
+    """
+    from .filters import board_of
+    empty = pd.DataFrame(columns=["code", "name", "price", "market_cap"])
+    conn = _get_pool()
+    if conn is None:
+        return empty
+    conn.ping(reconnect=True)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT code FROM stock_kline
+            WHERE trade_date BETWEEN %s AND %s
+              AND market_cap BETWEEN %s AND %s
+            """,
+            (start_date, end_date, cap_min, cap_max),
+        )
+        codes = [str(r["code"]).zfill(6) for r in cur.fetchall()]
+    if boards:
+        bset = set(boards)
+        codes = [c for c in codes if board_of(c) in bset]
+    if not codes:
+        return empty
+
+    placeholders = ",".join(["%s"] * len(codes))
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT k.code, i.name, i.is_st, k.close AS price, k.market_cap
+            FROM stock_kline k
+            JOIN stock_info i ON i.code = k.code
+            JOIN (
+                SELECT code, MAX(trade_date) AS mx FROM stock_kline
+                WHERE trade_date BETWEEN %s AND %s AND code IN ({placeholders})
+                GROUP BY code
+            ) lm ON lm.code = k.code AND lm.mx = k.trade_date
+            """,
+            (start_date, end_date, *codes),
+        )
+        rows = cur.fetchall()
+    if not rows:
+        return empty
+
+    df = pd.DataFrame(rows)
+    df["code"] = df["code"].astype(str).str.zfill(6)
+    if exclude_st and "is_st" in df.columns:
+        df = df[df["is_st"].fillna(0).astype(int) == 0]
+    for col in ("price", "market_cap"):
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    df = df.dropna(subset=["market_cap"])
+    return df[["code", "name", "price", "market_cap"]].reset_index(drop=True)
 
 
 def get_universe_stats(cap_min: float | None = None,

@@ -21,6 +21,7 @@ from typing import Any, Dict, List
 
 import pandas as pd
 
+from ..data.filters import board_of
 from ..data.universe import eligible_codes_at
 from ..strategies.portfolio_base import PortfolioBaseStrategy
 from .fees import COMMISSION_RATE, MIN_COMMISSION, SLIPPAGE_RATE, STAMP_TAX_RATE
@@ -28,6 +29,15 @@ from .metrics import compute_risk_metrics
 from .money import D, ONE, ZERO, round_cent, to_float_cent
 
 logger = logging.getLogger(__name__)
+
+
+def _limit_up_at_open(code: str, open_px: float, prev_close: float) -> bool:
+    """开盘是否已封涨停(开盘价相对昨收涨幅 ≥ 板块涨停-0.3% 容差)→ 买不进。
+    创业板/科创板/北交所 20%,主板 10%(ST 不单独处理,容差已覆盖)。"""
+    if prev_close <= 0 or open_px <= 0:
+        return False
+    limit = 20.0 if board_of(code) in ("gem", "star", "bj") else 10.0
+    return (open_px / prev_close - 1.0) * 100.0 >= limit - 0.3
 
 
 def run_portfolio_backtest(
@@ -95,7 +105,7 @@ def run_portfolio_backtest(
     # unrealistic equity dip on suspension days).
     last_close: Dict[str, float] = {}
 
-    for date in all_dates:
+    for _i, date in enumerate(all_dates):
         day_prices = price_lookup.get(date, {})
 
         if day_counter % hold_days == 0:
@@ -144,12 +154,17 @@ def run_portfolio_backtest(
             #     → hist_cap = 真值 × 1 = 真值(精确)
             #   - 无真实历史市值 → 保留 ref_data 原始 cap/price → 走比例近似(兜底)
             date_str = str(date.date())
+            # 选股用的市值取**前一交易日**收盘后的真实市值(在今日开盘时已知,
+            # 无未来函数)。价格也用前一日 close(close_for_selection),两者口径一致。
+            # 首个 bar 无前一日则退回当日。
+            sel_date = all_dates[_i - 1] if _i > 0 else date
+            sel_date_str = str(sel_date.date())
             ref_data_today = ref_data
             if hist_market_caps:
                 mc_today = {
-                    code: caps[date_str]
+                    code: caps[sel_date_str]
                     for code, caps in hist_market_caps.items()
-                    if date_str in caps
+                    if sel_date_str in caps
                 }
                 if mc_today:
                     ref_data_today = ref_data.copy()
@@ -189,6 +204,10 @@ def run_portfolio_backtest(
                 cash_per = capital / D(len(new_stocks))
                 bought = []
                 for code in new_stocks:
+                    # 开盘即涨停 → 买不进,跳过(用昨收判断,无未来函数)
+                    if _limit_up_at_open(code, day_prices[code]["open"],
+                                         close_for_selection.get(code, 0.0)):
+                        continue
                     buy_price_d = D(day_prices[code]["open"]) * slippage_buy
                     if buy_price_d <= ZERO:
                         continue

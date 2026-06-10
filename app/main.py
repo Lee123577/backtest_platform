@@ -35,6 +35,7 @@ from .data.market_data import (
     build_universe_hint,
     download_universe_history,
     get_historical_market_caps,
+    get_historical_universe,
     get_index_history,
     get_universe_stats,
     get_universe_stocks,
@@ -765,6 +766,11 @@ class PortfolioBacktestRequest(BaseModel):
     initial_capital: float = 100_000
     slippage_rate: float = 0.0001
     benchmark_code: Optional[str] = None  # 不传则按策略选默认(小市值→中证1000)
+    # 无偏回测:universe 用"期内任意日真实在区间"的历史池(消除幸存者偏差),
+    # 而非今日快照池。默认开。代价:候选股更多 → 下载/回测更慢。
+    point_in_time: bool = True
+    allow_boards: Optional[List[str]] = None  # 如 ["main"];None=全部板块
+    exclude_st: bool = True                   # 排除当前 ST(近似,无历史 ST 数据)
 
 
 @app.post("/api/portfolio_backtest")
@@ -802,11 +808,24 @@ async def api_portfolio_backtest(req: PortfolioBacktestRequest):
         cap_max = float(strategy.params.get("cap_max", 30))
 
         # ── Step 1: Get universe ─────────────────────────────────────────────
-        yield _sse({"type": "progress", "msg": "正在获取全市场股票池…", "pct": 0})
+        if req.point_in_time:
+            uni_msg = "正在构建历史股票池(无偏·期内真实市值)…"
+        else:
+            uni_msg = "正在获取全市场股票池(今日快照)…"
+        yield _sse({"type": "progress", "msg": uni_msg, "pct": 0})
         try:
-            universe_df = await loop.run_in_executor(
-                None, lambda: get_universe_stocks(cap_min, cap_max)
-            )
+            if req.point_in_time:
+                universe_df = await loop.run_in_executor(
+                    None,
+                    lambda: get_historical_universe(
+                        cap_min, cap_max, req.start_date, req.end_date,
+                        boards=req.allow_boards, exclude_st=req.exclude_st,
+                    ),
+                )
+            else:
+                universe_df = await loop.run_in_executor(
+                    None, lambda: get_universe_stocks(cap_min, cap_max)
+                )
         except Exception as e:
             yield _sse({"type": "error", "msg": f"获取股票池失败：{e}"})
             return

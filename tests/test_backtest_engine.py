@@ -7,9 +7,20 @@
 import pandas as pd
 
 from app.engine.backtest import calc_benchmark, run_backtest
-from app.engine.portfolio_backtest import run_portfolio_backtest
+from app.engine.portfolio_backtest import _limit_up_at_open, run_portfolio_backtest
 from app.strategies.ma_cross import MACrossStrategy
 from app.strategies.small_cap import SmallCapStrategy
+
+
+def test_limit_up_at_open_filter():
+    # 主板 10% 涨停:开盘涨 10% → 封板买不进
+    assert _limit_up_at_open("600000", open_px=11.0, prev_close=10.0) is True
+    assert _limit_up_at_open("600000", open_px=10.5, prev_close=10.0) is False
+    # 创业板 20% 涨停
+    assert _limit_up_at_open("300750", open_px=11.0, prev_close=10.0) is False
+    assert _limit_up_at_open("300750", open_px=12.0, prev_close=10.0) is True
+    # 异常值保护
+    assert _limit_up_at_open("600000", open_px=10.0, prev_close=0.0) is False
 
 
 def _is_two_decimals(x: float) -> bool:
