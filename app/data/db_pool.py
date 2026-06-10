@@ -38,7 +38,12 @@ from ..config import settings
 
 logger = logging.getLogger(__name__)
 
-MAX_CONNECTIONS: int = int(os.environ.get("DB_MAX_CONNECTIONS", "20"))
+# 上限 50:必须 ≥ 进程最大并发线程数,否则 _get_pool() 的"每线程长持"模式
+# 会耗尽池。本应用 workers=1,线程来源 = anyio sync-route 线程池(默认上限 40)
+# + asyncio 默认 executor(2 核机约 6)≈ 46 峰值。设 50 留头(实际常驻仅 ~6-10
+# 条,50 只是天花板,不会预先建满)。MySQL 默认 max_connections=151,50 安全。
+# 真正高并发再用 get_conn() 上下文管理器(借→还,不长持)。
+MAX_CONNECTIONS: int = int(os.environ.get("DB_MAX_CONNECTIONS", "50"))
 BORROW_TIMEOUT: float = float(os.environ.get("DB_BORROW_TIMEOUT", "30"))
 
 _pool: "queue.Queue" = queue.Queue(maxsize=MAX_CONNECTIONS)
