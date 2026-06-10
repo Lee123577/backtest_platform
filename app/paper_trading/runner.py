@@ -112,8 +112,10 @@ from ..engine.fees import (  # noqa: E402
     COMMISSION_RATE, MIN_COMMISSION, STAMP_TAX_RATE, SLIPPAGE_RATE,
 )
 
-# 上证综合指数（基准）
-BENCHMARK_INDEX = "000001"
+# 基准:中证 1000（000852）—— 小市值策略真正的对标(比上证综指/沪深300 更贴小盘)。
+# 与组合回测默认基准一致(main._resolve_benchmark: small_cap→000852)。
+# 历史 paper_equity_daily 的 benchmark 列由 scripts/migrate_paper_benchmark.py 一次性重算。
+BENCHMARK_INDEX = "000852"
 
 # 板块过滤：默认只买主板
 #   科创板 688/689、创业板 300/301、北交所 4/8 — 9w 本金都开不了
@@ -225,19 +227,32 @@ def _load_universe_snapshot(
             })
         return out
 
-    # ── Primary: stock_kline with market_cap filter ──────────────────────────
+    # ── 选股用**前一交易日**市值(无未来函数,与回测引擎对齐)──────────────
+    # 调仓在 trade_date 开盘成交,而 trade_date 的市值要收盘才知道。用前一日市值
+    # 筛选/排序(开盘时已知),价格/成交量/涨停仍取 trade_date 当日真实数据。
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT MAX(trade_date) AS d FROM stock_kline "
+            "WHERE trade_date < %s AND market_cap IS NOT NULL",
+            (trade_date,),
+        )
+        row = cur.fetchone()
+    cap_date = row["d"] if row and row["d"] else trade_date  # 无前一日则退回当日
+
+    # ── Primary: 前一日市值过滤 + 当日价格 ────────────────────────────────────
     with conn.cursor() as cur:
         cur.execute(
             """
             SELECT k.code, i.name, k.close AS price, k.open, k.high, k.low,
-                   k.market_cap, k.volume, k.pct_change, i.is_st
+                   pc.market_cap AS market_cap, k.volume, k.pct_change, i.is_st
             FROM stock_kline k
             JOIN stock_info i ON i.code = k.code
+            JOIN stock_kline pc ON pc.code = k.code AND pc.trade_date = %s
             WHERE k.trade_date = %s
-              AND k.market_cap BETWEEN %s AND %s
+              AND pc.market_cap BETWEEN %s AND %s
               AND k.volume > 0
             """,
-            (trade_date, cap_min, cap_max),
+            (cap_date, trade_date, cap_min, cap_max),
         )
         rows = cur.fetchall()
 
