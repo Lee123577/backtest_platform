@@ -21,6 +21,28 @@ from ..data.data_loader import _get_pool
 logger = logging.getLogger(__name__)
 
 
+def _spearman_corr(x, y) -> float:
+    """纯 numpy/pandas 的 Spearman 等级相关系数,**不依赖 scipy**。
+
+    本环境的 pandas 把 ``Series.corr(method='spearman')`` 委托给
+    ``scipy.stats.spearmanr``,而生产服务器(小内存)未装 scipy、requirements
+    里也没有它。Spearman 本质 = 两变量「秩」的 Pearson 相关:用 pandas
+    ``.rank()``(默认 average,正确处理并列)排秩后调 ``np.corrcoef`` 即可,
+    数值与 scipy 一致。空/常量序列返回 NaN(调用方用 pd.notna 过滤)。
+    """
+    x = pd.Series(np.asarray(x, dtype=float))
+    y = pd.Series(np.asarray(y, dtype=float))
+    mask = x.notna() & y.notna()
+    x, y = x[mask], y[mask]
+    if len(x) < 2:
+        return float("nan")
+    rx = x.rank().to_numpy()
+    ry = y.rank().to_numpy()
+    if rx.std() == 0 or ry.std() == 0:
+        return float("nan")
+    return float(np.corrcoef(rx, ry)[0, 1])
+
+
 def _load_factor_values(factor_name: str, start_date: str, end_date: str) -> pd.DataFrame:
     """从 factor_value 拉因子值。"""
     conn = _get_pool()
@@ -128,8 +150,10 @@ def compute_ic_series(
         if len(grp) < 20:  # 截面太小没意义
             continue
         if method == "spearman":
-            ic = grp["value"].corr(grp["future_ret"], method="spearman")
+            ic = _spearman_corr(grp["value"].to_numpy(),
+                                grp["future_ret"].to_numpy())
         else:
+            # pearson 由 pandas/numpy 内部算,不走 scipy
             ic = grp["value"].corr(grp["future_ret"], method="pearson")
         if pd.notna(ic):
             out_rows.append({"trade_date": date, "ic": float(ic),

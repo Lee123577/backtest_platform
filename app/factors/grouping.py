@@ -24,7 +24,7 @@ import numpy as np
 import pandas as pd
 
 from ..data.data_loader import _get_pool
-from .ic import _load_factor_values
+from .ic import _load_factor_values, _spearman_corr
 
 logger = logging.getLogger(__name__)
 
@@ -170,9 +170,8 @@ def compute_group_returns(
     ls = _nav_and_stats(np.array(ls_rets))
     ls["name"] = f"多空 Q{n_groups}-Q1"
 
-    # 单调性:组序号 vs 组总收益的 Spearman
-    mono = float(pd.Series(range(n_groups)).corr(
-        pd.Series(totals), method="spearman"))
+    # 单调性:组序号 vs 组总收益的 Spearman(纯 numpy 实现,不依赖 scipy)
+    mono = _spearman_corr(np.arange(n_groups), np.asarray(totals))
 
     return {
         "factor": factor_name,
