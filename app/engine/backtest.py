@@ -207,41 +207,14 @@ def calc_benchmark(
     final_capital = round_cent(remaining + sell_revenue - sell_comm - sell_tax)
     final_capital_f = float(final_capital)
 
-    total_return = (final_capital_f - initial_capital) / initial_capital
-    days = len(df)
-    annual_return = (1 + total_return) ** (252 / days) - 1 if days > 0 else 0.0
-
-    cummax = equity.cummax()
-    max_drawdown = float(((equity - cummax) / cummax).min())
-
-    daily_ret = equity.pct_change().dropna()
-    rf_daily = 0.03 / 252
-    sharpe = (
-        float((daily_ret.mean() - rf_daily) / daily_ret.std() * np.sqrt(252))
-        if daily_ret.std() > 0 else 0.0
-    )
-    downside = daily_ret[daily_ret < rf_daily] - rf_daily
-    sortino = (
-        float((daily_ret.mean() - rf_daily) / downside.std() * np.sqrt(252))
-        if len(downside) > 1 and downside.std() > 0 else 0.0
-    )
-    calmar = round(annual_return / abs(max_drawdown), 3) if max_drawdown != 0 else 0.0
+    # 风险指标走共用实现,避免与 metrics.py 和三处调用方各算一遍
+    risk = compute_risk_metrics(equity, initial_capital)
+    risk["trade_count"] = 1
+    risk["initial_capital"] = initial_capital
 
     return {
         "strategy_name": "买入持有（基准）",
-        "metrics": {
-            "total_return": round(total_return * 100, 2),
-            "annual_return": round(annual_return * 100, 2),
-            "max_drawdown": round(max_drawdown * 100, 2),
-            "max_drawdown_days": None,
-            "sharpe_ratio": round(sharpe, 3),
-            "sortino_ratio": round(sortino, 3),
-            "calmar_ratio": calmar,
-            "win_rate": None,
-            "trade_count": 1,
-            "final_value": round(final_capital_f, 2),
-            "initial_capital": initial_capital,
-        },
+        "metrics": {**risk, "win_rate": None, "final_value": round(final_capital_f, 2)},
         "equity_curve": equity_curve,
         "trades": [],
     }

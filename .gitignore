@@ -12,3 +12,9 @@ venv/
 # 运行时日志，不要进 git
 *.log
 scripts/*.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
