@@ -3,7 +3,7 @@ import threading
 
 import pandas as pd
 
-from .feed import CACHE_DIR, get_feed   # noqa: F401 — re-export for backward compatibility
+from .feed import get_feed
 from . import db_pool
 from .. import config as _config_module  # noqa: F401 — keep import order
 
