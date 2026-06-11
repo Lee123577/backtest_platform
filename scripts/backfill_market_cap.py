@@ -63,34 +63,36 @@ def _holding_codes() -> list[str]:
         return [r["code"] for r in cur.fetchall()]
 
 
-def _uncovered_codes(min_hist: int = 50, before_days: int = 60) -> list[str]:
+# 东财 stock_value_em 历史市值覆盖起点
+_MC_COVERAGE_START = "2018-01-01"
+
+
+def _uncovered_codes(null_threshold: int = 20) -> list[str]:
     """
-    尚未回填历史市值的 code(新上市 / 从没回填过)。
+    历史市值有缺口的 code:在可覆盖范围(2018+)里 market_cap 仍为 NULL 的行数
+    超过阈值 → 说明从没回填过或回填有缺口。
 
-    判据:在「before_days 天以前」的 stock_kline 里,该 code 含 market_cap 的
-    行数 < min_hist。daily_update 只写当日市值(最近几十天),所以从没经过
-    backfill 的 code 在更早的历史里几乎没有 market_cap → 命中。
+    关键:用"该填没填(NULL 行数)"判定,而非"已填行数"——后者会把**近期上市
+    的次新股**(历史天数本来就少但已全部填好)误判为未覆盖,导致月度 cron 每月
+    白跑几百只。新股已回填 → 2018+ 无 NULL → 不命中;从没回填的老股 → 几百个
+    NULL → 命中。2018 年前的天数(东财给不到)不计入。
 
-    月度 cron 用 --only-uncovered 走这条:首轮全量后,每月只补新上市的几只,
-    分钟级,不再每月重扫 5500 只 7 小时。
+    月度 cron 用 --only-uncovered 走这条:首轮全量后每月通常只剩个位数(真正
+    的新上市股),分钟级。
     """
     from app.data.data_loader import _get_pool
     conn = _get_pool()
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT i.code
-            FROM stock_info i
-            LEFT JOIN (
-                SELECT code, COUNT(*) AS c FROM stock_kline
-                WHERE market_cap IS NOT NULL
-                  AND trade_date < DATE_SUB(CURDATE(), INTERVAL %s DAY)
-                GROUP BY code
-            ) k ON k.code = i.code
-            WHERE COALESCE(k.c, 0) < %s
-            ORDER BY i.code
+            SELECT code, COUNT(*) AS null_cnt
+            FROM stock_kline
+            WHERE market_cap IS NULL AND trade_date >= %s
+            GROUP BY code
+            HAVING null_cnt > %s
+            ORDER BY code
             """,
-            (before_days, min_hist),
+            (_MC_COVERAGE_START, null_threshold),
         )
         return [r["code"] for r in cur.fetchall()]
 
