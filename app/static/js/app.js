@@ -426,7 +426,10 @@ async function runPortfolioBacktest() {
 
     if (evt.type === 'progress') {
       showLoading(evt.msg || '处理中…');
-      if (evt.pct != null) showProgressBar(evt.pct);
+      // 不定量阶段(批量加载/回测计算无法分步上报)→ 流动条纹;
+      // 否则按精确百分比填充
+      if (evt.indeterminate) showProgressBarIndeterminate();
+      else if (evt.pct != null) showProgressBar(evt.pct);
     } else if (evt.type === 'error') {
       throw new Error(evt.msg);
     } else if (evt.type === 'result') {
@@ -792,12 +795,25 @@ function showProgressBar(pct) {
   const bar = document.getElementById('progressBar');
   if (!bar) return;
   bar.style.display = 'block';
+  bar.querySelector('.pb-track').classList.remove('indeterminate');
   bar.querySelector('.pb-fill').style.width = `${Math.min(100, pct)}%`;
   bar.querySelector('.pb-label').textContent = `${Math.round(pct)}%`;
 }
+// 不定量进度:阶段在跑但无法分步上报(批量加载行情 / 回测计算 / 取基准)。
+// 用流动条纹表示"处理中",避免百分比假装精确又长时间卡住。
+function showProgressBarIndeterminate() {
+  const bar = document.getElementById('progressBar');
+  if (!bar) return;
+  bar.style.display = 'block';
+  bar.querySelector('.pb-track').classList.add('indeterminate');
+  bar.querySelector('.pb-fill').style.width = '';   // 由 CSS 动画接管
+  bar.querySelector('.pb-label').textContent = '处理中…';
+}
 function hideProgressBar() {
   const bar = document.getElementById('progressBar');
-  if (bar) bar.style.display = 'none';
+  if (!bar) return;
+  bar.style.display = 'none';
+  bar.querySelector('.pb-track').classList.remove('indeterminate');
 }
 
 function showError(msg) {

@@ -380,6 +380,17 @@ table.trades-tbl {
   transition: width .3s ease;
   width: 0%;
 }
+/* 不定量进度:批量加载行情 / 回测计算这类"一次性、无法分步上报"的阶段,
+   用流动条纹替代假装精确又卡住的百分比 */
+.pb-track.indeterminate .pb-fill {
+  width: 40%;
+  transition: none;
+  animation: pb-slide 1.1s ease-in-out infinite;
+}
+@keyframes pb-slide {
+  0%   { margin-left: -45%; }
+  100% { margin-left: 100%; }
+}
 .pb-label { font-size: 11px; color: var(--accent); font-weight: 600; }
 
 /* ── Error box ── */

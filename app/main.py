@@ -824,7 +824,7 @@ async def api_portfolio_backtest(req: PortfolioBacktestRequest):
             uni_msg = "正在构建历史股票池(无偏·期内真实市值)…"
         else:
             uni_msg = "正在获取全市场股票池(今日快照)…"
-        yield _sse({"type": "progress", "msg": uni_msg, "pct": 0})
+        yield _sse({"type": "progress", "msg": uni_msg, "indeterminate": True})
         try:
             if req.point_in_time:
                 universe_df = await loop.run_in_executor(
@@ -852,59 +852,30 @@ async def api_portfolio_backtest(req: PortfolioBacktestRequest):
 
         codes = universe_df["code"].tolist()
 
-        # 不再做 "n_cached / n_download" 统计 —— CSV 缓存已移除,
-        # get_kline_data 内部 DB 优先 → akshare 兜底,中间无文件层。
-        # 进度速度自然反映数据来源(DB 命中 < 0.2s/只,akshare 0.5-2s/只)。
+        # ── Step 2: 批量加载行情 ──────────────────────────────────────────────
+        # 行情已改"分批 IN 一次性查"(不再逐只返回),没有逐只进度可上报 →
+        # 用不定量进度条(流动条纹),不再假装精确百分比卡在某个数字上。
         yield _sse({"type": "progress",
-                    "msg": f"股票池共 {len(codes)} 只,加载历史行情中…",
-                    "pct": 2})
-
-        # ── Step 2: Download with live progress ──────────────────────────────
-        progress_queue: asyncio.Queue = asyncio.Queue()
-
-        def on_progress(done: int, total: int):
-            pct = 2 + int(done / total * 88)
-            msg = f"加载历史行情  {done} / {total}"
-            loop.call_soon_threadsafe(
-                progress_queue.put_nowait,
-                {"type": "progress", "msg": msg, "pct": pct},
+                    "msg": f"股票池共 {len(codes)} 只,批量加载历史行情中…",
+                    "indeterminate": True})
+        try:
+            price_data: Dict[str, Any] = await loop.run_in_executor(
+                None,
+                lambda: download_universe_history(
+                    codes, req.start_date, req.end_date),
             )
-
-        async def _run_download():
-            # 任何异常都必须进 queue —— 否则下面的 while 循环永远等不到
-            # "_done",SSE 流会无限挂死(前端一直转圈)
-            try:
-                result = await loop.run_in_executor(
-                    None,
-                    lambda: download_universe_history(
-                        codes, req.start_date, req.end_date, on_progress=on_progress
-                    ),
-                )
-                await progress_queue.put({"type": "_done", "data": result})
-            except Exception as e:
-                await progress_queue.put({"type": "_failed", "error": str(e)})
-
-        download_task = asyncio.create_task(_run_download())
-
-        price_data: Dict[str, Any] = {}
-        while True:
-            msg = await progress_queue.get()
-            if msg["type"] == "_done":
-                price_data = msg["data"]
-                break
-            if msg["type"] == "_failed":
-                yield _sse({"type": "error",
-                            "msg": f"加载历史行情失败：{msg['error']}"})
-                return
-            yield _sse(msg)
-
-        await download_task
+        except Exception as e:
+            # 加载异常也要回一条 error,前端不会无限转圈(SSE 挂死防护)
+            yield _sse({"type": "error", "msg": f"加载历史行情失败：{e}"})
+            return
 
         if not price_data:
             yield _sse({"type": "error", "msg": "历史数据为空，请检查日期范围"})
             return
 
-        yield _sse({"type": "progress", "msg": "正在运行回测策略…", "pct": 92})
+        # 回测计算本身也无法分步上报 → 同样走不定量进度
+        yield _sse({"type": "progress", "msg": "正在运行回测策略…",
+                    "indeterminate": True})
 
         # ── Step 3: 历史真实市值 —— 直接复用 price_data 已带回的 market_cap 列 ──
         # (不再对 stock_kline 二次全扫;纯内存转换,放 executor 避免阻塞事件循环)
@@ -934,7 +905,7 @@ async def api_portfolio_backtest(req: PortfolioBacktestRequest):
             req.strategy_id, req.benchmark_code
         )
         yield _sse({"type": "progress",
-                    "msg": f"获取基准指数 {bench_name}…", "pct": 97})
+                    "msg": f"获取基准指数 {bench_name}…", "indeterminate": True})
         benchmark = await loop.run_in_executor(
             None,
             lambda: _build_index_benchmark(
