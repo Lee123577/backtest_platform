@@ -97,17 +97,27 @@ def run_portfolio_backtest(
     if not all_dates:
         raise ValueError("无可用历史数据，请检查日期范围")
 
-    # ── Build fast date → {code: {open, close}} lookup ─────────────────────
-    price_lookup: Dict[Any, Dict[str, Dict[str, float]]] = {}
-    for code, df in price_data.items():
-        for rec in df[["date", "open", "close"]].to_dict("records"):
-            d = rec["date"]
-            if d not in price_lookup:
-                price_lookup[d] = {}
-            price_lookup[d][code] = {
-                "open": float(rec["open"]),
-                "close": float(rec["close"]),
+    # ── Build fast date → {code: (open, close)} lookup ─────────────────────
+    # 叶子用 (open, close) 元组而非 {"open":..,"close":..} 字典:百万级叶子下
+    # 2 键 dict(≈184B)→ tuple(≈64B)省一半多内存(3.6G 小机上是"大/长回测会不会
+    # OOM"的安全边际)。构建也向量化(concat + groupby)替代逐行 .to_dict("records"),
+    # 快数倍;walk-forward 每个窗口都重建 price_lookup,收益叠加。
+    price_lookup: Dict[Any, Dict[str, Tuple[float, float]]] = {}
+    _frames = [
+        df[["date", "open", "close"]].assign(code=code)
+        for code, df in price_data.items()
+    ]
+    if _frames:
+        _all = pd.concat(_frames, ignore_index=True)
+        for d, g in _all.groupby("date", sort=False):
+            codes_arr = g["code"].to_numpy()
+            opens = g["open"].to_numpy(dtype=float)
+            closes = g["close"].to_numpy(dtype=float)
+            price_lookup[d] = {
+                c: (float(o), float(cl))
+                for c, o, cl in zip(codes_arr, opens, closes)
             }
+        del _frames, _all
 
     # ── Simulation ────────────────────────────────────────────────────────────
     # 钱量统一用 Decimal:组合策略每天多笔成交 × N 天累积,float 误差最大
@@ -160,11 +170,11 @@ def run_portfolio_backtest(
                 if shares <= 0:
                     continue
                 px = day_prices.get(code)
-                if not px or px["open"] <= 0:
+                if not px or px[0] <= 0:
                     continue  # 停牌卖不出;收盘若仍低于阈值会重新触发
-                if _limit_down_at_open(code, px["open"], last_close.get(code, 0.0)):
+                if _limit_down_at_open(code, px[0], last_close.get(code, 0.0)):
                     continue  # 开盘跌停卖不掉,留待收盘重评估
-                sell_price_d = D(px["open"]) * slippage_sell
+                sell_price_d = D(px[0]) * slippage_sell
                 revenue = D(shares) * sell_price_d
                 comm = max(revenue * commission_rate_d, min_commission_d)
                 tax = revenue * stamp_tax_rate_d
@@ -189,7 +199,7 @@ def run_portfolio_backtest(
             for code in day_prices:
                 hist = rolling_prices[code]
                 # Fallback to today's open on the very first bar (no prior history)
-                close_for_selection[code] = hist[-1] if hist else day_prices[code]["open"]
+                close_for_selection[code] = hist[-1] if hist else day_prices[code][0]
 
             # ── Sell all current positions at today's OPEN ──────────────────
             # 卖不出去的两类旧仓**留存**到下次(README 撮合规则):
@@ -204,10 +214,10 @@ def run_portfolio_backtest(
                 if not px:
                     kept[code] = shares  # suspended; carry over
                     continue
-                if _limit_down_at_open(code, px["open"], last_close.get(code, 0.0)):
+                if _limit_down_at_open(code, px[0], last_close.get(code, 0.0)):
                     kept[code] = shares  # 开盘跌停卖不掉,留存(保留 buy_prices 供止损)
                     continue
-                sell_price_d = D(px["open"]) * slippage_sell
+                sell_price_d = D(px[0]) * slippage_sell
                 revenue = D(shares) * sell_price_d
                 comm = max(revenue * commission_rate_d, min_commission_d)
                 tax = revenue * stamp_tax_rate_d
@@ -294,10 +304,10 @@ def run_portfolio_backtest(
                 bought = []
                 for code in new_stocks:
                     # 开盘即涨停 → 买不进,跳过(用昨收判断,无未来函数)
-                    if _limit_up_at_open(code, day_prices[code]["open"],
+                    if _limit_up_at_open(code, day_prices[code][0],
                                          close_for_selection.get(code, 0.0)):
                         continue
-                    buy_price_d = D(day_prices[code]["open"]) * slippage_buy
+                    buy_price_d = D(day_prices[code][0]) * slippage_buy
                     if buy_price_d <= ZERO:
                         continue
                     shares = int(cash_per / (buy_price_d * D(100))) * 100
@@ -335,7 +345,7 @@ def run_portfolio_backtest(
             for code, shares in holdings.items():
                 if shares <= 0 or code not in day_prices or code not in buy_prices:
                     continue
-                close_px = day_prices[code]["close"]
+                close_px = day_prices[code][1]
                 cost_px = buy_prices[code]
                 if cost_px <= 0:
                     continue
@@ -348,7 +358,7 @@ def run_portfolio_backtest(
         pos_value = 0.0
         for code, shares in holdings.items():
             if code in day_prices:
-                pos_value += shares * day_prices[code]["close"]
+                pos_value += shares * day_prices[code][1]
             elif code in last_close:
                 pos_value += shares * last_close[code]
             elif code in buy_prices:
@@ -362,8 +372,8 @@ def run_portfolio_backtest(
 
         # ── Update rolling_prices and last_close with TODAY'S close ──────────
         for code, prices in day_prices.items():
-            rolling_prices[code].append(prices["close"])
-            last_close[code] = prices["close"]
+            rolling_prices[code].append(prices[1])
+            last_close[code] = prices[1]
 
         day_counter += 1
 
@@ -375,7 +385,8 @@ def run_portfolio_backtest(
             if shares <= 0:
                 continue
             # Use today's close if available, else most recent known close
-            close_px = last_prices.get(code, {}).get("close") or last_close.get(code)
+            _lp = last_prices.get(code)
+            close_px = (_lp[1] if _lp else None) or last_close.get(code)
             if close_px:
                 p_d = D(close_px) * slippage_sell
                 revenue = D(shares) * p_d
