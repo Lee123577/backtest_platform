@@ -762,8 +762,15 @@ def update_index_daily(conn, trade_date: str):
 
 def update_north_fund_flow(conn, trade_date: str):
     """
-    更新北向资金净流入。akshare 接口多次改名，按优先级尝试：
-      1. stock_hsgt_hist_em(symbol='北向资金')      — 当前主用接口
+    更新北向资金净流入。
+
+    ⚠️ 现状(2024-08 起):沪深港通**已停止披露每日北向净买额**,akshare 接口
+    虽仍返回行,但「当日成交净买额 / 资金净流入」均为 NaN/0 → 无真实数据可写。
+    因此本函数对 NaN 值**不再写 NULL 垃圾行**,直接记 INFO 跳过。历史真实数据
+    (停披露前)保留不动。等哪天恢复披露,逻辑自动恢复写入。
+
+    akshare 接口优先级:
+      1. stock_hsgt_hist_em(symbol='北向资金')      — 历史日序列(值现为 NaN)
       2. stock_hsgt_fund_flow_summary_em()          — 当日摘要兜底
       3. stock_hsgt_north_net_flow_in_em(...)       — 旧接口（已废弃，仅兼容）
     """
@@ -818,11 +825,15 @@ def update_north_fund_flow(conn, trade_date: str):
             if td != trade_date:
                 continue
             val = r[col_flow]
-            val = float(val) if pd.notna(val) else None
-            rows.append((td, val))
+            if pd.isna(val):
+                continue  # 源已停披露,值为 NaN → 不写 NULL 垃圾行
+            rows.append((td, float(val)))
         except Exception:
             continue
 
+    if not rows:
+        log.info("north_fund_flow: 当日无北向净流入数据(交易所已停披露),跳过")
+        return
     n = batch_insert(conn, sql, rows)
     log.info(f"north_fund_flow 写入 {n} 条")
 

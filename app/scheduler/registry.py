@@ -78,15 +78,14 @@ TASKS: Dict[str, TaskDef] = {
     # 每月 1 号 03:00(分红回填之后)补全 stock_kline 历史估值列。
     # 东财 stock_value_em 覆盖 2018+;daily_update 每天写当日,本任务补深历史
     # + 新上市股。手动"立即触发"无视日期当场跑。
-    # stock_value_em 每只 ~5s,全市场 5500 只串行 ~7 小时,故超时给 9h。
-    # TODO 优化:首轮全量回填后,月度其实只需补"新上市/未覆盖"的 code
-    #   (--only-uncovered,分钟级),避免每月重扫 7 小时。待首轮跑完再加。
+    # 首轮全量(875 万行)已做完,月度只补"新上市/未覆盖"的 code
+    # (--only-uncovered,通常几只,分钟级),不再每月重扫 5500 只 7 小时。
     "backfill_market_cap_full": {
-        "cmd": ["python", "scripts/backfill_market_cap.py"],
+        "cmd": ["python", "scripts/backfill_market_cap.py", "--only-uncovered"],
         "schedule": "monthly:01:03:00",
-        "timeout_sec": 9 * 3600,
+        "timeout_sec": 2 * 3600,
         "depends_on": None,
-        "description": "全市场历史 market_cap/PE/PB 回填(每月 1 号 03:00)",
+        "description": "历史 market_cap 增量回填(每月 1 号 03:00,只补新上市/缺口)",
     },
 }
 

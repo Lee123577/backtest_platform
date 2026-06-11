@@ -63,6 +63,38 @@ def _holding_codes() -> list[str]:
         return [r["code"] for r in cur.fetchall()]
 
 
+def _uncovered_codes(min_hist: int = 50, before_days: int = 60) -> list[str]:
+    """
+    尚未回填历史市值的 code(新上市 / 从没回填过)。
+
+    判据:在「before_days 天以前」的 stock_kline 里,该 code 含 market_cap 的
+    行数 < min_hist。daily_update 只写当日市值(最近几十天),所以从没经过
+    backfill 的 code 在更早的历史里几乎没有 market_cap → 命中。
+
+    月度 cron 用 --only-uncovered 走这条:首轮全量后,每月只补新上市的几只,
+    分钟级,不再每月重扫 5500 只 7 小时。
+    """
+    from app.data.data_loader import _get_pool
+    conn = _get_pool()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT i.code
+            FROM stock_info i
+            LEFT JOIN (
+                SELECT code, COUNT(*) AS c FROM stock_kline
+                WHERE market_cap IS NOT NULL
+                  AND trade_date < DATE_SUB(CURDATE(), INTERVAL %s DAY)
+                GROUP BY code
+            ) k ON k.code = i.code
+            WHERE COALESCE(k.c, 0) < %s
+            ORDER BY i.code
+            """,
+            (before_days, min_hist),
+        )
+        return [r["code"] for r in cur.fetchall()]
+
+
 def _find_col(df: pd.DataFrame, *keywords):
     """按关键词匹配列名(防 akshare 列名小变动)。"""
     for kw in keywords:
@@ -144,6 +176,9 @@ def main():
                    help="只跑前 N 只(测试用,0=不限)")
     p.add_argument("--holdings-only", action="store_true",
                    help="只回填当前 paper_holdings 持仓")
+    p.add_argument("--only-uncovered", action="store_true",
+                   help="只回填尚未回填历史市值的 code(新上市/缺口)。"
+                        "月度 cron 用这个,首轮全量后每月只补几只,分钟级")
     p.add_argument("--start-from", default=None,
                    help="从该 code 起继续(断点续跑,code 升序)")
     p.add_argument("--sleep", type=float, default=0.3,
@@ -167,6 +202,9 @@ def main():
     if args.holdings_only:
         codes = _holding_codes()
         log.info("回填范围 = 当前持仓: %d 只", len(codes))
+    elif args.only_uncovered:
+        codes = _uncovered_codes()
+        log.info("回填范围 = 未覆盖(新上市/缺口): %d 只", len(codes))
     else:
         codes = _all_codes_from_stock_info()
         log.info("回填范围 = 全市场: %d 只", len(codes))
