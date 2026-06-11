@@ -37,9 +37,9 @@ from pydantic import BaseModel
 
 from ..data.data_loader import get_kline_data
 from ..data.market_data import (
+    build_hist_market_caps,
     build_universe_hint,
     download_universe_history,
-    get_historical_market_caps,
     get_historical_universe,
 )
 from ..data.universe import load_listing_dates
@@ -156,8 +156,8 @@ def _run_portfolio(req: WalkForwardRequest):
     price_data = download_universe_history(codes, req.start_date, req.end_date)
     if not price_data:
         raise HTTPException(404, "历史行情为空，请检查日期范围")
-    hist_caps = get_historical_market_caps(
-        list(price_data.keys()), req.start_date, req.end_date)
+    # 历史市值直接复用 price_data 的 market_cap 列(免二次扫库)
+    hist_caps = build_hist_market_caps(price_data)
     try:
         listing = load_listing_dates(list(price_data.keys()))
     except Exception:

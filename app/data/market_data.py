@@ -571,6 +571,65 @@ def build_universe_hint(cap_min: float, cap_max: float) -> str:
     )
 
 
+# 组合回测一次要拉整池(小市值 PIT 可达 2000+ 只)。逐只 SELECT 是 N+1:
+# 2295 只 ≈ 75s,且每只先 ping(reconnect) 一个往返。改"分批 IN 单查"后 ≈ 10s。
+_KLINE_BATCH = 500
+
+
+def _query_kline_batch_from_db(
+    codes: List[str], start_date: str, end_date: str
+) -> Dict[str, pd.DataFrame]:
+    """分批 IN 一次性拉多只股的**精简日线** → {code: df[date,open,close,market_cap]}。
+
+    只取组合回测引擎实际用到的列(date/open/close)+ market_cap(供
+    hist_market_caps 当日真实市值选股),避免 N+1 往返与无用列(amount/turnover/
+    pe/pb…)传输。start_date < 2010 或 DB 不可用 → 返回 {},由调用方走 akshare 兜底。
+    """
+    if not codes or start_date < "2010-01-01":
+        return {}
+    conn = _get_pool()
+    if conn is None:
+        return {}
+    try:
+        conn.ping(reconnect=True)
+    except Exception:
+        return {}
+
+    frames: List[pd.DataFrame] = []
+    for i in range(0, len(codes), _KLINE_BATCH):
+        batch = codes[i: i + _KLINE_BATCH]
+        placeholders = ",".join(["%s"] * len(batch))
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT code, trade_date AS date, open, close, market_cap
+                    FROM stock_kline
+                    WHERE code IN ({placeholders})
+                      AND trade_date BETWEEN %s AND %s
+                    ORDER BY code, trade_date
+                    """,
+                    (*batch, start_date, end_date),
+                )
+                rows = cur.fetchall()
+        except Exception:
+            continue
+        if rows:
+            frames.append(pd.DataFrame(rows))
+
+    if not frames:
+        return {}
+    big = pd.concat(frames, ignore_index=True)
+    big["code"] = big["code"].astype(str).str.zfill(6)
+    for col in ("open", "close", "market_cap"):
+        big[col] = pd.to_numeric(big[col], errors="coerce")
+    big["date"] = pd.to_datetime(big["date"])
+    return {
+        code: g[["date", "open", "close", "market_cap"]].reset_index(drop=True)
+        for code, g in big.groupby("code", sort=False)
+    }
+
+
 def download_universe_history(
     codes: List[str],
     start_date: str,
@@ -578,13 +637,27 @@ def download_universe_history(
     max_workers: int = 5,
     on_progress: Optional[callable] = None,
 ) -> Dict[str, pd.DataFrame]:
+    """加载全池日线 → {code: df[date,open,close,market_cap]}。
+
+    主路径走 DB **分批 IN 一次性拉**(消除 N+1,~6 倍提速);DB 未覆盖的零星 code
+    才逐只回退 akshare(已回填的池里通常为空)。on_progress(done, total) 按批 / 兜底
+    进度回调,供 SSE 前端显示加载进度。
     """
-    Download daily OHLCV for all codes in parallel (file-cached per code+dates).
-    on_progress(done: int, total: int) is called after each stock completes.
-    """
-    results: Dict[str, pd.DataFrame] = {}
     total = len(codes)
-    done_count = [0]
+    if total == 0:
+        return {}
+
+    # ── 主路径:分批 IN 从 DB 拉(精简列)────────────────────────────────────
+    results = _query_kline_batch_from_db(codes, start_date, end_date)
+    if on_progress:
+        on_progress(min(len(results), total), total)
+
+    # ── 兜底:DB 没覆盖的 code 逐只走 akshare(返回全列,引擎只取需要的)──────
+    missing = [c for c in codes if c not in results]
+    if not missing:
+        return results
+
+    done_count = [len(results)]
 
     def _fetch(code: str):
         for caller in [
@@ -600,12 +673,12 @@ def download_universe_history(
         return code, None
 
     with ThreadPoolExecutor(max_workers=max_workers) as exe:
-        for code, df in exe.map(_fetch, codes):
+        for code, df in exe.map(_fetch, missing):
             if df is not None:
                 results[code] = df
             done_count[0] += 1
             if on_progress:
-                on_progress(done_count[0], total)
+                on_progress(min(done_count[0], total), total)
 
     return results
 
@@ -668,6 +741,10 @@ def get_historical_market_caps(
 
     用于组合策略回测时替代近似估算，确保每个调仓日使用真实历史市值。
     若数据库不可用或数据不存在，返回空字典（由调用方降级处理）。
+
+    注:组合回测热路径已改用 build_hist_market_caps(price_data) —— 直接复用
+    download_universe_history 带回的 market_cap 列,免去对 stock_kline 的二次全扫。
+    本函数保留给"只要市值、手里没有 price_data"的独立调用方。
     """
     if not codes:
         return {}
@@ -706,3 +783,29 @@ def get_historical_market_caps(
         return result
     except Exception:
         return {}
+
+
+def build_hist_market_caps(
+    price_data: Dict[str, pd.DataFrame]
+) -> Dict[str, Dict[str, float]]:
+    """从已加载的 price_data 的 market_cap 列就地构建 {code: {date_str: cap(亿元)}}。
+
+    替代 get_historical_market_caps 对 stock_kline 的第二次全表扫描:
+    download_universe_history 已分批 IN 带回 market_cap 列,这里纯内存转换即可
+    (原本两次扫同一批 130 万行 ≈ 75s+11s,现在第二次降为内存遍历 ≈ 1s)。
+
+    无 market_cap 列(akshare 兜底来的 code)或该列全 NaN → 跳过该 code,
+    引擎对缺失市值的 code 自动退回比例近似(与原降级行为一致)。
+    日期格式化为 'YYYY-MM-DD',与引擎 str(date.date()) 对齐。
+    """
+    out: Dict[str, Dict[str, float]] = {}
+    for code, df in price_data.items():
+        if "market_cap" not in df.columns:
+            continue
+        sub = df[["date", "market_cap"]].dropna(subset=["market_cap"])
+        if sub.empty:
+            continue
+        dates = pd.to_datetime(sub["date"]).dt.strftime("%Y-%m-%d").to_numpy()
+        caps = sub["market_cap"].to_numpy()
+        out[code] = {d: float(c) for d, c in zip(dates, caps)}
+    return out

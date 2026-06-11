@@ -32,9 +32,9 @@ def _validate_date_range(start: str, end: str) -> None:
 from .data.calendar import count_trading_days, next_n_trading_days
 from .data.data_loader import get_kline_data, get_stock_name, normalize_code
 from .data.market_data import (
+    build_hist_market_caps,
     build_universe_hint,
     download_universe_history,
-    get_historical_market_caps,
     get_historical_universe,
     get_index_history,
     get_universe_stats,
@@ -906,11 +906,10 @@ async def api_portfolio_backtest(req: PortfolioBacktestRequest):
 
         yield _sse({"type": "progress", "msg": "正在运行回测策略…", "pct": 92})
 
-        # ── Step 3: 读取历史真实市值（数据库有数据时替代近似推算）──────────
-        codes = list(price_data.keys())
+        # ── Step 3: 历史真实市值 —— 直接复用 price_data 已带回的 market_cap 列 ──
+        # (不再对 stock_kline 二次全扫;纯内存转换,放 executor 避免阻塞事件循环)
         hist_market_caps = await loop.run_in_executor(
-            None,
-            lambda: get_historical_market_caps(codes, req.start_date, req.end_date),
+            None, lambda: build_hist_market_caps(price_data)
         )
 
         # ── Step 4: Run backtest ─────────────────────────────────────────────
