@@ -234,14 +234,26 @@ async def api_paper_account():
                 days_until_rb = 0
                 rb_overdue_days = count_trading_days(nrd, today)
 
+    # 待执行挂单(T+1 成交模型:今晚生成,次日开盘成交)
+    try:
+        pending_actions = paper_db.get_pending_actions()
+    except Exception:
+        pending_actions = None
+
+    account_out = _json_safe([account])[0] if account else None
+    if account_out is not None:
+        # 原始 JSON 字符串列不直接透出,统一走解析后的 pending_actions 字段
+        account_out.pop("pending_actions", None)
+
     return {
-        "account": _json_safe([account])[0] if account else None,
+        "account": account_out,
         "holdings": holdings_out,
         "latest_run": latest_out,
         "realtime_count": len(realtime),
         "next_rebalance_date": next_rb_date,
         "days_until_rebalance": days_until_rb,
         "rebalance_overdue_days": rb_overdue_days,
+        "pending_actions": pending_actions,
     }
 
 
@@ -859,13 +871,18 @@ async def api_portfolio_backtest(req: PortfolioBacktestRequest):
             )
 
         async def _run_download():
-            result = await loop.run_in_executor(
-                None,
-                lambda: download_universe_history(
-                    codes, req.start_date, req.end_date, on_progress=on_progress
-                ),
-            )
-            await progress_queue.put({"type": "_done", "data": result})
+            # 任何异常都必须进 queue —— 否则下面的 while 循环永远等不到
+            # "_done",SSE 流会无限挂死(前端一直转圈)
+            try:
+                result = await loop.run_in_executor(
+                    None,
+                    lambda: download_universe_history(
+                        codes, req.start_date, req.end_date, on_progress=on_progress
+                    ),
+                )
+                await progress_queue.put({"type": "_done", "data": result})
+            except Exception as e:
+                await progress_queue.put({"type": "_failed", "error": str(e)})
 
         download_task = asyncio.create_task(_run_download())
 
@@ -875,9 +892,13 @@ async def api_portfolio_backtest(req: PortfolioBacktestRequest):
             if msg["type"] == "_done":
                 price_data = msg["data"]
                 break
+            if msg["type"] == "_failed":
+                yield _sse({"type": "error",
+                            "msg": f"加载历史行情失败：{msg['error']}"})
+                return
             yield _sse(msg)
 
-        await download_task  # ensure exceptions surface
+        await download_task
 
         if not price_data:
             yield _sse({"type": "error", "msg": "历史数据为空，请检查日期范围"})

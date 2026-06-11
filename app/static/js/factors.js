@@ -10,6 +10,7 @@
   let selected = null;    // 当前选中的 factor name
   let icChart = null;
   let heatmapChart = null;
+  let groupChart = null;
 
   // ── Utils ────────────────────────────────────────────────────────────────
 
@@ -269,6 +270,113 @@
     }, true);
   }
 
+  // ── 分组收益（分层回测） ─────────────────────────────────────────────────
+
+  async function analyzeGroups() {
+    if (!selected) {
+      toast('请先选择一个因子', 'error');
+      return;
+    }
+    const params = new URLSearchParams({
+      start_date: $('startDate').value,
+      end_date: $('endDate').value,
+      horizon: $('horizon').value,
+      n_groups: $('nGroups').value,
+    });
+
+    setStatus('分组回测中…');
+    $('groupsBtn').disabled = true;
+    try {
+      const res = await fetch(`/api/factors/${selected}/groups?${params}`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      if (!data.n_periods) {
+        toast(data.msg || '无可用数据', 'error');
+        setStatus(data.msg || '');
+        return;
+      }
+      renderGroupResult(data);
+      setStatus(`完成 (${data.n_periods} 个持有期)`);
+    } catch (e) {
+      toast(`分组收益失败: ${e.message}`, 'error');
+      setStatus('');
+    } finally {
+      $('groupsBtn').disabled = false;
+    }
+  }
+
+  function renderGroupResult(data) {
+    $('emptyHint').style.display = 'none';
+    $('groupZone').style.display = '';
+
+    const mono = data.monotonicity;
+    const ls = data.long_short || {};
+    const cards = [
+      { label: '持有期数', val: data.n_periods, cls: '' },
+      { label: '分组数', val: data.n_groups, cls: '' },
+      { label: '单调性 (Spearman)', val: fmt(mono, 3),
+        cls: Math.abs(mono ?? 0) >= 0.8 ? 'good' : Math.abs(mono ?? 0) >= 0.5 ? 'warn' : 'bad' },
+      { label: `多空总收益`, val: fmt(ls.total_return, 2) + '%',
+        cls: gradeIC(ls.total_return) === '' ? '' : (ls.total_return > 0 ? 'good' : 'bad') },
+      { label: '多空年化', val: fmt(ls.ann_return, 2) + '%',
+        cls: ls.ann_return > 0 ? 'good' : 'bad' },
+    ];
+    $('groupSummaryCards').innerHTML = cards.map(c => `
+      <div class="stat-card ${c.cls}">
+        <div class="label">${c.label}</div>
+        <div class="val">${c.val}</div>
+      </div>
+    `).join('');
+
+    // 明细表
+    const rows = [...data.groups, ls].map(g => {
+      const cls = v => v > 0 ? 'pos' : v < 0 ? 'neg' : '';
+      return `<tr>
+        <td>${g.name}</td>
+        <td class="${cls(g.total_return)}">${fmt(g.total_return, 2)}%</td>
+        <td class="${cls(g.ann_return)}">${fmt(g.ann_return, 2)}%</td>
+        <td class="${cls(g.avg_period_return)}">${fmt(g.avg_period_return, 3)}%</td>
+      </tr>`;
+    }).join('');
+    $('groupStatsTbl').innerHTML = `
+      <thead><tr><th>组</th><th>总收益</th><th>年化</th><th>平均每期</th></tr></thead>
+      <tbody>${rows}</tbody>`;
+
+    requestAnimationFrame(() => renderGroupChart(data));
+  }
+
+  function renderGroupChart(data) {
+    if (!groupChart) groupChart = echarts.init($('groupChart'));
+    const palette = ['#1a7f37', '#4ac26b', '#9a6700', '#e36209', '#cf222e',
+                     '#8250df', '#0550ae', '#bf3989', '#57606a', '#24292f'];
+    const series = data.groups.map((g, i) => ({
+      name: g.name, type: 'line', data: g.nav, symbol: 'none', smooth: true,
+      lineStyle: { width: 1.5, color: palette[i % palette.length] },
+    }));
+    if (data.long_short) {
+      series.push({
+        name: data.long_short.name, type: 'line', data: data.long_short.nav,
+        symbol: 'none', smooth: true,
+        lineStyle: { width: 2.5, color: '#0969da', type: 'dashed' },
+      });
+    }
+    groupChart.setOption({
+      tooltip: { trigger: 'axis',
+        valueFormatter: v => Number(v).toFixed(3) },
+      legend: { textStyle: { fontSize: 10 }, top: 0 },
+      grid: { left: 50, right: 16, top: 36, bottom: 32 },
+      xAxis: { type: 'category', data: data.dates,
+               axisLabel: { fontSize: 10 } },
+      yAxis: { type: 'value', scale: true,
+               axisLabel: { fontSize: 10 },
+               splitLine: { lineStyle: { type: 'dashed', color: '#e0e0e0' } } },
+      series,
+    }, true);
+  }
+
   // ── 计算并入库 ──────────────────────────────────────────────────────────
 
   async function compute() {
@@ -300,10 +408,12 @@
   // ── Init ────────────────────────────────────────────────────────────────
 
   $('analyzeBtn').addEventListener('click', analyze);
+  $('groupsBtn').addEventListener('click', analyzeGroups);
   $('computeBtn').addEventListener('click', compute);
   window.addEventListener('resize', () => {
     icChart && icChart.resize();
     heatmapChart && heatmapChart.resize();
+    groupChart && groupChart.resize();
   });
 
   loadFactors();

@@ -2,16 +2,23 @@
 小市值策略每日运行器（Paper Trading）
 ======================================
 
-每个交易日收盘后运行一次，流程：
-  1. 用 stock_kline 最新交易日的数据扫候选池（按市值区间）
-  2. 过滤：非主板（科创/创业/北交所）/ ST / 当日停牌 / 已涨停
-  3. 用 SmallCapStrategy.select_stocks() 选股
-  4. 对当前持仓做止损检查（亏损达阈值则当日按收盘价"卖出"）
-  5. 判断是否调仓日（每 hold_days 个交易日一次）
-  6. 模拟交易：调仓日按今日开盘价等权换仓
-  7. 计算今日总权益（cash + 持仓×今日收盘价）
-  8. 取上证综指作基准累计收益
-  9. 全部落库（paper_signal_run / paper_signal_position / paper_equity_daily）
+T+1 挂单成交模型(与回测引擎同口径,信号可被人工复现):
+
+每个交易日 T 收盘后运行一次，流程：
+  1. 执行昨日(T-1 收盘后)生成的挂单,按 **T 日开盘价** 成交:
+       - 止损挂单卖出(开盘跌停卖不出 → 放弃,收盘重评估)
+       - 调仓挂单:卖旧(跌停/停牌留存)→ 买新(开盘涨停跳过;
+         留存旧仓占仓位,新买数缩减保持总仓位 ≈ stock_num 只等权)
+  2. 止损评估:持仓自买入的累积涨跌 ≤ -阈值 → 生成**次日开盘**卖出挂单
+  3. 调仓决策(每 hold_days 个交易日):用 T 日市值/价格选股,
+     生成**次日开盘**买入挂单(存 paper_account.pending_actions)
+  4. 计算今日总权益（cash + 持仓×今日收盘价）
+  5. 取基准指数(中证1000)累计收益
+  6. 全部落库（paper_signal_run / paper_signal_position / paper_equity_daily）
+
+旧版在 17:30 收盘后"按当日开盘价"回填成交,等于用收盘信息在过去时点交易,
+信号无法被人复现;现版决策只用 T 日已知数据、成交在 T+1 开盘,
+与回测引擎"T-1 信号 → T 开盘成交"完全对齐。
 
 **不会真实下单**，所有"成交价"取自 stock_kline 的 open/close。
 """
@@ -25,7 +32,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ..data.data_loader import _get_pool
 from ..data import dividend
-from ..data.filters import is_allowed_board, is_st_name
+from ..data.filters import board_of, is_allowed_board, is_st_name
 from ..engine.money import D, ONE, ZERO, round_cent, to_float_cent
 from ..strategies.small_cap import SmallCapStrategy
 from . import db
@@ -125,11 +132,13 @@ NON_MAIN_BOARD_PREFIXES = ("688", "689", "300", "301", "4", "8", "9")
 @dataclass
 class RunResult:
     run_date: _Date
-    is_rebalance: bool
+    is_rebalance: bool                                    # 今日是否执行了调仓成交
     universe_size: int
-    selected: List[str] = field(default_factory=list)
-    stop_loss_codes: List[str] = field(default_factory=list)
+    selected: List[str] = field(default_factory=list)     # 今日实际买入的代码
+    stop_loss_codes: List[str] = field(default_factory=list)  # 今日实际止损卖出
     sold_codes: List[str] = field(default_factory=list)   # 调仓/止损卖出的股票代码
+    planned_buy: List[str] = field(default_factory=list)  # 今晚生成、明日开盘买入的挂单
+    pending_stop: List[str] = field(default_factory=list)  # 今晚生成、明日开盘止损的挂单
     total_value: float = 0.0
     cash: float = 0.0
     position_value: float = 0.0
@@ -227,32 +236,21 @@ def _load_universe_snapshot(
             })
         return out
 
-    # ── 选股用**前一交易日**市值(无未来函数,与回测引擎对齐)──────────────
-    # 调仓在 trade_date 开盘成交,而 trade_date 的市值要收盘才知道。用前一日市值
-    # 筛选/排序(开盘时已知),价格/成交量/涨停仍取 trade_date 当日真实数据。
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT MAX(trade_date) AS d FROM stock_kline "
-            "WHERE trade_date < %s AND market_cap IS NOT NULL",
-            (trade_date,),
-        )
-        row = cur.fetchone()
-    cap_date = row["d"] if row and row["d"] else trade_date  # 无前一日则退回当日
-
-    # ── Primary: 前一日市值过滤 + 当日价格 ────────────────────────────────────
+    # ── 选股用 trade_date **当日**市值 ────────────────────────────────────────
+    # 决策发生在 T 日收盘后(17:30),成交在 T+1 开盘 —— T 日收盘市值此刻已知,
+    # 不是未来函数。与回测引擎"用前一日(=成交日的前一日)市值选股"完全同口径。
     with conn.cursor() as cur:
         cur.execute(
             """
             SELECT k.code, i.name, k.close AS price, k.open, k.high, k.low,
-                   pc.market_cap AS market_cap, k.volume, k.pct_change, i.is_st
+                   k.market_cap, k.volume, k.pct_change, i.is_st
             FROM stock_kline k
             JOIN stock_info i ON i.code = k.code
-            JOIN stock_kline pc ON pc.code = k.code AND pc.trade_date = %s
             WHERE k.trade_date = %s
-              AND pc.market_cap BETWEEN %s AND %s
+              AND k.market_cap BETWEEN %s AND %s
               AND k.volume > 0
             """,
-            (cap_date, trade_date, cap_min, cap_max),
+            (trade_date, cap_min, cap_max),
         )
         rows = cur.fetchall()
 
@@ -350,6 +348,25 @@ def _get_day_prices(codes: List[str], trade_date: _Date) -> Dict[str, Dict[str, 
     return out
 
 
+def _open_limit_flags(code: str, px: Dict[str, float]) -> Tuple[bool, bool]:
+    """
+    返回 (开盘涨停, 开盘跌停)。昨收用 close/(1+pct_change/100) 还原
+    (同一来源 stock_kline,与 qfq 口径一致),阈值 = 板块涨跌停幅 - 0.3% 容差。
+    数据缺失时一律 (False, False) —— 宁可成交也不静默丢单。
+    """
+    o = float(px.get("open") or 0.0)
+    c = float(px.get("close") or 0.0)
+    pct = px.get("pct_change")
+    if o <= 0 or c <= 0 or pct is None or float(pct) <= -99:
+        return False, False
+    prev_close = c / (1.0 + float(pct) / 100.0)
+    if prev_close <= 0:
+        return False, False
+    limit = 20.0 if board_of(code) in ("gem", "star", "bj") else 10.0
+    chg = (o / prev_close - 1.0) * 100.0
+    return chg >= limit - 0.3, chg <= -(limit - 0.3)
+
+
 def _get_index_close(index_code: str, trade_date: _Date) -> Optional[float]:
     conn = _get_pool()
     if conn is None:
@@ -441,19 +458,21 @@ def run_once(
     cash = float(account["cash"])
     rebalance_counter = int(account.get("rebalance_counter") or 0)
     last_rb = account.get("last_rebalance_date")
-
-    # 是否调仓：首次（last_rb is None）或 counter 已达 hold_days
-    # counter 在每次"非调仓日"循环里 += 1，调仓日重置为 1（表示从今天开始第 1 天）
-    is_rebalance = (last_rb is None) or (rebalance_counter >= hold_days)
+    pending = db.get_pending_actions()
 
     result = RunResult(
         run_date=trade_date,
-        is_rebalance=is_rebalance,
+        is_rebalance=False,   # 在 body 里执行了调仓挂单才置 True
         universe_size=0,
     )
 
     holdings = db.get_holdings()
-    day_prices = _get_day_prices(list(holdings.keys()), trade_date) if holdings else {}
+    # 当日价格要覆盖:现持仓 + 挂单里的买入/止损代码(执行挂单要用今日开盘价)
+    codes_needed = set(holdings.keys())
+    if pending:
+        codes_needed |= set(pending.get("buy") or [])
+        codes_needed |= set(pending.get("stop_loss") or [])
+    day_prices = _get_day_prices(list(codes_needed), trade_date) if codes_needed else {}
 
     positions_log: List[Dict[str, Any]] = []
 
@@ -476,7 +495,7 @@ def run_once(
             trade_date=trade_date,
             cash=cash, last_rb=last_rb,
             rebalance_counter=rebalance_counter,
-            is_rebalance=is_rebalance,
+            pending=pending,
             holdings=holdings, day_prices=day_prices,
             positions_log=positions_log, result=result,
             dry_run=dry_run,
@@ -495,7 +514,7 @@ def _run_once_body(
     *,
     initial_capital, cap_min, cap_max, stock_num, hold_days,
     stop_loss_pct, allow_boards, trade_date, cash, last_rb,
-    rebalance_counter, is_rebalance, holdings, day_prices,
+    rebalance_counter, pending, holdings, day_prices,
     positions_log, result, dry_run, _commit,
 ) -> RunResult:
     """run_once 的实际主体,提出来避免给整段代码加一层 try/with 缩进。"""
@@ -508,6 +527,37 @@ def _run_once_body(
     slippage_buy = ONE + D(SLIPPAGE_RATE)
     slippage_sell = ONE - D(SLIPPAGE_RATE)
 
+    def _sell_holding(code: str, h: Dict[str, Any], exec_px: float, action: str):
+        """按 exec_px(已是开盘价)卖出一只持仓:记账 + 持仓表删除 + 明细行。"""
+        nonlocal cash
+        sell_price_d = D(exec_px) * slippage_sell
+        shares = int(h["shares"])
+        revenue = D(shares) * sell_price_d
+        comm = max(revenue * commission_rate_d, min_commission_d)
+        tax = revenue * stamp_tax_rate_d
+        net_revenue = revenue - comm - tax
+        cash += net_revenue
+        cost = D(h.get("cost") or 0)
+        _buy_px = float(h.get("buy_price") or 0)
+        _pnl = net_revenue - cost
+        _pnl_pct = _pnl / cost if cost > 0 else None
+        result.sold_codes.append(code)
+        positions_log.append({
+            "code": code,
+            "name": h.get("name"),
+            "price": round(float(sell_price_d), 3),
+            "shares": shares,
+            "amount": to_float_cent(revenue),
+            "action": action,
+            "buy_price":  round(_buy_px, 3),
+            "commission": to_float_cent(comm + tax),
+            "pnl":        to_float_cent(_pnl),
+            "pnl_pct":    round(float(_pnl_pct), 6) if _pnl_pct is not None else None,
+        })
+        if not dry_run:
+            db.remove_holding(code)
+        holdings.pop(code, None)
+
     # ── 步骤 0: 持仓除权扫描 ─────────────────────────────────────────────
     # 自上次扫描日到 trade_date 之间持仓上的 ex_div 事件,自动调整
     # shares / buy_price 同口径 qfq,把现金分红加进 cash。
@@ -515,82 +565,179 @@ def _run_once_body(
     # → (close-buy)/buy 误判为亏损 → 误触发止损 + 浮亏显示失真。
     cash += D(_apply_dividends_for_holdings(holdings, trade_date, dry_run))
 
-    # ── 步骤 1: 止损检查（任何一天都做） ──────────────────────────────────
-    stop_loss_ratio = stop_loss_pct / 100.0
-    for code, h in list(holdings.items()):
-        px = day_prices.get(code)
-        if not px:
-            continue  # 停牌，留待下次
-        buy_px = float(h["buy_price"])
-        close_px = px["close"]
-        if buy_px <= 0:
-            continue
-        # 优先用累积 pct_change 判断"持仓真实涨跌",避开 close 复权后跳水
-        # 误触发止损;持仓期间数据缺失时退回到 close 直比
-        buy_date_h = h.get("buy_date")
-        cum_ret = _cumulative_pct_change(code, buy_date_h, trade_date) \
-                  if buy_date_h is not None else None
-        if cum_ret is not None:
-            loss_ratio = cum_ret
-        else:
-            loss_ratio = (close_px - buy_px) / buy_px
-        if stop_loss_ratio > 0 and loss_ratio <= -stop_loss_ratio:
-            # 跌停的话其实卖不掉，做个保护
-            if px.get("pct_change", 0) <= -9.8:
-                logger.warning("[%s] 触发止损但当日跌停，无法卖出，等下个交易日", code)
+    # ── 步骤 1: 执行昨日收盘后生成的挂单(按今日开盘价成交) ────────────────
+    executed_rebalance = False
+    if pending and str(pending.get("decided_on") or "9999-12-31") < str(trade_date):
+        # 1a. 止损挂单卖出
+        for code in pending.get("stop_loss") or []:
+            h = holdings.get(code)
+            if not h or int(h.get("shares") or 0) <= 0:
                 continue
-            sell_price_d = D(close_px) * slippage_sell
-            shares = int(h["shares"])
-            revenue = D(shares) * sell_price_d
-            comm = max(revenue * commission_rate_d, min_commission_d)
-            tax = revenue * stamp_tax_rate_d
-            net_revenue = revenue - comm - tax
-            cash += net_revenue
-            cost = D(h.get("cost") or 0)
-            _buy_px = float(h["buy_price"])
-            _pnl = net_revenue - cost
-            _pnl_pct = _pnl / cost if cost > 0 else None
+            px = day_prices.get(code)
+            if not px or px.get("open", 0) <= 0:
+                logger.warning("[%s] 止损挂单今日无价格(停牌),收盘重评估", code)
+                continue
+            _, limit_down = _open_limit_flags(code, px)
+            if limit_down:
+                logger.warning("[%s] 止损挂单开盘跌停卖不出,收盘重评估", code)
+                continue
             result.stop_loss_codes.append(code)
-            result.sold_codes.append(code)
-            positions_log.append({
-                "code": code,
-                "name": h.get("name"),
-                "price": round(float(sell_price_d), 3),
-                "shares": shares,
-                "amount": to_float_cent(revenue),
-                "action": "止损卖出",
-                "buy_price":  round(_buy_px, 3),
-                "commission": to_float_cent(comm + tax),
-                "pnl":        to_float_cent(_pnl),
-                "pnl_pct":    round(float(_pnl_pct), 6) if _pnl_pct is not None else None,
-            })
-            if not dry_run:
-                db.remove_holding(code)
-            holdings.pop(code, None)
-            logger.info(
-                "[%s] 止损卖出 shares=%d close=%.3f buy=%.3f 亏损=%.2f%%",
-                code, shares, close_px, buy_px, loss_ratio * 100,
-            )
+            _sell_holding(code, h, px["open"], "止损卖出")
+            logger.info("[%s] 止损卖出(昨收盘触发,今开盘成交) open=%.3f",
+                        code, px["open"])
 
-    # ── 步骤 2: 候选池 ────────────────────────────────────────────────────
+        # 1b. 调仓挂单:卖旧 → 买新
+        if pending.get("rebalance"):
+            executed_rebalance = True
+            result.is_rebalance = True
+            buy_meta: Dict[str, Any] = pending.get("buy_meta") or {}
+
+            # 卖出所有现持仓(按今日开盘价)。卖不出去的(停牌/开盘跌停)留存,
+            # 继续占仓位 → 新买数量缩减,保持总仓位 ≈ stock_num 只等权
+            for code, h in list(holdings.items()):
+                px = day_prices.get(code)
+                if not px or px.get("open", 0) <= 0:
+                    logger.warning("[%s] 调仓卖出失败：当日无价格，保留至下次", code)
+                    positions_log.append({
+                        "code": code, "name": h.get("name"),
+                        "price": None,
+                        "shares": int(h["shares"]),
+                        "amount": None,
+                        "action": "持有(卖出失败:无价格)",
+                    })
+                    continue
+                _, limit_down = _open_limit_flags(code, px)
+                if limit_down:
+                    logger.warning("[%s] 调仓卖出失败：开盘跌停，保留至下次", code)
+                    positions_log.append({
+                        "code": code, "name": h.get("name"),
+                        "price": round(px["close"], 3),
+                        "shares": int(h["shares"]),
+                        "amount": round(px["close"] * int(h["shares"]), 2),
+                        "action": "持有(卖出失败:跌停)",
+                    })
+                    continue
+                _sell_holding(code, h, px["open"], "卖出")
+
+            # 买入挂单里的新选股(按今日开盘价,等权)。
+            #   1) 留存旧仓占仓位 → slots_left = stock_num - len(holdings)
+            #   2) 已留存的代码不重复买(避免 add_holding 覆盖旧仓 shares)
+            #   3) 开盘涨停买不进 → 跳过(与回测引擎 _limit_up_at_open 同口径)
+            slots_left = max(0, stock_num - len(holdings))
+            to_buy = [c for c in (pending.get("buy") or [])
+                      if c not in holdings][:slots_left]
+
+            if to_buy and cash > ZERO:
+                cash_per = cash / D(len(to_buy))
+                for code in to_buy:
+                    px = day_prices.get(code)
+                    if not px or px.get("open", 0) <= 0:
+                        logger.warning("[%s] 买入挂单今日无价格(停牌),跳过", code)
+                        continue
+                    limit_up, _ = _open_limit_flags(code, px)
+                    if limit_up:
+                        logger.warning("[%s] 买入挂单开盘涨停买不进,跳过", code)
+                        continue
+                    buy_price_d = D(px["open"]) * slippage_buy
+                    shares = int(cash_per / (buy_price_d * D(100))) * 100
+                    cost = D(shares) * buy_price_d
+                    comm = max(cost * commission_rate_d, min_commission_d)
+                    # 等权预算未给手续费留头寸时(整除边界)减一手补救
+                    while shares > 0 and cost + comm > cash:
+                        shares -= 100
+                        cost = D(shares) * buy_price_d
+                        comm = max(cost * commission_rate_d, min_commission_d)
+                    if shares <= 0:
+                        logger.warning(
+                            "[%s] 单股资金不足 1 手，跳过 cash_per=%.2f price=%.3f",
+                            code, float(cash_per), float(buy_price_d))
+                        continue
+                    cash -= cost + comm
+                    meta = buy_meta.get(code) or {}
+                    name = meta.get("name") or ""
+                    buy_price_f = round(float(buy_price_d), 3)
+                    cost_f = to_float_cent(cost)
+                    if not dry_run:
+                        db.add_holding(code, name, shares, buy_price_f,
+                                       trade_date, cost_f)
+                    holdings[code] = {
+                        "code": code, "name": name,
+                        "shares": shares, "buy_price": buy_price_f,
+                        "buy_date": trade_date, "cost": cost_f,
+                    }
+                    result.selected.append(code)
+                    positions_log.append({
+                        "code": code,
+                        "name": name,
+                        "market_cap": meta.get("market_cap"),
+                        "price": buy_price_f,
+                        "shares": shares,
+                        "amount": cost_f,
+                        "action": "买入",
+                    })
+
+            rebalance_counter = 1
+            last_rb = trade_date
+    elif pending:
+        logger.info("挂单 decided_on=%s 不早于今日 %s,跳过执行(同日重跑会重新决策覆盖)",
+                    pending.get("decided_on"), trade_date)
+
+    # ── 步骤 2: 调仓计数推进(非成交日 +1;成交日已重置为 1) ────────────────
+    if not executed_rebalance:
+        rebalance_counter += 1
+
+    # ── 步骤 3: 止损评估(截至今日收盘) → 生成次日开盘卖出挂单 ─────────────
+    # 收盘才知道触发,当日按收盘价卖出是未来函数;挂到次日开盘成交,
+    # 同时今日开盘刚买入的仓位也合法(T+1:最早次日卖出)。
+    stop_loss_ratio = stop_loss_pct / 100.0
+    stop_queue: List[str] = []
+    if stop_loss_ratio > 0:
+        # 补齐持仓当日价格(新买入的 day_prices 里已有;止损后可能缺)
+        missing = [c for c in holdings if c not in day_prices]
+        if missing:
+            day_prices.update(_get_day_prices(missing, trade_date))
+        for code, h in holdings.items():
+            px = day_prices.get(code)
+            if not px:
+                continue  # 停牌，留待下次
+            buy_px = float(h["buy_price"])
+            close_px = px["close"]
+            if buy_px <= 0:
+                continue
+            # 优先用累积 pct_change 判断"持仓真实涨跌",避开 close 复权后跳水
+            # 误触发止损;持仓期间数据缺失时退回到 close 直比
+            buy_date_h = h.get("buy_date")
+            cum_ret = _cumulative_pct_change(code, buy_date_h, trade_date) \
+                      if buy_date_h is not None else None
+            loss_ratio = cum_ret if cum_ret is not None \
+                else (close_px - buy_px) / buy_px
+            if loss_ratio <= -stop_loss_ratio:
+                stop_queue.append(code)
+                logger.info(
+                    "[%s] 收盘触发止损(亏损 %.2f%%),挂单次日开盘卖出",
+                    code, loss_ratio * 100,
+                )
+    result.pending_stop = stop_queue
+
+    # ── 步骤 4: 候选池 + 调仓决策(生成次日开盘买入挂单) ───────────────────
     universe = _load_universe_snapshot(trade_date, cap_min, cap_max, allow_boards)
     result.universe_size = len(universe)
 
-    # ── 步骤 3: 调仓（卖旧买新）────────────────────────────────────────────
-    if is_rebalance:
-        # 选股
+    decide = (last_rb is None) or (rebalance_counter >= hold_days)
+    new_pending: Optional[Dict[str, Any]] = None
+    if decide:
         strategy = SmallCapStrategy({
             "cap_min": cap_min, "cap_max": cap_max,
             "stock_num": stock_num, "hold_days": hold_days,
             "stop_loss_pct": stop_loss_pct,
         })
-        # 适配 SmallCapStrategy.select_stocks 的入参格式
+        # 适配 SmallCapStrategy.select_stocks 的入参格式。
+        # close_lookup 用今日收盘 = ref_data.price → 比例系数为 1,
+        # 市值即当日真实市值(决策在收盘后,无未来函数)
         import pandas as pd
         ref_data = pd.DataFrame(universe) if universe else pd.DataFrame(
             columns=["code", "name", "price", "market_cap"]
         )
-        # 该函数会用 close_lookup[code] / row.price 做"比例估算"，
-        # 实盘里 close_lookup 直接用今日收盘即可（不需要历史推算）
         close_lookup = {u["code"]: u["price"] for u in universe}
         selected = strategy.select_stocks(
             date=trade_date,
@@ -598,124 +745,31 @@ def _run_once_body(
             ref_data=ref_data,
             rolling_prices={},
         )
-        # 进一步过滤：剔除当日涨停（虽然候选池里已过滤过，多一道保险）
-        sel_prices = _get_day_prices(selected, trade_date)
-        selected = [
-            s for s in selected
-            if s in sel_prices and sel_prices[s].get("pct_change", 0) < 9.8
-        ]
-        result.selected = selected
+        result.planned_buy = selected
+        buy_meta = {
+            u["code"]: {"name": u["name"], "market_cap": u["market_cap"]}
+            for u in universe if u["code"] in set(selected)
+        }
+        new_pending = {
+            "decided_on": str(trade_date),
+            "rebalance": True,
+            "buy": selected,
+            "buy_meta": buy_meta,
+            "stop_loss": stop_queue,
+        }
+        logger.info("调仓计划已生成(次日开盘执行): 买入 %s",
+                    ",".join(selected) or "(空)")
+    elif stop_queue:
+        new_pending = {
+            "decided_on": str(trade_date),
+            "rebalance": False,
+            "buy": [],
+            "buy_meta": {},
+            "stop_loss": stop_queue,
+        }
 
-        # 卖出所有现持仓（按今日开盘价）。卖不出去的留存,后面用 retained_codes
-        # 抵扣新仓数量,保证总仓位 ≈ stock_num 只等权
-        retained_codes: List[str] = []
-        for code, h in list(holdings.items()):
-            px = day_prices.get(code) or sel_prices.get(code)
-            if not px:
-                logger.warning("[%s] 调仓卖出失败：当日无价格，保留至下次", code)
-                retained_codes.append(code)
-                # 仍计入"持有"行,前端能看到
-                positions_log.append({
-                    "code": code, "name": h.get("name"),
-                    "price": None,
-                    "shares": int(h["shares"]),
-                    "amount": None,
-                    "action": "持有(卖出失败:无价格)",
-                })
-                continue
-            if px.get("pct_change", 0) <= -9.8:
-                logger.warning("[%s] 调仓卖出失败：当日跌停，保留至下次", code)
-                retained_codes.append(code)
-                positions_log.append({
-                    "code": code, "name": h.get("name"),
-                    "price": round(px["close"], 3),
-                    "shares": int(h["shares"]),
-                    "amount": round(px["close"] * int(h["shares"]), 2),
-                    "action": "持有(卖出失败:跌停)",
-                })
-                continue
-            sell_price_d = D(px["open"]) * slippage_sell
-            shares = int(h["shares"])
-            revenue = D(shares) * sell_price_d
-            comm = max(revenue * commission_rate_d, min_commission_d)
-            tax = revenue * stamp_tax_rate_d
-            net_revenue = revenue - comm - tax
-            cash += net_revenue
-            cost = D(h.get("cost") or 0)
-            _buy_px = float(h.get("buy_price") or 0)
-            _pnl = net_revenue - cost
-            _pnl_pct = _pnl / cost if cost > 0 else None
-            result.sold_codes.append(code)
-            positions_log.append({
-                "code": code,
-                "name": h.get("name"),
-                "price": round(float(sell_price_d), 3),
-                "shares": shares,
-                "amount": to_float_cent(revenue),
-                "action": "卖出",
-                "buy_price":  round(_buy_px, 3),
-                "commission": to_float_cent(comm + tax),
-                "pnl":        to_float_cent(_pnl),
-                "pnl_pct":    round(float(_pnl_pct), 6) if _pnl_pct is not None else None,
-            })
-            if not dry_run:
-                db.remove_holding(code)
-            holdings.pop(code, None)
-
-        # 买入新选股(按今日开盘价,等权)。
-        # 关键修复:
-        #   1) 留存的旧仓(跌停/无价没卖出去)继续占着仓位 → 新仓数缩减
-        #      slots_left = stock_num - len(retained_codes),保持总仓位 ≈ N 只
-        #   2) selected 里如果包含已留存的代码 → 跳过(避免 add_holding 覆盖 shares,
-        #      变成"白买一份"丢老仓信息)
-        slots_left = max(0, stock_num - len(retained_codes))
-        selected = [s for s in selected if s not in retained_codes][:slots_left]
-        result.selected = selected   # 反映真实买入,_build_notes/前端用这个
-
-        if selected and cash > ZERO:
-            cash_per = cash / D(len(selected))
-            for code in selected:
-                px = sel_prices.get(code)
-                if not px or px["open"] <= 0:
-                    continue
-                buy_price_d = D(px["open"]) * slippage_buy
-                shares = int(cash_per / (buy_price_d * D(100))) * 100
-                if shares <= 0:
-                    logger.warning("[%s] 单股资金不足 1 手，跳过 cash_per=%.2f price=%.3f",
-                                   code, float(cash_per), float(buy_price_d))
-                    continue
-                cost = D(shares) * buy_price_d
-                comm = max(cost * commission_rate_d, min_commission_d)
-                if cost + comm > cash:
-                    continue
-                cash -= cost + comm
-                name = next((u["name"] for u in universe if u["code"] == code), "")
-                buy_price_f = round(float(buy_price_d), 3)
-                cost_f = to_float_cent(cost)
-                if not dry_run:
-                    db.add_holding(code, name, shares, buy_price_f, trade_date, cost_f)
-                holdings[code] = {
-                    "code": code, "name": name,
-                    "shares": shares, "buy_price": buy_price_f,
-                    "buy_date": trade_date, "cost": cost_f,
-                }
-                positions_log.append({
-                    "code": code,
-                    "name": name,
-                    "market_cap": next((u["market_cap"] for u in universe
-                                        if u["code"] == code), None),
-                    "price": buy_price_f,
-                    "shares": shares,
-                    "amount": cost_f,
-                    "action": "买入",
-                })
-
-        rebalance_counter = 1
-        last_rb = trade_date
-    else:
-        rebalance_counter += 1
-        # 非调仓日，把剩余持仓作为 "持有" 写入日志方便追踪
-        # 一次性补齐缺失的当日价格（day_prices 在止损后可能少了几只）
+    # ── 步骤 5: 非成交日把持仓作为"持有"写入日志方便追踪 ──────────────────
+    if not executed_rebalance:
         missing = [c for c in holdings if c not in day_prices]
         if missing:
             day_prices.update(_get_day_prices(missing, trade_date))
@@ -732,7 +786,7 @@ def _run_once_body(
                 "action": "持有",
             })
 
-    # ── 步骤 4: 计算今日权益（按今日收盘价） ──────────────────────────────
+    # ── 步骤 6: 计算今日权益（按今日收盘价） ──────────────────────────────
     # 重新拉所有当前持仓的今日收盘价
     all_codes = list(holdings.keys())
     final_prices = _get_day_prices(all_codes, trade_date) if all_codes else {}
@@ -748,7 +802,7 @@ def _run_once_body(
     total_value = cash + pos_value
     cum_return = (total_value - initial_capital) / initial_capital
 
-    # ── 步骤 5: 基准（上证综指）+ 日收益率 ─────────────────────────────────
+    # ── 步骤 7: 基准 + 日收益率 ──────────────────────────────────────────
     # 合并为单次 cursor，少 3 个 RTT
     bm_close = _get_index_close(BENCHMARK_INDEX, trade_date)
     conn = _get_pool()
@@ -781,13 +835,15 @@ def _run_once_body(
     daily_ret = ((total_value - float(prev["total_value"])) / float(prev["total_value"])
                  if prev and float(prev["total_value"]) > 0 else 0.0)
 
-    # ── 步骤 6: 落库 ──────────────────────────────────────────────────────
+    # ── 步骤 8: 落库 ──────────────────────────────────────────────────────
     if not dry_run:
         db.update_account(
             cash=cash,
             last_rebalance_date=last_rb,
             rebalance_counter=rebalance_counter,
         )
+        # 今晚的挂单(可能为 None → 同时清掉已执行完的旧挂单)
+        db.set_pending_actions(new_pending)
 
         params_snapshot = {
             "cap_min": cap_min, "cap_max": cap_max,
@@ -801,8 +857,9 @@ def _run_once_body(
             "strategy": "small_cap",
             "params": json.dumps(params_snapshot),
             "universe_size": result.universe_size,
-            "selected_count": len(result.selected) if is_rebalance else len(holdings),
-            "is_rebalance": 1 if is_rebalance else 0,
+            "selected_count": (len(result.selected) if executed_rebalance
+                               else len(holdings)),
+            "is_rebalance": 1 if executed_rebalance else 0,
             "stop_loss_count": len(result.stop_loss_codes),
             "capital": initial_capital,
             "total_value": round(total_value, 2),
@@ -811,8 +868,9 @@ def _run_once_body(
             "cum_return": round(cum_return, 6),
             "status": "success",
             "error_msg": None,
-            "notes": _build_notes(is_rebalance, result),
-            "notes_struct": json.dumps(_build_notes_struct(is_rebalance, result), ensure_ascii=False),
+            "notes": _build_notes(result, decided=decide),
+            "notes_struct": json.dumps(
+                _build_notes_struct(result, decided=decide), ensure_ascii=False),
         })
 
         db.insert_positions(run_id, trade_date, positions_log)
@@ -892,10 +950,23 @@ def run_catch_up(
     return results
 
 
-def _build_notes(is_rebalance: bool, r: RunResult) -> str:
+def _plan_reason(r: RunResult, decided: bool) -> str:
+    """决策/挂单状态的人类可读描述(notes 与 notes_struct.reason 共用)。"""
+    parts = []
+    if decided:
+        if r.planned_buy:
+            parts.append("已生成调仓计划,次日开盘买入 " + ",".join(r.planned_buy))
+        else:
+            parts.append("调仓决策:无可选标的,次日空仓")
+    if r.pending_stop:
+        parts.append("收盘触发止损,次日开盘卖出 " + ",".join(r.pending_stop))
+    return "；".join(parts)
+
+
+def _build_notes(r: RunResult, decided: bool) -> str:
     """人类可读的摘要（保留旧字段供前端兜底显示）。"""
     parts = []
-    if is_rebalance:
+    if r.is_rebalance:
         # 纯调仓卖出（不含止损卖出）
         rebal_sold = [c for c in r.sold_codes if c not in r.stop_loss_codes]
         if rebal_sold:
@@ -903,36 +974,41 @@ def _build_notes(is_rebalance: bool, r: RunResult) -> str:
         if r.selected:
             parts.append("买入 " + ",".join(r.selected))
         else:
-            parts.append("无可选标的，空仓")
+            parts.append("调仓日无新买入")
     if r.stop_loss_codes:
         parts.append("止损 " + ",".join(r.stop_loss_codes))
+    plan = _plan_reason(r, decided)
+    if plan:
+        parts.append(plan)
     if not parts:
         parts.append("持有日，无交易")
     return "；".join(parts)
 
 
-def _build_notes_struct(is_rebalance: bool, r: RunResult) -> dict:
+def _build_notes_struct(r: RunResult, decided: bool) -> dict:
     """
     结构化摘要 —— 前端直接读字段，不再用正则解析字符串。
     schema:
       {
-        "is_rebalance": bool,
-        "buy":       List[str],   # 调仓日买入的代码
-        "sell":      List[str],   # 调仓日卖出的代码（不含止损）
-        "stop_loss": List[str],   # 止损卖出的代码
-        "reason":    str          # 备注/原因（如 "无可选标的"）
+        "is_rebalance": bool,     # 今日是否执行了调仓成交
+        "buy":       List[str],   # 今日实际买入的代码
+        "sell":      List[str],   # 今日实际卖出的代码（不含止损）
+        "stop_loss": List[str],   # 今日实际止损卖出的代码
+        "plan_buy":  List[str],   # 今晚挂单、次日开盘买入的代码
+        "plan_stop": List[str],   # 今晚挂单、次日开盘止损的代码
+        "reason":    str          # 备注（挂单说明 / "持有日,无交易" 等）
       }
     """
     rebal_sold = [c for c in r.sold_codes if c not in r.stop_loss_codes]
-    reason = ""
-    if is_rebalance and not r.selected:
-        reason = "无可选标的，空仓"
-    elif not is_rebalance and not r.stop_loss_codes:
+    reason = _plan_reason(r, decided)
+    if not reason and not r.is_rebalance and not r.stop_loss_codes:
         reason = "持有日，无交易"
     return {
-        "is_rebalance": bool(is_rebalance),
-        "buy":       list(r.selected) if is_rebalance else [],
+        "is_rebalance": bool(r.is_rebalance),
+        "buy":       list(r.selected),
         "sell":      rebal_sold,
         "stop_loss": list(r.stop_loss_codes),
+        "plan_buy":  list(r.planned_buy),
+        "plan_stop": list(r.pending_stop),
         "reason":    reason,
     }

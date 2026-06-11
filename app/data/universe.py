@@ -91,6 +91,41 @@ def universe_at(
     return [r["code"] for r in rows]
 
 
+def load_listing_dates(codes: Iterable[str]) -> dict[str, tuple]:
+    """
+    一次性预加载一组 codes 的 (list_date, delist_date)，给回测引擎在每个
+    rebalance 日做**内存**过滤 —— 替代旧的"每个调仓日查 2 次 DB"
+    (eligible_codes_at)，5 年周频回测可省 ~500 次查询。
+
+    Returns:
+        {code: (list_date|None, delist_date|None)}。
+        - 不在 stock_info 里的 code 不出现在结果里（调用方按"保守保留"处理）
+        - DB 不可用返回 {}（调用方跳过过滤,与 eligible_codes_at 降级语义一致）
+    """
+    code_list = list({str(c).zfill(6) for c in codes})
+    if not code_list:
+        return {}
+    conn = _get_pool()
+    if conn is None:
+        logger.warning("DB unavailable for load_listing_dates — 跳过上市/退市过滤")
+        return {}
+
+    out: dict[str, tuple] = {}
+    BATCH = 500
+    for i in range(0, len(code_list), BATCH):
+        batch = code_list[i: i + BATCH]
+        placeholders = ",".join(["%s"] * len(batch))
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT code, list_date, delist_date FROM stock_info "
+                f"WHERE code IN ({placeholders})",
+                batch,
+            )
+            for r in cur.fetchall():
+                out[str(r["code"]).zfill(6)] = (r["list_date"], r["delist_date"])
+    return out
+
+
 def eligible_codes_at(codes: Iterable[str], target_date) -> set[str]:
     """
     给定一组 codes 和目标日，返回那天可交易的子集（去除未上市/已退市）。

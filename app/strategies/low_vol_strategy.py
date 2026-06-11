@@ -7,8 +7,9 @@
 低波动异象（Low Volatility Anomaly）：历史上，低波动股票的风险调整收益往往优于高波动股票，
 是 A 股市场上被广泛研究的因子之一。
 """
-import math
 from typing import Any, Dict, List
+
+import numpy as np
 import pandas as pd
 
 from .portfolio_base import PortfolioBaseStrategy
@@ -69,42 +70,38 @@ class LowVolatilityStrategy(PortfolioBaseStrategy):
         stock_num = self.params["stock_num"]
         min_history = vol_window + 1
 
+        if ref_data is None or ref_data.empty:
+            return []
+
+        # 市值过滤向量化(原 iterrows 是热点);波动率需逐 code 取
+        # rolling_prices 列表,只对过滤后的小集合循环
+        code = ref_data["code"].astype(str)
+        price = pd.to_numeric(ref_data["price"], errors="coerce")
+        cap = pd.to_numeric(ref_data["market_cap"], errors="coerce")
+        hist_close = code.map(close_lookup)
+        hist_cap = cap * hist_close / price
+        mask = (
+            hist_close.notna() & (hist_close > 0)
+            & price.notna() & (price > 0)
+            & hist_cap.between(cap_min, cap_max)
+        )
+
         candidates = []
-        for _, row in ref_data.iterrows():
-            code = str(row["code"])
-            if code not in close_lookup:
-                continue
-
-            hist_close = close_lookup[code]
-
-            # Market cap filter
-            cur_cap = float(row["market_cap"])
-            cur_price = float(row["price"])
-            if cur_price <= 0 or hist_close <= 0:
-                continue
-            hist_cap = cur_cap * hist_close / cur_price
-            if not (cap_min <= hist_cap <= cap_max):
-                continue
-
-            # Volatility calculation
-            prices = rolling_prices.get(code, [])
+        for c in code[mask]:
+            prices = rolling_prices.get(c, [])
             if len(prices) < min_history:
                 continue
 
-            recent = prices[-min_history:]
-            returns = [
-                (recent[i] - recent[i - 1]) / recent[i - 1]
-                for i in range(1, len(recent))
-                if recent[i - 1] > 0
-            ]
+            recent = np.asarray(prices[-min_history:], dtype=float)
+            prev, cur = recent[:-1], recent[1:]
+            valid = prev > 0
+            returns = (cur[valid] - prev[valid]) / prev[valid]
             if len(returns) < vol_window // 2:
                 continue  # too few valid returns
 
-            mean_r = sum(returns) / len(returns)
-            variance = sum((r - mean_r) ** 2 for r in returns) / len(returns)
-            vol = math.sqrt(variance)
-            candidates.append((code, vol))
+            vol = float(returns.std())   # ddof=0,与原总体方差口径一致
+            candidates.append((c, vol))
 
         # Lowest volatility first
         candidates.sort(key=lambda x: x[1])
-        return [code for code, _ in candidates[:stock_num]]
+        return [c for c, _ in candidates[:stock_num]]

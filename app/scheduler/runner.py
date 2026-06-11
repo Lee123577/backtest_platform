@@ -26,6 +26,10 @@ logger = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parent.parent.parent  # 项目根
 _PY = sys.executable  # 用当前 Python（venv 友好）
 _TAIL_CHARS = 4000
+# 每日自动重试上限(cron 路径):失败/超时达到次数后当天不再重跑,
+# 避免 daily_update 持续失败时每 5 分钟唤醒就满负荷重抓一整晚。
+# 手动触发(/api/tasks/{name}/run)不受限。registry 可按任务覆盖。
+DEFAULT_MAX_RETRIES_PER_DAY = 3
 
 
 # ── schedule 解析 ──────────────────────────────────────────────────────────
@@ -201,6 +205,16 @@ def run_due() -> List[dict]:
 
         # 今天已经成功过 → 跳过（cron 5 分钟唤醒一次，这是幂等关键）
         if db.already_ran_today(name, today, status="success"):
+            continue
+
+        # 今日失败熔断:同任务当日 failed/timeout 次数达上限后,不再用 cron 重试
+        # (手动触发仍走 run_one 不受限)。避免 daily_update 持续异常时
+        # 每 5 分钟唤醒就满负荷重抓一整晚。
+        max_retries = spec.get("max_retries_per_day", DEFAULT_MAX_RETRIES_PER_DAY)
+        fail_count = db.count_failures_today(name, today)
+        if fail_count >= max_retries:
+            logger.info("[%s] 今日已失败 %d 次(上限 %d),当天不再重试",
+                        name, fail_count, max_retries)
             continue
 
         # 同名任务还在跑 → 跳过（避免 cron 5 分钟唤醒时撞上仍在执行的长任务，

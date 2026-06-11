@@ -43,25 +43,48 @@ def _load_factor_values(factor_name: str, start_date: str, end_date: str) -> pd.
     return df
 
 
-def _load_future_returns(start_date: str, end_date: str, horizon: int) -> pd.DataFrame:
+def _load_future_returns(
+    start_date: str, end_date: str, horizon: int,
+    codes: list | None = None,
+) -> pd.DataFrame:
     """
     拉 stock_kline 算 T 日的"未来 N 日收益" = close[T+N] / close[T] - 1。
     需要拉到 end_date + N*1.5 天确保有未来数据。
+
+    codes: 限定股票集合(分批 IN 查询)。不传则全市场 —— 几年区间会把数百万行
+    拉进 pandas,小内存服务器有 OOM 风险,调用方应尽量传"有因子值的 code"。
     """
     from datetime import timedelta
     pad_end = (datetime.strptime(end_date, "%Y-%m-%d").date()
                + timedelta(days=int(horizon * 1.5) + 10)).strftime("%Y-%m-%d")
 
     conn = _get_pool()
-    sql = """
-        SELECT code, trade_date, close
-        FROM stock_kline
-        WHERE trade_date >= %s AND trade_date <= %s
-        ORDER BY code, trade_date
-    """
-    with conn.cursor() as cur:
-        cur.execute(sql, (start_date, pad_end))
-        rows = cur.fetchall()
+    rows: list = []
+    if codes:
+        BATCH = 500
+        for i in range(0, len(codes), BATCH):
+            batch = list(codes[i: i + BATCH])
+            placeholders = ",".join(["%s"] * len(batch))
+            sql = f"""
+                SELECT code, trade_date, close
+                FROM stock_kline
+                WHERE code IN ({placeholders})
+                  AND trade_date >= %s AND trade_date <= %s
+                ORDER BY code, trade_date
+            """
+            with conn.cursor() as cur:
+                cur.execute(sql, (*batch, start_date, pad_end))
+                rows.extend(cur.fetchall())
+    else:
+        sql = """
+            SELECT code, trade_date, close
+            FROM stock_kline
+            WHERE trade_date >= %s AND trade_date <= %s
+            ORDER BY code, trade_date
+        """
+        with conn.cursor() as cur:
+            cur.execute(sql, (start_date, pad_end))
+            rows = cur.fetchall()
     if not rows:
         return pd.DataFrame(columns=["code", "trade_date", "future_ret"])
 
@@ -91,7 +114,10 @@ def compute_ic_series(
     if factors.empty:
         return pd.DataFrame(columns=["trade_date", "ic", "n_stocks"])
 
-    returns = _load_future_returns(start_date, end_date, horizon)
+    # 只拉"有因子值的 code"的 K 线 —— 全市场全量拉会撑爆小内存服务器
+    factor_codes = sorted(factors["code"].astype(str).unique())
+    returns = _load_future_returns(start_date, end_date, horizon,
+                                   codes=factor_codes)
     if returns.empty:
         return pd.DataFrame(columns=["trade_date", "ic", "n_stocks"])
 

@@ -413,6 +413,7 @@ async function runPortfolioBacktest() {
     point_in_time: document.getElementById('pPointInTime').checked,
     allow_boards: boards,
     exclude_st: document.getElementById('pExcludeSt').checked,
+    benchmark_code: document.getElementById('pBenchmark').value || null,
   };
 
   const runBtn = document.getElementById('runPortfolioBtn');

@@ -116,16 +116,22 @@
       <div>
         <div class="form-row">
           <div class="form-group">
+            <label>策略</label>
+            <select id="strategy" style="width:100%"></select>
+          </div>
+        </div>
+
+        <div class="form-row" id="codeRow">
+          <div class="form-group">
             <label>股票代码</label>
             <input type="text" id="code" placeholder="如 000001" maxlength="6" value="000001">
           </div>
         </div>
-
-        <div class="form-row">
-          <div class="form-group">
-            <label>策略</label>
-            <select id="strategy" style="width:100%"></select>
-          </div>
+        <div id="portfolioHint" style="display:none;font-size:11px;color:var(--txt2);
+             background:var(--bg2);border-radius:4px;padding:8px 12px;margin-bottom:8px;line-height:1.6;">
+          组合策略基于<b>全市场 PIT 股票池</b>(按参数网格里最宽的市值区间取并集)寻优,
+          无需股票代码。需下载候选股行情,首次运行可能 <b>3~10 分钟</b>;
+          建议先用较短区间 + 小参数网格试跑。
         </div>
 
         <div class="form-row">

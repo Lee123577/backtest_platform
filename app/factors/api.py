@@ -4,6 +4,7 @@
 - GET  /api/factors                       — 列出所有注册因子
 - POST /api/factors/{name}/compute        — 计算并入库（指定日期区间）
 - GET  /api/factors/{name}/ic             — IC 序列 + 汇总 + 月度热图
+- GET  /api/factors/{name}/groups         — 分组收益(分层回测)
 """
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from .base import FactorRegistry, ensure_factor_value_table, save_factor_values
+from .grouping import compute_group_returns
 from .ic import compute_ic_series, monthly_ic_heatmap, summarize_ic
 
 logger = logging.getLogger(__name__)
@@ -111,3 +113,33 @@ def factor_ic(
         "series": series_out,
         "monthly_heatmap": heatmap,
     }
+
+
+@router.get("/{factor_name}/groups")
+def factor_groups(
+    factor_name: str,
+    start_date: str,
+    end_date: str,
+    n_groups: int = 5,
+    horizon: int = 20,
+):
+    """
+    分组收益(分层回测):按因子值把截面分成 n_groups 组,每组等权持有
+    horizon 个交易日,返回各组净值曲线 + 多空(Qn-Q1)+ 单调性。
+    """
+    if not (2 <= n_groups <= 10):
+        raise HTTPException(400, "n_groups 需在 2 ~ 10 之间")
+    if not (1 <= horizon <= 120):
+        raise HTTPException(400, "horizon 需在 1 ~ 120 之间")
+
+    try:
+        FactorRegistry.get(factor_name)  # 校验已注册
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+
+    try:
+        return compute_group_returns(factor_name, start_date, end_date,
+                                     n_groups=n_groups, horizon=horizon)
+    except Exception as e:
+        logger.exception(f"分组收益计算失败 {factor_name}")
+        raise HTTPException(500, f"分组收益计算失败: {e}")

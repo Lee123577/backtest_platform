@@ -133,6 +133,13 @@ def ensure_tables() -> None:
         ("last_dividend_check_date",
          "DATE NULL COMMENT '上次扫描除权事件到的日期(NULL→用 buy_date)'"),
     ])
+    # paper_account 加 pending_actions:T 日收盘后生成的挂单(调仓买卖/止损),
+    # 次日开盘价成交 —— 模拟盘 T+1 成交模型的核心存储
+    _migrate_table_columns(conn, "paper_account", [
+        ("pending_actions",
+         "TEXT NULL COMMENT '次日开盘待执行挂单(JSON):"
+         "{decided_on,rebalance,buy,buy_meta,stop_loss}'"),
+    ])
     logger.info("paper_trading 表已就绪")
 
 
@@ -219,6 +226,41 @@ def update_strategy_params(patch: Dict[str, Any]) -> Dict[str, Any]:
         )
     logger.info("策略参数已更新: %s", current)
     return current
+
+
+def get_pending_actions() -> Optional[Dict[str, Any]]:
+    """
+    读取待执行挂单(JSON)。无挂单 / 账户不存在 / 解析失败 → None。
+    schema: {"decided_on": "YYYY-MM-DD", "rebalance": bool,
+             "buy": [code], "buy_meta": {code: {"name","market_cap"}},
+             "stop_loss": [code]}
+    """
+    acc = get_account()
+    if not acc:
+        return None
+    raw = acc.get("pending_actions")
+    if not raw:
+        return None
+    if isinstance(raw, (bytes, bytearray)):
+        raw = raw.decode("utf-8")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            logger.warning("pending_actions JSON 解析失败,按无挂单处理: %r", raw[:200])
+            return None
+    return raw if isinstance(raw, dict) else None
+
+
+def set_pending_actions(pending: Optional[Dict[str, Any]]) -> None:
+    """写入/清空挂单。pending=None → 置 NULL。"""
+    conn = _get_pool()
+    conn.ping(reconnect=True)
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE paper_account SET pending_actions=%s WHERE id=1",
+            (json.dumps(pending, ensure_ascii=False) if pending else None,),
+        )
 
 
 def update_account(

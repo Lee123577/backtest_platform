@@ -15,15 +15,6 @@ import pandas as pd
 from .portfolio_base import PortfolioBaseStrategy
 
 
-def _estimate_hist_cap(row, hist_close: float) -> float:
-    """Proportional market cap estimate given a historical close price."""
-    cur_cap = float(row["market_cap"])
-    cur_price = float(row["price"])
-    if cur_price <= 0 or hist_close <= 0:
-        return -1.0
-    return cur_cap * hist_close / cur_price
-
-
 class MomentumStrategy(PortfolioBaseStrategy):
     name = "动量策略"
     description = (
@@ -83,34 +74,34 @@ class MomentumStrategy(PortfolioBaseStrategy):
         skip = self.params["skip_days"]
         stock_num = self.params["stock_num"]
         needed = lookback + skip + 1  # minimum price history required
+        if ref_data is None or ref_data.empty:
+            return []
+
+        # 市值过滤向量化(原 iterrows 是热点);动量窗口需逐 code 取
+        # rolling_prices 列表,只对过滤后的小集合循环
+        code = ref_data["code"].astype(str)
+        price = pd.to_numeric(ref_data["price"], errors="coerce")
+        cap = pd.to_numeric(ref_data["market_cap"], errors="coerce")
+        hist_close = code.map(close_lookup)   # suspended today → NaN → 掩掉
+        hist_cap = cap * hist_close / price
+        mask = (
+            hist_close.notna() & (hist_close > 0)
+            & price.notna() & (price > 0)
+            & hist_cap.between(cap_min, cap_max)
+        )
 
         candidates = []
-        for _, row in ref_data.iterrows():
-            code = str(row["code"])
-            if code not in close_lookup:
-                continue  # suspended today
-
-            hist_close = close_lookup[code]
-
-            # Market cap filter
-            hist_cap = _estimate_hist_cap(row, hist_close)
-            if not (cap_min <= hist_cap <= cap_max):
-                continue
-
-            # Momentum requires sufficient history
-            prices = rolling_prices.get(code, [])
+        for c in code[mask]:
+            prices = rolling_prices.get(c, [])
             if len(prices) < needed:
                 continue
-
             # Return from (lookback+skip) days ago to skip days ago
-            price_end = prices[-(skip + 1)] if skip >= 0 else prices[-1]
+            price_end = prices[-(skip + 1)]
             price_start = prices[-(lookback + skip + 1)]
             if price_start <= 0:
                 continue
-
-            momentum = (price_end - price_start) / price_start
-            candidates.append((code, momentum))
+            candidates.append((c, (price_end - price_start) / price_start))
 
         # Highest momentum first
         candidates.sort(key=lambda x: x[1], reverse=True)
-        return [code for code, _ in candidates[:stock_num]]
+        return [c for c, _ in candidates[:stock_num]]

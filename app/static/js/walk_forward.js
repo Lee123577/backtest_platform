@@ -5,9 +5,11 @@
   // 默认 end_date = 今天
   $('endDate').value = new Date().toISOString().slice(0, 10);
 
-  let strategies = [];   // 单股策略列表（来自 /api/strategies）
+  let strategies = [];   // 全部策略（单股 + 组合,来自 /api/strategies）
   let curStrategy = null;
   let scatter = null;
+
+  const isPortfolio = (s) => s && s.strategy_type === 'portfolio';
 
   // ── Utils ────────────────────────────────────────────────────────────────
 
@@ -36,15 +38,16 @@
     try {
       const res = await fetch('/api/strategies');
       const data = await res.json();
-      // 只保留 signal 型（单股），portfolio 不在 walk_forward API 支持
-      strategies = (Array.isArray(data) ? data : data.strategies || [])
-        .filter(s => s.strategy_type === 'signal' || s.params);
+      strategies = (Array.isArray(data) ? data : data.strategies || []);
+      const signal = strategies.filter(s => s.strategy_type === 'signal');
+      const portfolio = strategies.filter(s => s.strategy_type === 'portfolio');
+      const opt = s => `<option value="${s.id}">${s.name || s.id}</option>`;
       const sel = $('strategy');
-      sel.innerHTML = strategies.map(s =>
-        `<option value="${s.id}">${s.name || s.id}</option>`
-      ).join('');
+      sel.innerHTML =
+        `<optgroup label="单股策略">${signal.map(opt).join('')}</optgroup>` +
+        `<optgroup label="组合策略（全市场选股）">${portfolio.map(opt).join('')}</optgroup>`;
       sel.addEventListener('change', () => onStrategyChange(sel.value));
-      if (strategies.length) onStrategyChange(strategies[0].id);
+      if (signal.length) onStrategyChange(signal[0].id);
     } catch (e) {
       toast(`加载策略失败: ${e.message}`, 'error');
     }
@@ -53,6 +56,10 @@
   function onStrategyChange(id) {
     curStrategy = strategies.find(s => s.id === id);
     if (!curStrategy) return;
+    // 组合策略不需要股票代码,显示说明
+    const pf = isPortfolio(curStrategy);
+    $('codeRow').style.display = pf ? 'none' : '';
+    $('portfolioHint').style.display = pf ? '' : 'none';
     renderParamGrid();
   }
 
@@ -135,16 +142,16 @@
   // ── 提交运行 ─────────────────────────────────────────────────────────────
 
   async function runWF() {
-    const code = $('code').value.trim();
-    if (!code) { toast('请输入股票代码', 'error'); return; }
     if (!curStrategy) { toast('请选择策略', 'error'); return; }
+    const pf = isPortfolio(curStrategy);
+    const code = $('code').value.trim();
+    if (!pf && !code) { toast('请输入股票代码', 'error'); return; }
     const grid = collectParamGrid();
     if (!Object.keys(grid).length) {
       toast('参数网格为空', 'error'); return;
     }
 
     const body = {
-      code,
       strategy_id: curStrategy.id,
       param_grid: grid,
       start_date: $('startDate').value,
@@ -153,8 +160,11 @@
       oos_days: parseInt($('oosDays').value),
       objective: $('objective').value,
     };
+    if (!pf) body.code = code;
 
-    setStatus('运行中…（按窗口数和参数组合数可能 1-5 分钟）');
+    setStatus(pf
+      ? '运行中…（组合策略需下载全市场行情，可能 3-10 分钟，请勿关闭页面）'
+      : '运行中…（按窗口数和参数组合数可能 1-5 分钟）');
     $('runBtn').disabled = true;
     $('warnZone').innerHTML = '';
 

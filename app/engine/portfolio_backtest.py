@@ -4,8 +4,11 @@ Portfolio backtesting engine for universe-selection strategies.
 Trade mechanics:
   - On rebalance day N:
       1. Select stocks using prices UP TO day N-1 (no look-ahead bias)
-      2. Sell all positions at day N open
-      3. Buy new selection at day N open
+      2. Sell all positions at day N open（开盘跌停的旧仓卖不掉 → 留存）
+      3. Buy new selection at day N open（开盘涨停的买不进 → 跳过；
+         留存旧仓继续占仓位,新买数量缩减到 stock_num - 留存数,保持总仓位 ≈ N 只等权）
+  - Stop-loss: 收盘触发 → **次日开盘**卖出（与单股引擎/模拟盘同口径,
+    同时天然满足 A 股 T+1:当日开盘买入的仓位最早次日才会被止损卖出）
   - Non-rebalance days: hold, record equity at close
   - Costs: commission (both sides) + stamp tax (sell side only)
   - Lot size: 100-share lots (A-share standard)
@@ -17,12 +20,12 @@ Rolling price history:
 import logging
 from collections import defaultdict
 from decimal import Decimal
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
 from ..data.filters import board_of
-from ..data.universe import eligible_codes_at
+from ..data.universe import load_listing_dates
 from ..strategies.portfolio_base import PortfolioBaseStrategy
 from .fees import COMMISSION_RATE, MIN_COMMISSION, SLIPPAGE_RATE, STAMP_TAX_RATE
 from .metrics import compute_risk_metrics
@@ -31,13 +34,37 @@ from .money import D, ONE, ZERO, round_cent, to_float_cent
 logger = logging.getLogger(__name__)
 
 
+def _board_limit_pct(code: str) -> float:
+    """板块涨跌停幅度:创业板/科创板/北交所 20%,主板 10%(ST 不单独处理,容差已覆盖)。"""
+    return 20.0 if board_of(code) in ("gem", "star", "bj") else 10.0
+
+
 def _limit_up_at_open(code: str, open_px: float, prev_close: float) -> bool:
-    """开盘是否已封涨停(开盘价相对昨收涨幅 ≥ 板块涨停-0.3% 容差)→ 买不进。
-    创业板/科创板/北交所 20%,主板 10%(ST 不单独处理,容差已覆盖)。"""
+    """开盘是否已封涨停(开盘价相对昨收涨幅 ≥ 板块涨停-0.3% 容差)→ 买不进。"""
     if prev_close <= 0 or open_px <= 0:
         return False
-    limit = 20.0 if board_of(code) in ("gem", "star", "bj") else 10.0
-    return (open_px / prev_close - 1.0) * 100.0 >= limit - 0.3
+    return (open_px / prev_close - 1.0) * 100.0 >= _board_limit_pct(code) - 0.3
+
+
+def _limit_down_at_open(code: str, open_px: float, prev_close: float) -> bool:
+    """开盘是否已封跌停(开盘价相对昨收跌幅 ≤ -(板块跌停-0.3%) 容差)→ 卖不出。"""
+    if prev_close <= 0 or open_px <= 0:
+        return False
+    return (open_px / prev_close - 1.0) * 100.0 <= -(_board_limit_pct(code) - 0.3)
+
+
+def _eligible_on(code: str, d, listing: Dict[str, Tuple]) -> bool:
+    """按预加载的 stock_info 上市/退市日判断 d 日是否可交易。
+    不在 stock_info 里的 code 保守保留(与 universe.eligible_codes_at 同语义)。"""
+    ld = listing.get(code)
+    if ld is None:
+        return True
+    list_date, delist_date = ld
+    if list_date is not None and list_date > d:
+        return False          # 还没上市
+    if delist_date is not None and delist_date <= d:
+        return False          # 已退市
+    return True
 
 
 def run_portfolio_backtest(
@@ -50,12 +77,16 @@ def run_portfolio_backtest(
     stamp_tax_rate: float = STAMP_TAX_RATE,
     slippage_rate: float = SLIPPAGE_RATE,
     hist_market_caps: Dict[str, Dict[str, float]] = None,  # {code: {date_str: market_cap}}
+    listing_dates: Optional[Dict[str, Tuple]] = None,      # {code: (list_date, delist_date)}
 ) -> Dict[str, Any]:
 
     hold_days: int = int(strategy.params.get("hold_days", 5))
     # 止损阈值（百分比），0 或缺省视为关闭
     stop_loss_pct: float = float(strategy.params.get("stop_loss_pct", 0) or 0)
     stop_loss_ratio: float = stop_loss_pct / 100.0
+    # 等权目标仓位数:留存旧仓时用它缩减新买数量。策略没有 stock_num 参数时
+    # 退化为"买满本期选出的全部",与旧行为一致
+    target_positions: int = int(strategy.params.get("stock_num", 0) or 0)
 
     # ── Build sorted trading-day index ───────────────────────────────────────
     all_dates = sorted(set(
@@ -95,6 +126,9 @@ def run_portfolio_backtest(
     holdings_log: List[dict] = []
     day_counter = 0
 
+    # 昨日收盘触发止损、等今日开盘卖出的代码集合(T+1 口径)
+    pending_stop: set = set()
+
     # rolling_prices[code] = chronological list of close prices UP TO yesterday.
     # Updated at the END of each day loop iteration.
     rolling_prices: Dict[str, List[float]] = defaultdict(list)
@@ -105,8 +139,48 @@ def run_portfolio_backtest(
     # unrealistic equity dip on suspension days).
     last_close: Dict[str, float] = {}
 
+    # ── 幸存者偏差过滤数据:开始时一次性预加载上市/退市日(原来每个调仓日
+    #    查 2 次 DB,5 年周频回测 ≈ 500 次查询) ───────────────────────────────
+    if listing_dates is None:
+        try:
+            listing_dates = load_listing_dates(list(price_data.keys()))
+        except Exception as e:
+            logger.warning(f"load_listing_dates 失败,跳过上市/退市过滤: {e}")
+            listing_dates = {}
+
     for _i, date in enumerate(all_dates):
         day_prices = price_lookup.get(date, {})
+
+        # ── 昨日收盘触发的止损 → 今日开盘卖出(T+1,与单股引擎/模拟盘同口径)──
+        if pending_stop:
+            to_exec = sorted(pending_stop)
+            pending_stop.clear()
+            for code in to_exec:
+                shares = holdings.get(code, 0)
+                if shares <= 0:
+                    continue
+                px = day_prices.get(code)
+                if not px or px["open"] <= 0:
+                    continue  # 停牌卖不出;收盘若仍低于阈值会重新触发
+                if _limit_down_at_open(code, px["open"], last_close.get(code, 0.0)):
+                    continue  # 开盘跌停卖不掉,留待收盘重评估
+                sell_price_d = D(px["open"]) * slippage_sell
+                revenue = D(shares) * sell_price_d
+                comm = max(revenue * commission_rate_d, min_commission_d)
+                tax = revenue * stamp_tax_rate_d
+                capital = round_cent(capital + revenue - comm - tax)
+                trades.append({
+                    "date": str(date.date()),
+                    "type": "止损卖出",
+                    "code": code,
+                    "price": round(float(sell_price_d), 3),
+                    "shares": shares,
+                    "amount": to_float_cent(revenue),
+                    "commission": to_float_cent(comm + tax),
+                    "capital": float(capital),
+                })
+                del holdings[code]
+                buy_prices.pop(code, None)
 
         if day_counter % hold_days == 0:
             # ── Selection uses YESTERDAY'S closes (no look-ahead bias) ──────
@@ -118,29 +192,37 @@ def run_portfolio_backtest(
                 close_for_selection[code] = hist[-1] if hist else day_prices[code]["open"]
 
             # ── Sell all current positions at today's OPEN ──────────────────
-            # Suspended stocks (no day_prices entry) cannot be sold today;
-            # keep them in holdings so they liquidate on the next available bar.
+            # 卖不出去的两类旧仓**留存**到下次(README 撮合规则):
+            #   1. 停牌(无 day_prices 行)
+            #   2. 开盘跌停(_limit_down_at_open)——小市值策略常见,不留存会
+            #      让回测系统性乐观(假设跌停也能照常卖出)
             kept: Dict[str, int] = {}
             for code, shares in list(holdings.items()):
-                if code in day_prices and shares > 0:
-                    sell_price_d = D(day_prices[code]["open"]) * slippage_sell
-                    revenue = D(shares) * sell_price_d
-                    comm = max(revenue * commission_rate_d, min_commission_d)
-                    tax = revenue * stamp_tax_rate_d
-                    capital = round_cent(capital + revenue - comm - tax)
-                    trades.append({
-                        "date": str(date.date()),
-                        "type": "卖出",
-                        "code": code,
-                        "price": round(float(sell_price_d), 3),
-                        "shares": shares,
-                        "amount": to_float_cent(revenue),
-                        "commission": to_float_cent(comm + tax),
-                        "capital": float(capital),
-                    })
-                    buy_prices.pop(code, None)
-                elif shares > 0:
+                if shares <= 0:
+                    continue
+                px = day_prices.get(code)
+                if not px:
                     kept[code] = shares  # suspended; carry over
+                    continue
+                if _limit_down_at_open(code, px["open"], last_close.get(code, 0.0)):
+                    kept[code] = shares  # 开盘跌停卖不掉,留存(保留 buy_prices 供止损)
+                    continue
+                sell_price_d = D(px["open"]) * slippage_sell
+                revenue = D(shares) * sell_price_d
+                comm = max(revenue * commission_rate_d, min_commission_d)
+                tax = revenue * stamp_tax_rate_d
+                capital = round_cent(capital + revenue - comm - tax)
+                trades.append({
+                    "date": str(date.date()),
+                    "type": "卖出",
+                    "code": code,
+                    "price": round(float(sell_price_d), 3),
+                    "shares": shares,
+                    "amount": to_float_cent(revenue),
+                    "commission": to_float_cent(comm + tax),
+                    "capital": float(capital),
+                })
+                buy_prices.pop(code, None)
             holdings = kept
 
             # ── 构建当日 ref_data（优先使用历史真实市值）──────────────────
@@ -179,18 +261,18 @@ def run_portfolio_backtest(
             # ── 幸存者偏差防护：过滤掉当日未上市/已退市的股 ────────────────
             # universe_df 是基于"当前"市值生成的，包含将来才上市的股；
             # 也包含已退市但 stock_kline 还有历史数据的股。在每个 rebalance
-            # 日按 stock_info.list_date/delist_date 二次过滤。
-            try:
-                eligible = eligible_codes_at(ref_data_today["code"].tolist(), date)
+            # 日按预加载的 stock_info.list_date/delist_date 二次过滤(纯内存)。
+            if listing_dates:
+                d = date.date()
                 pre_n = len(ref_data_today)
-                ref_data_today = ref_data_today[ref_data_today["code"].isin(eligible)]
+                mask = ref_data_today["code"].map(
+                    lambda c: _eligible_on(str(c), d, listing_dates)
+                )
+                ref_data_today = ref_data_today[mask]
                 if pre_n != len(ref_data_today):
                     logger.debug(
                         f"{date_str} 幸存者偏差过滤: {pre_n} → {len(ref_data_today)}"
                     )
-            except Exception as e:
-                # 数据库不可用时不阻断回测，但记 WARN
-                logger.warning(f"{date_str} eligible_codes_at 失败，跳过过滤: {e}")
 
             # ── Let strategy choose new stocks ──────────────────────────────
             new_stocks = strategy.select_stocks(
@@ -198,6 +280,13 @@ def run_portfolio_backtest(
             )
             # Only keep codes that actually traded today
             new_stocks = [s for s in new_stocks if s in day_prices]
+            # 留存旧仓(停牌/跌停没卖出去的)继续占仓位:
+            #   1. 已留存的代码不重复买(避免覆盖旧仓 shares)
+            #   2. 新买数量缩减到 target_positions - 留存数,保持总仓位 ≈ N 只等权
+            #      (与模拟盘 runner 同口径)
+            if holdings:
+                slots_left = max(0, (target_positions or len(new_stocks)) - len(holdings))
+                new_stocks = [s for s in new_stocks if s not in holdings][:slots_left]
 
             # ── Buy equal-weight at today's OPEN ────────────────────────────
             if new_stocks and capital > ZERO:
@@ -212,37 +301,38 @@ def run_portfolio_backtest(
                     if buy_price_d <= ZERO:
                         continue
                     shares = int(cash_per / (buy_price_d * D(100))) * 100
-                    if shares <= 0:
-                        continue
                     cost = D(shares) * buy_price_d
                     comm = max(cost * commission_rate_d, min_commission_d)
-                    if cost + comm <= capital:
-                        # Suspended (kept) stocks cannot be in new_stocks because
-                        # they're filtered out at line above (not in day_prices),
-                        # so a plain assignment is safe and avoids any chance of
-                        # accidental double-allocation if a strategy ever returns
-                        # duplicates or the rebalance-sell logic changes.
-                        holdings[code] = shares
-                        buy_prices[code] = float(buy_price_d)
-                        capital = round_cent(capital - cost - comm)
-                        bought.append(code)
-                        trades.append({
-                            "date": str(date.date()),
-                            "type": "买入",
-                            "code": code,
-                            "price": round(float(buy_price_d), 3),
-                            "shares": shares,
-                            "amount": to_float_cent(cost),
-                            "commission": to_float_cent(comm),
-                            "capital": float(capital),
-                        })
+                    # 等权预算未给手续费留头寸:cash_per 整除价格时(无整手零头)
+                    # cost+comm 会超出剩余资金,导致整只股买不进 → 减一手补救
+                    while shares > 0 and cost + comm > capital:
+                        shares -= 100
+                        cost = D(shares) * buy_price_d
+                        comm = max(cost * commission_rate_d, min_commission_d)
+                    if shares <= 0:
+                        continue
+                    holdings[code] = shares
+                    buy_prices[code] = float(buy_price_d)
+                    capital = round_cent(capital - cost - comm)
+                    bought.append(code)
+                    trades.append({
+                        "date": str(date.date()),
+                        "type": "买入",
+                        "code": code,
+                        "price": round(float(buy_price_d), 3),
+                        "shares": shares,
+                        "amount": to_float_cent(cost),
+                        "commission": to_float_cent(comm),
+                        "capital": float(capital),
+                    })
                 if bought:
                     holdings_log.append({"date": str(date.date()), "stocks": bought})
 
-        # ── 止损：当日收盘相对买入价跌幅达到阈值即按收盘价卖出 ────────────
+        # ── 止损评估：当日收盘相对买入价跌幅达到阈值 → 挂单**次日开盘**卖出 ──
+        # 收盘才知道触发,按当日收盘成交是未来函数;改为次日开盘成交后,
+        # 当日开盘买入的仓位也不会当日卖出(满足 A 股 T+1)。
         if stop_loss_ratio > 0 and holdings:
-            for code in list(holdings.keys()):
-                shares = holdings[code]
+            for code, shares in holdings.items():
                 if shares <= 0 or code not in day_prices or code not in buy_prices:
                     continue
                 close_px = day_prices[code]["close"]
@@ -250,23 +340,7 @@ def run_portfolio_backtest(
                 if cost_px <= 0:
                     continue
                 if (close_px - cost_px) / cost_px <= -stop_loss_ratio:
-                    sell_price_d = D(close_px) * slippage_sell
-                    revenue = D(shares) * sell_price_d
-                    comm = max(revenue * commission_rate_d, min_commission_d)
-                    tax = revenue * stamp_tax_rate_d
-                    capital = round_cent(capital + revenue - comm - tax)
-                    trades.append({
-                        "date": str(date.date()),
-                        "type": "止损卖出",
-                        "code": code,
-                        "price": round(float(sell_price_d), 3),
-                        "shares": shares,
-                        "amount": to_float_cent(revenue),
-                        "commission": to_float_cent(comm + tax),
-                        "capital": float(capital),
-                    })
-                    del holdings[code]
-                    buy_prices.pop(code, None)
+                    pending_stop.add(code)
 
         # ── Daily equity at CLOSE ─────────────────────────────────────────────
         # For suspended stocks, fall back to last known close so the equity

@@ -70,25 +70,25 @@ class SmallCapStrategy(PortfolioBaseStrategy):
         cap_min = self.params["cap_min"]
         cap_max = self.params["cap_max"]
         stock_num = self.params["stock_num"]
+        if ref_data is None or ref_data.empty:
+            return []
 
-        candidates = []
-        for _, row in ref_data.iterrows():
-            code = str(row["code"])
-            cur_cap = float(row["market_cap"])    # 亿元
-            cur_price = float(row["price"])        # 元
+        # 向量化(原 iterrows 在几千行 × 每个调仓日上是热点)
+        code = ref_data["code"].astype(str)
+        price = pd.to_numeric(ref_data["price"], errors="coerce")
+        cap = pd.to_numeric(ref_data["market_cap"], errors="coerce")
+        hist_close = code.map(close_lookup)   # 不在 close_lookup → NaN → 被掩掉
 
-            if code not in close_lookup or cur_price <= 0:
-                continue
-
-            hist_close = close_lookup[code]
-            if hist_close <= 0:
-                continue
-
-            # Proportional estimate of historical market cap
-            hist_cap = cur_cap * hist_close / cur_price
-
-            if cap_min <= hist_cap <= cap_max:
-                candidates.append((code, hist_cap))
-
-        candidates.sort(key=lambda x: x[1])
-        return [code for code, _ in candidates[:stock_num]]
+        # Proportional estimate of historical market cap
+        hist_cap = cap * hist_close / price
+        mask = (
+            hist_close.notna() & (hist_close > 0)
+            & price.notna() & (price > 0)
+            & hist_cap.between(cap_min, cap_max)
+        )
+        picked = (
+            pd.DataFrame({"code": code[mask], "hist_cap": hist_cap[mask]})
+            .sort_values("hist_cap", kind="stable")   # 稳定排序,保持原平局顺序
+            .head(stock_num)
+        )
+        return picked["code"].tolist()

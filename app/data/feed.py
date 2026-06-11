@@ -210,20 +210,8 @@ class AkshareDataFeed(DataFeed):
         raise ValueError(f"获取行情数据失败：{code}\n  {detail}")
 
     def get_stock_name(self, code: str) -> str:
-        # First try: the daily universe snapshot (populated by portfolio mode)
-        try:
-            from datetime import date as _date
-            snap = CACHE_DIR / f"universe_snapshot_{_date.today().strftime('%Y%m%d')}.csv"
-            if snap.exists():
-                import pandas as _pd
-                df = _pd.read_csv(snap, dtype={"code": str})
-                row = df[df["code"] == code]
-                if not row.empty:
-                    return str(row.iloc[0]["name"])
-        except Exception:
-            pass
-
-        # Fallback: eastmoney individual info (may be blocked)
+        # 历史曾先读 universe_snapshot_*.csv 缓存,该 CSV 层已废弃
+        # (market_universe_snapshot 表替代);简称直接走 akshare 查询。
         for caller in [
             lambda: _remove_proxy(ak.stock_individual_info_em, symbol=code),
             lambda: ak.stock_individual_info_em(symbol=code),

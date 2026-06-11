@@ -66,6 +66,10 @@ def insert_run(
     conn = _get_pool()
     if conn is None:
         return None
+    # trigger_type 列是 ENUM('cron','manual') —— "manual-force" 等扩展值
+    # 在严格 sql_mode 下会直接报错,归一到 'manual'
+    if trigger_type not in ("cron", "manual"):
+        trigger_type = "manual"
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -120,6 +124,24 @@ def already_ran_today(task_name: str, today: _Date, status: str = "success") -> 
             (task_name, today, status),
         )
         return cur.fetchone() is not None
+
+
+def count_failures_today(task_name: str, today: _Date) -> int:
+    """今日 failed/timeout 的次数 —— run_due 用它做"每日最大重试"熔断。"""
+    conn = _get_pool()
+    if conn is None:
+        return 0
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT COUNT(*) AS n FROM task_run_log
+            WHERE task_name=%s AND DATE(started_at)=%s
+              AND status IN ('failed','timeout')
+            """,
+            (task_name, today),
+        )
+        row = cur.fetchone()
+    return int(row["n"]) if row else 0
 
 
 def has_running(task_name: str, within_minutes: int = 120) -> Optional[Dict[str, Any]]:

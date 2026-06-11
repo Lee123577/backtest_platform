@@ -66,9 +66,9 @@ def test_benchmark_buy_and_hold(rising_ohlcv):
 # ── 组合 ──────────────────────────────────────────────────────────────────────
 
 def _setup_portfolio(monkeypatch):
-    """禁用 eligible_codes_at 的 DB 查询(测试不连库)。"""
+    """禁用 load_listing_dates 的 DB 查询(测试不连库,空 map = 跳过过滤)。"""
     import app.engine.portfolio_backtest as pbt
-    monkeypatch.setattr(pbt, "eligible_codes_at", lambda codes, d: list(codes))
+    monkeypatch.setattr(pbt, "load_listing_dates", lambda codes: {})
 
 
 def test_portfolio_force_close_recorded(monkeypatch):

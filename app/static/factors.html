@@ -41,9 +41,20 @@
     .stat-card.bad  { border-left-color: var(--red); }
     .stat-card.warn { border-left-color: var(--warn); }
 
-    #icChart, #heatmapChart { width: 100%; }
+    #icChart, #heatmapChart, #groupChart { width: 100%; }
     #icChart { height: 280px; }
     #heatmapChart { height: 320px; }
+    #groupChart { height: 320px; }
+    .group-stats-tbl {
+      width: 100%; font-size: 12px; border-collapse: collapse; margin-top: 8px;
+    }
+    .group-stats-tbl th, .group-stats-tbl td {
+      border-bottom: 1px solid var(--bg2); padding: 4px 8px; text-align: right;
+    }
+    .group-stats-tbl th:first-child, .group-stats-tbl td:first-child { text-align: left; }
+    .group-stats-tbl thead th { background: var(--bg2); font-weight: 600; color: var(--txt2); }
+    .group-stats-tbl .pos { color: var(--green); }
+    .group-stats-tbl .neg { color: var(--red); }
 
     .ic-help {
       font-size: 11px; color: var(--txt2); padding: 8px 12px;
@@ -118,10 +129,15 @@
               <option value="pearson">Pearson</option>
             </select>
           </div>
+          <div class="form-group">
+            <label>分组数</label>
+            <input type="number" id="nGroups" value="5" min="2" max="10" step="1" style="width:70px">
+          </div>
         </div>
 
         <div class="inline-group" style="margin-bottom:14px;gap:8px;">
           <button class="btn btn-primary" id="analyzeBtn">分析 IC</button>
+          <button class="btn btn-primary" id="groupsBtn">分组收益</button>
           <button class="btn btn-outline" id="computeBtn">计算并入库</button>
           <span id="statusText" style="font-size:12px;color:var(--txt2);"></span>
         </div>
@@ -152,8 +168,24 @@
           </div>
         </div>
 
+        <!-- 分组收益（分层回测） -->
+        <div id="groupZone" style="display:none;">
+          <div class="summary-cards" id="groupSummaryCards" style="margin-top:18px;"></div>
+          <div style="font-size:13px;font-weight:600;margin:14px 0 6px;color:var(--txt);">
+            分组净值曲线（每组等权持有 horizon 个交易日）
+          </div>
+          <div id="groupChart"></div>
+          <table class="group-stats-tbl" id="groupStatsTbl"></table>
+          <div class="ic-help">
+            <b>怎么读:</b>
+            Q1 = 因子值最低组 … Qn = 最高组。好因子应呈<b>单调</b>阶梯
+            （单调性接近 +1 或 -1），且<b>多空（Qn-Q1）曲线</b>稳定向上/向下；
+            只有个别组突出而中间乱序，多半是噪声或非线性。
+          </div>
+        </div>
+
         <div id="emptyHint" class="empty-hint">
-          选一个因子，配置参数，点【分析 IC】
+          选一个因子，配置参数，点【分析 IC】或【分组收益】
         </div>
       </div>
     </div>

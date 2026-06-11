@@ -199,7 +199,16 @@ def run_walk_forward(
 
         is_start_idx += step_days
 
-    # ── 汇总 ─────────────────────────────────────────────────────────────────
+    return _summarize(windows, objective, len(combos), warnings)
+
+
+def _summarize(
+    windows: List[WalkForwardWindow],
+    objective: str,
+    n_combos: int,
+    warnings: List[str],
+) -> Dict[str, Any]:
+    """单股 / 组合两个入口共用的窗口汇总(IS/OOS 衰减、参数稳定性、OOS 拼接)。"""
     if not windows:
         return {"windows": [], "summary": {}, "param_stability": {},
                 "warnings": warnings + ["未生成有效窗口（区间过短？）"]}
@@ -240,7 +249,7 @@ def run_walk_forward(
             "oos_avg_metric": round(oos_avg, 4),
             "decay_ratio": round(decay, 3),
             "oos_cumulative_return_pct": round(cum_return, 2),
-            "n_param_combos": len(combos),
+            "n_param_combos": n_combos,
         },
         "param_stability": {
             k: {str(val): cnt for val, cnt in d.items()}
@@ -248,3 +257,135 @@ def run_walk_forward(
         },
         "warnings": warnings,
     }
+
+
+# ── 组合策略 Walk-Forward ────────────────────────────────────────────────────
+
+def run_walk_forward_portfolio(
+    ref_data: pd.DataFrame,
+    price_data: Dict[str, pd.DataFrame],
+    strategy_cls,
+    param_grid: Dict[str, List[Any]],
+    is_days: int = 504,
+    oos_days: int = 126,
+    step_days: int | None = None,
+    objective: str = "sharpe_ratio",
+    initial_capital: float = 100_000,
+    hist_market_caps: Dict[str, Dict[str, float]] | None = None,
+    listing_dates: Dict[str, tuple] | None = None,
+) -> Dict[str, Any]:
+    """
+    组合策略版 walk-forward:数据(universe/价格/历史市值)由调用方一次性取好,
+    这里按窗口切片逐窗 grid search。窗口切分 / 汇总口径与单股版完全一致
+    (交易日整数切窗,IS 选优 → OOS 验证)。
+
+    Args:
+        ref_data / price_data / hist_market_caps / listing_dates:
+            与 run_portfolio_backtest 同义,全程复用(不重复下载)
+        strategy_cls: PortfolioBaseStrategy 子类
+        其余参数同 run_walk_forward
+    """
+    from .portfolio_backtest import run_portfolio_backtest
+
+    step_days = step_days or oos_days
+    warnings: list[str] = []
+    combos = _expand_grid(param_grid)
+    if len(combos) > PARAM_COMBO_WARN_THRESHOLD:
+        warn = (
+            f"⚠️ 参数组合数 {len(combos)} 超过阈值 {PARAM_COMBO_WARN_THRESHOLD}，"
+            "在历史数据上最优化容易过拟合。建议：(1) 缩减参数空间 (2) 用 Walk-Forward "
+            "而非全局优化 (3) 保留 ≥30% 数据做样本外测试。"
+        )
+        logger.warning(warn)
+        warnings.append(warn)
+
+    if not price_data:
+        return {"windows": [], "summary": {}, "param_stability": {},
+                "warnings": warnings + ["输入数据为空"]}
+
+    # 交易日轴 = 所有股票日期的并集(与组合回测引擎同口径)
+    axis = sorted({d for df in price_data.values() for d in df["date"]})
+    n = len(axis)
+
+    def _slice(d0, d1) -> Dict[str, pd.DataFrame]:
+        out = {}
+        for c, df in price_data.items():
+            sub = df[(df["date"] >= d0) & (df["date"] <= d1)]
+            if not sub.empty:
+                out[c] = sub.reset_index(drop=True)
+        return out
+
+    def _evaluate_window(sliced: Dict[str, pd.DataFrame],
+                         params: Dict[str, Any]) -> dict:
+        strategy = strategy_cls(params=params)
+        result = run_portfolio_backtest(
+            ref_data=ref_data,
+            price_data=sliced,
+            strategy=strategy,
+            initial_capital=initial_capital,
+            hist_market_caps=hist_market_caps or None,
+            listing_dates=listing_dates if listing_dates is not None else {},
+        )
+        return result.get("metrics", {})
+
+    windows: List[WalkForwardWindow] = []
+    is_start_idx = 0
+    while True:
+        is_end_idx = is_start_idx + is_days
+        oos_end_idx = is_end_idx + oos_days
+        if oos_end_idx > n:
+            break
+
+        is_axis = axis[is_start_idx:is_end_idx]
+        oos_axis = axis[is_end_idx:oos_end_idx]
+        if len(is_axis) < 30 or len(oos_axis) < 5:
+            is_start_idx += step_days
+            continue
+
+        is_data = _slice(is_axis[0], is_axis[-1])
+        oos_data = _slice(oos_axis[0], oos_axis[-1])
+
+        # ── Grid search on IS ────────────────────────────────────────────
+        best_metric = -float("inf")
+        best_params: Dict[str, Any] = {}
+        for params in combos:
+            try:
+                metrics = _evaluate_window(is_data, params)
+            except Exception as e:
+                logger.debug(f"组合评估失败 params={params}: {e}")
+                continue
+            m = metrics.get(objective)
+            if m is None:
+                continue
+            try:
+                m = float(m)
+            except (TypeError, ValueError):
+                continue
+            if m > best_metric:
+                best_metric = m
+                best_params = params
+
+        if not best_params:
+            is_start_idx += step_days
+            continue
+
+        # ── Evaluate best params on OOS ──────────────────────────────────
+        try:
+            oos_metrics = _evaluate_window(oos_data, best_params)
+        except Exception as e:
+            logger.warning(f"组合 OOS 评估失败 window={is_axis[0]}~{oos_axis[-1]}: {e}")
+            oos_metrics = {}
+
+        windows.append(WalkForwardWindow(
+            is_start=is_axis[0].date(), is_end=is_axis[-1].date(),
+            oos_start=oos_axis[0].date(), oos_end=oos_axis[-1].date(),
+            best_params=best_params,
+            is_metric=float(best_metric),
+            oos_metric=float(oos_metrics.get(objective, 0) or 0),
+            oos_return=float(oos_metrics.get("total_return", 0) or 0),
+            oos_max_dd=float(oos_metrics.get("max_drawdown", 0) or 0),
+        ))
+
+        is_start_idx += step_days
+
+    return _summarize(windows, objective, len(combos), warnings)
