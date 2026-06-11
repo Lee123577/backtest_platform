@@ -17,9 +17,20 @@ from .portfolio_base import PortfolioBaseStrategy
 class LowVolatilityStrategy(PortfolioBaseStrategy):
     name = "低波动策略"
     description = (
-        "在指定市值范围内，选取近期日收益率标准差最低的N只股票，"
-        "低波动因子在A股具有较好的历史有效性。"
+        "在指定市值范围内，等权买入近期日收益率波动最小的 N 只股票。"
+        "低波因子长期稳健、熊市抗跌,但牛市可能跑输高 beta。"
     )
+    detail = {
+        "logic": "每个调仓日,在市值区间内,计算近 vol_window 日的日收益率标准差,"
+                 "选波动最小的 N 只等权买入。",
+        "rebalance": "每隔「调仓周期」个交易日换仓:卖出全部旧持仓,买入当期"
+                     "新选出的 N 只。",
+        "selection": "波动率用截至前一交易日的收益率序列计算(无未来函数);"
+                     "历史不足 vol_window 天的股票跳过。",
+        "risk": "低波动 ≠ 无风险:波动率是回看指标,突发利空/暴雷无法提前规避。"
+                "牛市/题材行情可能明显跑输,适合追求平稳的资金。",
+        "benchmark": "默认对标中证 1000。",
+    }
     strategy_type = "portfolio"
 
     param_schema = {

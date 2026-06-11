@@ -27,9 +27,20 @@ def _estimate_hist_cap(row, hist_close: float) -> float:
 class MomentumStrategy(PortfolioBaseStrategy):
     name = "动量策略"
     description = (
-        "在指定市值范围内，选取近期相对涨幅最强的N只股票定期持有，"
-        "跳过最近若干天以规避短期反转效应。"
+        "在指定市值范围内，等权买入近期涨幅最强的 N 只股票定期持有,"
+        "跳过最近若干天以规避短期反转。趋势行情强,拐点处回撤大。"
     )
+    detail = {
+        "logic": "每个调仓日,在市值区间内,按「跳过最近 skip_days 天后的 "
+                 "lookback 日累计涨幅」从高到低排序,等权买入最强的 N 只。",
+        "rebalance": "每隔「调仓周期」个交易日换仓:卖出全部旧持仓,买入当期"
+                     "新选出的 N 只。",
+        "selection": "动量用截至前一交易日的价格计算(无未来函数);跳过最近 "
+                     "skip_days 天是为规避「强者反转」的短期均值回复。",
+        "risk": "追涨特性:趋势延续时收益高,但在行情拐点/震荡市易连续吃亏,"
+                "回撤可能较深。换手率偏高,手续费磨损不可忽视。",
+        "benchmark": "默认对标中证 1000。",
+    }
     strategy_type = "portfolio"
 
     param_schema = {
