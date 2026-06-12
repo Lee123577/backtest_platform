@@ -124,10 +124,6 @@ from ..engine.fees import (  # noqa: E402
 # 历史 paper_equity_daily 的 benchmark 列由 scripts/migrate_paper_benchmark.py 一次性重算。
 BENCHMARK_INDEX = "000852"
 
-# 板块过滤：默认只买主板
-#   科创板 688/689、创业板 300/301、北交所 4/8 — 9w 本金都开不了
-NON_MAIN_BOARD_PREFIXES = ("688", "689", "300", "301", "4", "8", "9")
-
 
 @dataclass
 class RunResult:
@@ -434,7 +430,7 @@ def run_once(
     cap_max: float = 30.0,
     stock_num: int = 3,
     hold_days: int = 5,
-    stop_loss_pct: float = 10.0,
+    stop_loss_pct: float = 5.0,   # 默认与 UI(main.py)/daily_signal 的 DEFAULTS 对齐
     allow_boards: Tuple[str, ...] = ("main",),
     target_date: Optional[_Date] = None,
     dry_run: bool = False,
@@ -902,7 +898,7 @@ def run_catch_up(
     cap_max: float = 30.0,
     stock_num: int = 3,
     hold_days: int = 5,
-    stop_loss_pct: float = 10.0,
+    stop_loss_pct: float = 5.0,   # 默认与 UI(main.py)/daily_signal 的 DEFAULTS 对齐
     allow_boards: Tuple[str, ...] = ("main",),
     dry_run: bool = False,
 ) -> List[RunResult]:
