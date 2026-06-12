@@ -733,66 +733,14 @@ def get_index_history(
     return get_feed().get_index_history(symbol, start_date, end_date)
 
 
-def get_historical_market_caps(
-    codes: List[str], start_date: str, end_date: str
-) -> Dict[str, Dict[str, float]]:
-    """
-    从 stock_kline 表读取历史市值，返回 {code: {date_str: market_cap(亿元)}}。
-
-    用于组合策略回测时替代近似估算，确保每个调仓日使用真实历史市值。
-    若数据库不可用或数据不存在，返回空字典（由调用方降级处理）。
-
-    注:组合回测热路径已改用 build_hist_market_caps(price_data) —— 直接复用
-    download_universe_history 带回的 market_cap 列,免去对 stock_kline 的二次全扫。
-    本函数保留给"只要市值、手里没有 price_data"的独立调用方。
-    """
-    if not codes:
-        return {}
-
-    conn = _get_pool()
-    if conn is None:
-        return {}
-
-    try:
-        conn.ping(reconnect=True)
-        # 分批查询避免 IN 子句过长
-        result: Dict[str, Dict[str, float]] = {}
-        batch_size = 200
-        for i in range(0, len(codes), batch_size):
-            batch = codes[i: i + batch_size]
-            placeholders = ",".join(["%s"] * len(batch))
-            with conn.cursor() as cur:
-                cur.execute(
-                    f"""
-                    SELECT code,
-                           DATE_FORMAT(trade_date, '%%Y-%%m-%%d') AS trade_date,
-                           market_cap
-                    FROM stock_kline
-                    WHERE code IN ({placeholders})
-                      AND trade_date BETWEEN %s AND %s
-                      AND market_cap IS NOT NULL
-                    ORDER BY code, trade_date
-                    """,
-                    (*batch, start_date, end_date),
-                )
-                for row in cur.fetchall():
-                    code = row["code"]
-                    if code not in result:
-                        result[code] = {}
-                    result[code][row["trade_date"]] = float(row["market_cap"])
-        return result
-    except Exception:
-        return {}
-
-
 def build_hist_market_caps(
     price_data: Dict[str, pd.DataFrame]
 ) -> Dict[str, Dict[str, float]]:
     """从已加载的 price_data 的 market_cap 列就地构建 {code: {date_str: cap(亿元)}}。
 
-    替代 get_historical_market_caps 对 stock_kline 的第二次全表扫描:
-    download_universe_history 已分批 IN 带回 market_cap 列,这里纯内存转换即可
-    (原本两次扫同一批 130 万行 ≈ 75s+11s,现在第二次降为内存遍历 ≈ 1s)。
+    避免为历史市值对 stock_kline 再做一次全表扫描:download_universe_history
+    已分批 IN 带回 market_cap 列,这里纯内存转换即可(原本两次扫同一批 130 万行
+    ≈ 75s+11s,现在第二次降为内存遍历 ≈ 1s)。
 
     无 market_cap 列(akshare 兜底来的 code)或该列全 NaN → 跳过该 code,
     引擎对缺失市值的 code 自动退回比例近似(与原降级行为一致)。

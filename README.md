@@ -33,7 +33,7 @@
 - 末次平仓写入 trades,win_rate 准确
 
 **模拟盘(Paper Trading)**
-- 收盘后自动跑策略 → 落库 → 前端展示持仓/累计收益/成交流水
+- 收盘后生成次日挂单 → T+1 开盘价成交 → 落库 → 前端展示持仓/累计收益/成交流水(消除未来函数)
 - 持仓自动除权:接 akshare 分红送转事件,持仓 shares/buy_price 跟 stock_kline qfq 同口径
 - 跌停股留存:调仓日跌停卖不掉的旧仓自动留存,新仓数缩减保等权
 - 止损基于累积 pct_change(避开分红除权误触发)
@@ -90,7 +90,7 @@ MYSQL_DATABASE=back_test
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `DB_MAX_CONNECTIONS` | 20 | 连接池上限 |
+| `DB_MAX_CONNECTIONS` | 50 | 连接池上限 |
 | `DB_BORROW_TIMEOUT` | 30 | 借连接超时(秒) |
 | `TRUSTED_PROXIES` | (空) | 可信反代 IP/CIDR,逗号分隔。空 = 一律忽略代理头 |
 | `PAPER_ADMIN_INITIAL_IPS` | (空) | 启动时往白名单写入的 IP(避免首次锁死) |
@@ -262,13 +262,14 @@ PORTFOLIO_REGISTRY["my_portfolio"] = MyPortfolioStrategy
 
 ### 止损 / 止盈
 
+- 成交口径:**收盘价触及阈值即触发,次日开盘卖出**(T+1,回测/组合/模拟盘三处统一)
 - 单股:基于 `entry_price` 和当日 close 比较
-- 模拟盘:基于 stock_kline `pct_change` 累乘(避开 qfq 复权基准调整时的误触发)
+- 模拟盘 / 组合回测:基于 stock_kline `pct_change` 累乘(避开 qfq 复权基准调整时的误触发)
 
 ### 基准
 
 - 单股模式:买入持有同一标的
-- 组合模式:中证 500(`000905`)
+- 组合模式:默认中证 1000(`000852`,更贴近小盘),前端可在回测页切换基准
 
 ### 算钱精度
 

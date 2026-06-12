@@ -3,7 +3,7 @@
 ==============================================================================
 
 问题:stock_kline 的 market_cap 历史上大量为 NULL(daily_update 只写当日),
-组合回测的 get_historical_market_caps 拿到稀疏数据,小市值选股退化到比例近似。
+组合回测取历史市值(build_hist_market_caps)拿到稀疏数据,小市值选股退化到比例近似。
 
 方案:东财 ``stock_value_em`` 每日返回 总市值/流通市值/PE(TTM)/市净率,
 覆盖 2018-01 至今,且走东财 datacenter(云服务器可用,不是被墙的 push2)。
