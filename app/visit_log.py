@@ -24,9 +24,7 @@ import re
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import Response
 
 from .data.data_loader import _get_pool
 
@@ -245,52 +243,77 @@ def _insert_log_sync(payload: dict) -> None:
 
 # ─────────────────────────── 中间件本体 ─────────────────────────
 
-class VisitLogMiddleware(BaseHTTPMiddleware):
-    """记录每个请求的访问信息到 ``back_test.user_visit_log``。"""
+class VisitLogMiddleware:
+    """记录每个请求的访问信息到 ``back_test.user_visit_log``。
 
-    async def dispatch(self, request: Request, call_next):
-        response: Response = await call_next(request)
+    纯 ASGI 中间件 —— 不用 BaseHTTPMiddleware:后者会把响应体经 anyio 内存流
+    重新包装、缓冲 StreamingResponse,导致 /api/portfolio_backtest 的 SSE 进度
+    被攒到结尾一次性下发。这里直接透传 send,只旁路捕获 status_code,
+    流式分块得以实时下发。
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        status_code = 500
+
+        async def send_wrapper(message):
+            nonlocal status_code
+            if message["type"] == "http.response.start":
+                status_code = message["status"]
+            await send(message)
 
         try:
-            path = request.url.path
-            if _should_skip(path):
-                return response
-
-            ua = request.headers.get("user-agent") or None
-            device, os_name, browser = _parse_ua(ua)
-            ip = _client_ip(request)[:45]
-
-            # 管理员 IP 不入库：自己用 backtest 平台时频繁刷新 / 触发任务
-            # 会污染 PV/UV 统计。is_admin_cached 走 60s 进程内缓存，几乎零成本
+            await self.app(scope, receive, send_wrapper)
+        finally:
+            # 响应已发完(SSE 流也结束)再旁路记录,不影响下发时序
             try:
-                from .paper_trading.admin_ip import is_admin_cached
-                if is_admin_cached(ip):
-                    return response
+                self._record(scope, status_code)
             except Exception as e:
-                # 缓存查询失败不阻塞访问日志正常流程
-                logger.debug("admin 缓存查询失败（忽略）: %s", e)
+                logger.warning("访问日志埋点异常: %s", e)
 
-            country, region, city, isp = _lookup_geo(ip)
-            payload = {
-                "ip":      ip,
-                "ua":      (ua[:500] if ua else None),
-                "ref":     (request.headers.get("referer") or "")[:1024] or None,
-                "path":    path[:1024],
-                "method":  request.method[:10],
-                "status":  response.status_code,
-                "device":  device,
-                "os":      os_name,
-                "browser": browser,
-                "country": (country[:64] if country else None),
-                "region":  (region[:64] if region else None),
-                "city":    (city[:64] if city else None),
-                "isp":     (isp[:128] if isp else None),
-            }
+    def _record(self, scope, status_code: int) -> None:
+        request = Request(scope)
+        path = request.url.path
+        if _should_skip(path):
+            return
 
-            # 丢到线程池，不阻塞响应发送
-            loop = asyncio.get_running_loop()
-            loop.run_in_executor(None, _insert_log_sync, payload)
+        ua = request.headers.get("user-agent") or None
+        device, os_name, browser = _parse_ua(ua)
+        ip = _client_ip(request)[:45]
+
+        # 管理员 IP 不入库：自己用 backtest 平台时频繁刷新 / 触发任务
+        # 会污染 PV/UV 统计。is_admin_cached 走 60s 进程内缓存，几乎零成本
+        try:
+            from .paper_trading.admin_ip import is_admin_cached
+            if is_admin_cached(ip):
+                return
         except Exception as e:
-            logger.warning("访问日志埋点异常: %s", e)
+            # 缓存查询失败不阻塞访问日志正常流程
+            logger.debug("admin 缓存查询失败（忽略）: %s", e)
 
-        return response
+        country, region, city, isp = _lookup_geo(ip)
+        payload = {
+            "ip":      ip,
+            "ua":      (ua[:500] if ua else None),
+            "ref":     (request.headers.get("referer") or "")[:1024] or None,
+            "path":    path[:1024],
+            "method":  request.method[:10],
+            "status":  status_code,
+            "device":  device,
+            "os":      os_name,
+            "browser": browser,
+            "country": (country[:64] if country else None),
+            "region":  (region[:64] if region else None),
+            "city":    (city[:64] if city else None),
+            "isp":     (isp[:128] if isp else None),
+        }
+
+        # 丢到线程池，不阻塞响应发送
+        loop = asyncio.get_running_loop()
+        loop.run_in_executor(None, _insert_log_sync, payload)

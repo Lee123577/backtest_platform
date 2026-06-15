@@ -1,5 +1,6 @@
 import logging
 import threading
+from contextlib import contextmanager
 
 import pandas as pd
 
@@ -13,6 +14,11 @@ logger = logging.getLogger(__name__)
 # 让旧调用方语义不变(尤其 paper_trading 通过 conn.begin() 跨多个 db.xxx 做事务)。
 # 真正的连接管理 / 上限 / 归还在 db_pool 里。
 _db_local = threading.local()
+
+
+def in_transaction() -> bool:
+    """当前线程是否处于 thread-local 连接的显式事务中(由 transaction() 设置)。"""
+    return getattr(_db_local, "in_txn", False)
 
 
 def _get_pool():
@@ -31,10 +37,21 @@ def _get_pool():
     conn = getattr(_db_local, "conn", None)
     if conn is not None:
         try:
-            conn.ping(reconnect=True)
+            # 事务中禁止 reconnect:重连会换成一条没有 BEGIN 上下文的新连接,
+            # 使后续写入逐条 autocommit、无法回滚(见 transaction())。
+            conn.ping(reconnect=not in_transaction())
             return conn
         except Exception:
-            # 连接已坏,扔掉(让计数减一)再重新借
+            if in_transaction():
+                # 事务中连接已断:不静默重借(会丢回滚能力),抛出让
+                # transaction() 走 rollback,避免半截写入被提交。
+                _db_local.conn = None
+                try:
+                    db_pool.discard(conn)
+                except Exception:
+                    pass
+                raise
+            # 非事务:连接已坏,扔掉(让计数减一)再重新借
             try:
                 db_pool.discard(conn)
             except Exception:
@@ -47,6 +64,36 @@ def _get_pool():
         return None
     _db_local.conn = conn
     return conn
+
+
+@contextmanager
+def transaction_flag():
+    """
+    标记当前线程进入 thread-local 连接的显式事务(只管标志,不碰 begin/commit)。
+
+    事务期间 in_transaction()=True → 此连接上所有 _get_pool()/ping 一律
+    reconnect=False:连接中途断开会抛异常,而不是静默换一条没有 BEGIN 上下文
+    的新连接(那会使后续写入逐条 autocommit、无法回滚)。
+
+    begin/commit/rollback 仍由调用方在自己取到的连接上做 —— 这样调用方
+    (paper_trading.runner)对连接的获取保持可测(测试 monkeypatch 其 _get_pool)。
+
+    用法::
+
+        conn = _get_pool()
+        with transaction_flag():
+            conn.begin()
+            try:
+                ...              # 期间 db.xxx 经 _get_pool 拿到同一连接,不重连
+                conn.commit()
+            except BaseException:
+                conn.rollback(); raise
+    """
+    _db_local.in_txn = True
+    try:
+        yield
+    finally:
+        _db_local.in_txn = False
 
 
 def _query_kline_from_db(

@@ -113,7 +113,6 @@ def ensure_tables() -> None:
     conn = _get_pool()
     if conn is None:
         raise RuntimeError("数据库连接不可用，无法初始化 paper_trading 表")
-    conn.ping(reconnect=True)
     with conn.cursor() as cur:
         for sql in DDL_STATEMENTS:
             cur.execute(sql)
@@ -164,7 +163,6 @@ def get_account() -> Optional[Dict[str, Any]]:
     conn = _get_pool()
     if conn is None:
         return None
-    conn.ping(reconnect=True)
     with conn.cursor() as cur:
         cur.execute("SELECT * FROM paper_account WHERE id=1")
         return cur.fetchone()
@@ -173,7 +171,6 @@ def get_account() -> Optional[Dict[str, Any]]:
 def init_account(initial_capital: float, strategy_params: Dict[str, Any]) -> None:
     """首次初始化账户；已存在则不改。"""
     conn = _get_pool()
-    conn.ping(reconnect=True)
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -218,7 +215,6 @@ def update_strategy_params(patch: Dict[str, Any]) -> Dict[str, Any]:
     current.update({k: v for k, v in patch.items() if v is not None})
 
     conn = _get_pool()
-    conn.ping(reconnect=True)
     with conn.cursor() as cur:
         cur.execute(
             "UPDATE paper_account SET strategy_params=%s WHERE id=1",
@@ -255,7 +251,6 @@ def get_pending_actions() -> Optional[Dict[str, Any]]:
 def set_pending_actions(pending: Optional[Dict[str, Any]]) -> None:
     """写入/清空挂单。pending=None → 置 NULL。"""
     conn = _get_pool()
-    conn.ping(reconnect=True)
     with conn.cursor() as cur:
         cur.execute(
             "UPDATE paper_account SET pending_actions=%s WHERE id=1",
@@ -270,7 +265,6 @@ def update_account(
     strategy_params: Optional[Dict[str, Any]] = None,
 ) -> None:
     conn = _get_pool()
-    conn.ping(reconnect=True)
     fields = ["cash=%s"]
     values: List[Any] = [cash]
     if last_rebalance_date is not None:
@@ -294,7 +288,6 @@ def get_holdings() -> Dict[str, Dict[str, Any]]:
     conn = _get_pool()
     if conn is None:
         return {}
-    conn.ping(reconnect=True)
     with conn.cursor() as cur:
         cur.execute("SELECT * FROM paper_holdings")
         rows = cur.fetchall()
@@ -312,7 +305,6 @@ def add_holding(
     """新买入时 last_dividend_check_date 初始化为 buy_date —— 之后 runner
     扫描除权事件时只看 (buy_date, today] 区间,不会回看买入前的历史除权。"""
     conn = _get_pool()
-    conn.ping(reconnect=True)
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -332,7 +324,6 @@ def add_holding(
 
 def remove_holding(code: str) -> None:
     conn = _get_pool()
-    conn.ping(reconnect=True)
     with conn.cursor() as cur:
         cur.execute("DELETE FROM paper_holdings WHERE code=%s", (code,))
 
@@ -348,7 +339,6 @@ def update_holding_after_dividend(
     conn = _get_pool()
     if conn is None:
         return
-    conn.ping(reconnect=True)
     with conn.cursor() as cur:
         cur.execute(
             "UPDATE paper_holdings "
@@ -363,7 +353,6 @@ def touch_dividend_check_date(code: str, when: _Date) -> None:
     conn = _get_pool()
     if conn is None:
         return
-    conn.ping(reconnect=True)
     with conn.cursor() as cur:
         cur.execute(
             "UPDATE paper_holdings SET last_dividend_check_date=%s WHERE code=%s",
@@ -379,7 +368,6 @@ def insert_run(row: Dict[str, Any]) -> int:
     row.setdefault("notes_struct", None)
 
     conn = _get_pool()
-    conn.ping(reconnect=True)
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -422,13 +410,11 @@ def insert_positions(run_id: int, run_date: _Date, positions: List[Dict[str, Any
     if not positions:
         # 即使空也要清掉旧记录（万一今天止损后变空仓）
         conn = _get_pool()
-        conn.ping(reconnect=True)
         with conn.cursor() as cur:
             cur.execute("DELETE FROM paper_signal_position WHERE run_id=%s", (run_id,))
         return
 
     conn = _get_pool()
-    conn.ping(reconnect=True)
     with conn.cursor() as cur:
         cur.execute("DELETE FROM paper_signal_position WHERE run_id=%s", (run_id,))
         cur.executemany(
@@ -452,7 +438,6 @@ def insert_positions(run_id: int, run_date: _Date, positions: List[Dict[str, Any
 
 def upsert_equity(row: Dict[str, Any]) -> None:
     conn = _get_pool()
-    conn.ping(reconnect=True)
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -482,7 +467,6 @@ def list_runs(limit: int = 30) -> List[Dict[str, Any]]:
     conn = _get_pool()
     if conn is None:
         return []
-    conn.ping(reconnect=True)
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -503,7 +487,6 @@ def get_run(run_id: int) -> Optional[Dict[str, Any]]:
     conn = _get_pool()
     if conn is None:
         return None
-    conn.ping(reconnect=True)
     with conn.cursor() as cur:
         cur.execute(
             "SELECT * FROM paper_signal_run WHERE run_id=%s", (run_id,)
@@ -530,7 +513,6 @@ def get_equity_curve(start: Optional[str] = None, end: Optional[str] = None
     conn = _get_pool()
     if conn is None:
         return []
-    conn.ping(reconnect=True)
     sql = (
         "SELECT trade_date, total_value, cum_return, "
         "benchmark_close, benchmark_cum_return "
@@ -563,7 +545,6 @@ def list_trades(limit: int = 200) -> List[Dict[str, Any]]:
     conn = _get_pool()
     if conn is None:
         return []
-    conn.ping(reconnect=True)
     with conn.cursor() as cur:
         # 先正序查全部历史买卖（含 run_id 用作详情跳转），后续算 PnL；
         # 最后再倒序返回给前端
@@ -662,7 +643,6 @@ def get_latest_holdings_with_prices() -> List[Dict[str, Any]]:
     conn = _get_pool()
     if conn is None:
         return []
-    conn.ping(reconnect=True)
     with conn.cursor() as cur:
         cur.execute(
             """

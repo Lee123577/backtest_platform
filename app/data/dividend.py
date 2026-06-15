@@ -69,7 +69,6 @@ def ensure_table() -> None:
     conn = _get_pool()
     if conn is None:
         return
-    conn.ping(reconnect=True)
     with conn.cursor() as cur:
         cur.execute(_DDL)
     _table_ready = True
@@ -284,7 +283,6 @@ def upsert_dividend(code: str, events: List[Dict[str, Any]]) -> int:
     conn = _get_pool()
     if conn is None:
         return 0
-    conn.ping(reconnect=True)
     sql = (
         "INSERT IGNORE INTO stock_dividend "
         "(code, ex_date, bonus_shares, converted_shares, cash_dividend, announcement_date) "
@@ -318,7 +316,6 @@ def get_events(
     conn = _get_pool()
     if conn is None:
         return []
-    conn.ping(reconnect=True)
     with conn.cursor() as cur:
         cur.execute(
             "SELECT ex_date, bonus_shares, converted_shares, cash_dividend "

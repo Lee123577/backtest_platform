@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from datetime import date as _Date
 from typing import Any, Dict, List, Optional, Tuple
 
-from ..data.data_loader import _get_pool
+from ..data.data_loader import _get_pool, transaction_flag
 from ..data import dividend
 from ..data.filters import board_of, is_allowed_board, is_st_name
 from ..engine.money import D, ONE, ZERO, round_cent, to_float_cent
@@ -472,38 +472,43 @@ def run_once(
 
     positions_log: List[Dict[str, Any]] = []
 
-    # 整段调仓+落库放进单事务:中途任何 db.xxx 失败都会 rollback,避免
-    # "卖了 holdings 但 cash 未回写"的不一致状态。step5 的读查询也在事务里,
-    # 拿到的快照与最终落库视图一致。
-    _conn_txn = None
-    if not dry_run:
-        _conn_txn = _get_pool()
-        if _conn_txn is not None:
-            _conn_txn.ping(reconnect=True)
-            _conn_txn.begin()
-    try:
-        return _run_once_body(
-            initial_capital=initial_capital,
-            cap_min=cap_min, cap_max=cap_max,
-            stock_num=stock_num, hold_days=hold_days,
-            stop_loss_pct=stop_loss_pct,
-            allow_boards=allow_boards,
-            trade_date=trade_date,
-            cash=cash, last_rb=last_rb,
-            rebalance_counter=rebalance_counter,
-            pending=pending,
-            holdings=holdings, day_prices=day_prices,
-            positions_log=positions_log, result=result,
-            dry_run=dry_run,
-            _commit=(lambda c=_conn_txn: c.commit()) if _conn_txn is not None else None,
-        )
-    except Exception:
-        if _conn_txn is not None:
+    body_kwargs = dict(
+        initial_capital=initial_capital,
+        cap_min=cap_min, cap_max=cap_max,
+        stock_num=stock_num, hold_days=hold_days,
+        stop_loss_pct=stop_loss_pct,
+        allow_boards=allow_boards,
+        trade_date=trade_date,
+        cash=cash, last_rb=last_rb,
+        rebalance_counter=rebalance_counter,
+        pending=pending,
+        holdings=holdings, day_prices=day_prices,
+        positions_log=positions_log, result=result,
+        dry_run=dry_run,
+    )
+
+    # dry_run 不落库 → 无需事务。正常运行把整段调仓+落库放进单事务:中途任何
+    # db.xxx 失败/连接断开都 rollback,避免"卖了 holdings 但 cash 未回写"的不一致。
+    # transaction_flag 期间 data_loader._get_pool 不再 reconnect(重连会换成没有
+    # BEGIN 上下文的新连接 → 半截写入被 autocommit、无法回滚)。
+    if dry_run:
+        return _run_once_body(**body_kwargs)
+
+    conn = _get_pool()
+    if conn is None:
+        raise RuntimeError("数据库连接不可用，无法开启 paper_trading 事务")
+    with transaction_flag():
+        conn.begin()
+        try:
+            result = _run_once_body(**body_kwargs)
+            conn.commit()
+            return result
+        except BaseException:
             try:
-                _conn_txn.rollback()
+                conn.rollback()
             except Exception:
                 logger.exception("paper_trading 事务回滚失败")
-        raise
+            raise
 
 
 def _run_once_body(
@@ -511,7 +516,7 @@ def _run_once_body(
     initial_capital, cap_min, cap_max, stock_num, hold_days,
     stop_loss_pct, allow_boards, trade_date, cash, last_rb,
     rebalance_counter, pending, holdings, day_prices,
-    positions_log, result, dry_run, _commit,
+    positions_log, result, dry_run,
 ) -> RunResult:
     """run_once 的实际主体,提出来避免给整段代码加一层 try/with 缩进。"""
     # 资金全程 Decimal,与回测引擎(engine/money.py)口径一致。费率也转 Decimal
@@ -881,10 +886,6 @@ def _run_once_body(
             "benchmark_close": round(bm_close, 3) if bm_close else None,
             "benchmark_cum_return": round(bm_cum, 6),
         })
-
-    # 所有写库完成 → 提交事务
-    if _commit is not None:
-        _commit()
 
     result.total_value = round(total_value, 2)
     result.cash = round(cash, 2)
