@@ -1,0 +1,103 @@
+/* AI 热门板块页面专用样式（通用摘要卡片/图表容器复用 paper_trading.css / style.css） */
+
+.sector-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 14px;
+  margin-top: 10px;
+}
+
+.sector-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: var(--bg);
+}
+
+.sector-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.sector-rank {
+  display: inline-block;
+  width: 20px; height: 20px;
+  line-height: 20px;
+  text-align: center;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  margin-right: 6px;
+}
+
+.sector-name {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.sector-reason {
+  font-size: 12px;
+  color: var(--txt2);
+  margin-bottom: 8px;
+  line-height: 1.5;
+}
+
+.stock-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 0;
+  border-top: 1px dashed var(--border);
+  font-size: 13px;
+}
+
+.stock-row:first-of-type { border-top: none; }
+
+.stock-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.stock-code-name { font-weight: 600; }
+.stock-code-name .code { color: var(--txt2); font-weight: 400; font-size: 12px; margin-left: 4px; }
+.stock-reason { font-size: 11px; color: var(--txt2); }
+
+.stock-perf { text-align: right; white-space: nowrap; padding-left: 10px; }
+.stock-pct { font-weight: 700; }
+.stock-pct.pos { color: var(--up); }
+.stock-pct.neg { color: var(--down); }
+.stock-pct.na { color: var(--txt2); font-weight: 400; }
+.stock-price-line { font-size: 11px; color: var(--txt2); }
+
+.settle-badge {
+  display: inline-block;
+  font-size: 11px;
+  border-radius: 4px;
+  padding: 1px 6px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+.settle-badge.pending { background: rgba(87,96,106,.1); color: var(--txt2); }
+.settle-badge.win { background: rgba(207,34,46,.1); color: var(--up); }
+.settle-badge.lose { background: rgba(26,127,55,.1); color: var(--down); }
+.settle-badge.na { background: rgba(87,96,106,.08); color: var(--txt2); }
+
+table.hs-tbl {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.hs-tbl th {
+  background: var(--bg2);
+  padding: 7px 12px;
+  text-align: center;
+  color: var(--txt2);
+  border: 1px solid var(--border);
+  font-size: 11px;
+}
+.hs-tbl td {
+  padding: 6px 12px;
+  text-align: center;
+  border: 1px solid var(--border);
+}
+.hs-tbl tr.status-failed td { background: rgba(207,34,46,.04); }

@@ -80,6 +80,10 @@ app.include_router(cloudmap_router)
 from .llm_assistant.api import router as llm_router  # noqa: E402
 app.include_router(llm_router)
 
+# AI 热门板块(DeepSeek 每日选板块+选股，T 日收盘买入/T+1 收盘卖出模拟)
+from .ai_hotsector.api import router as ai_hotsector_router  # noqa: E402
+app.include_router(ai_hotsector_router)
+
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
@@ -121,6 +125,11 @@ async def page_walk_forward():
 async def page_cloudmap():
     """大盘云图（D3 Treemap）。资源在 app/static/cloudmap/ 下。"""
     return FileResponse(str(STATIC_DIR / "cloudmap" / "index.html"))
+
+
+@app.get("/ai_hotsector", include_in_schema=False)
+async def page_ai_hotsector():
+    return FileResponse(str(STATIC_DIR / "ai_hotsector.html"))
 
 
 # ── Paper trading (实盘信号观察) ──────────────────────────────────────────────

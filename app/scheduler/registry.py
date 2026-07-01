@@ -87,6 +87,24 @@ TASKS: Dict[str, TaskDef] = {
         "depends_on": None,
         "description": "历史 market_cap 增量回填(每月 1 号 03:00,只补新上市/缺口)",
     },
+    # AI 热门板块:15:05(收盘后)调 DeepSeek 两段式提示词出 3 板块×3 股票；
+    # 17:35(daily_update 之后)回填收盘价、结算胜率/资金曲线。两个任务分开，
+    # 结算依赖 daily_update 而不是依赖预测本身 —— 即使当天预测失败/跳过，
+    # 之前几天挂着待结算的股票也照样能在今天回填/结算。
+    "ai_hotsector_predict": {
+        "cmd": ["python", "scripts/ai_hotsector_predict.py"],
+        "schedule": "weekday:15:05",
+        "timeout_sec": 3 * 60,
+        "depends_on": None,
+        "description": "AI 热门板块+强势股每日预测(DeepSeek,15:05 收盘后)",
+    },
+    "ai_hotsector_settle": {
+        "cmd": ["python", "scripts/ai_hotsector_settle.py"],
+        "schedule": "weekday:17:35",
+        "timeout_sec": 3 * 60,
+        "depends_on": "daily_update",
+        "description": "AI 热门板块回填收盘价+结算胜率/资金曲线(17:35,依赖daily_update)",
+    },
 }
 
 

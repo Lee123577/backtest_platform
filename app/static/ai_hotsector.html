@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI 热门板块</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="stylesheet" href="/static/css/paper_trading.css">
+  <link rel="stylesheet" href="/static/css/ai_hotsector.css">
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+</head>
+<body>
+
+<header>
+  <h1>📈 A股量化回测平台</h1>
+  <nav class="header-nav">
+    <a class="nav-btn" href="/" style="text-decoration:none;display:inline-flex;align-items:center;">单股策略</a>
+    <a class="nav-btn" href="/?mode=portfolio" style="text-decoration:none;display:inline-flex;align-items:center;">选股策略</a>
+    <a class="nav-btn" href="/factors" style="text-decoration:none;display:inline-flex;align-items:center;">因子分析</a>
+    <a class="nav-btn" href="/walk_forward" style="text-decoration:none;display:inline-flex;align-items:center;">参数寻优</a>
+    <a class="nav-btn" href="/cloudmap" style="text-decoration:none;display:inline-flex;align-items:center;">大盘云图</a>
+    <a class="nav-btn" href="/paper_trading" style="text-decoration:none;display:inline-flex;align-items:center;">实盘观察</a>
+    <button class="nav-btn active">AI热门板块</button>
+    <a class="nav-btn" href="/tasks" style="text-decoration:none;display:inline-flex;align-items:center;">定时任务</a>
+  </nav>
+</header>
+
+<main>
+
+  <!-- 1. 统计概览 -->
+  <div class="panel">
+    <div class="panel-title">
+      AI 热门板块 · 模拟账户
+      <span class="tip-badge">DeepSeek 每日选板块/选股，T 日收盘买入 · T+1 收盘卖出，仅供研究不构成投资建议</span>
+    </div>
+    <div class="summary-grid" id="hsSummaryGrid">
+      <div class="sum-card"><div class="sum-label">初始资金</div><div class="sum-val" id="hsInitCapital">—</div></div>
+      <div class="sum-card"><div class="sum-label">当前模拟资金</div><div class="sum-val" id="hsCapital">—</div></div>
+      <div class="sum-card"><div class="sum-label">累计收益</div><div class="sum-val" id="hsCumReturn">—</div></div>
+      <div class="sum-card"><div class="sum-label">累计胜率</div><div class="sum-val" id="hsWinRate">—</div></div>
+    </div>
+  </div>
+
+  <!-- 2. 资金曲线 -->
+  <div class="panel">
+    <div class="panel-title">模拟资金曲线 <span>10 万本金 · 每日滚动复利</span></div>
+    <div class="chart-wrap-sm" id="hsEquityChart"></div>
+  </div>
+
+  <!-- 3. 今日 AI 荐股 -->
+  <div class="panel">
+    <div class="panel-title">
+      今日 AI 荐股 <span id="hsTodayDate"></span>
+    </div>
+    <div id="hsTodayWrap">
+      <div class="no-data">加载中…</div>
+    </div>
+  </div>
+
+  <!-- 4. 历史批次 -->
+  <div class="panel">
+    <div class="panel-title">历史批次</div>
+    <div id="hsHistoryWrap">
+      <div class="no-data">加载中…</div>
+    </div>
+  </div>
+
+</main>
+
+<script src="/static/js/ai_hotsector.js"></script>
+</body>
+</html>

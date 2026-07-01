@@ -12,6 +12,7 @@ class Settings:
     MYSQL_USER: str = os.getenv("MYSQL_USER", "root")
     MYSQL_PASSWORD: str = os.getenv("MYSQL_PASSWORD", "")
     MYSQL_DATABASE: str = os.getenv("MYSQL_DATABASE", "")
+    DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "")
 
 
 settings = Settings()
