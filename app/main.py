@@ -84,6 +84,19 @@ STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
+def _kline_records(df: pd.DataFrame) -> List[Dict[str, Any]]:
+    """DataFrame → 前端 K 线数组用的记录列表(date/open/high/low/close/volume)。"""
+    return [
+        {
+            "date": str(r["date"].date()),
+            "open": r["open"], "high": r["high"],
+            "low": r["low"],  "close": r["close"],
+            "volume": r["volume"],
+        }
+        for r in df.to_dict("records")
+    ]
+
+
 @app.get("/")
 async def root():
     return FileResponse(str(STATIC_DIR / "index.html"))
@@ -643,15 +656,7 @@ async def api_kline(code: str, start_date: str, end_date: str, adjust: str = "qf
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    records = [
-        {
-            "date": str(r["date"].date()),
-            "open": r["open"], "high": r["high"],
-            "low": r["low"],  "close": r["close"],
-            "volume": r["volume"],
-        }
-        for r in df.to_dict("records")
-    ]
+    records = _kline_records(df)
     return {"code": code, "total": len(records), "data": records}
 
 
@@ -726,15 +731,7 @@ async def api_backtest(req: BacktestRequest):
             })
 
     benchmark = calc_benchmark(df, req.initial_capital, slippage_rate=req.slippage_rate)
-    kline = [
-        {
-            "date": str(r["date"].date()),
-            "open": r["open"], "high": r["high"],
-            "low": r["low"],  "close": r["close"],
-            "volume": r["volume"],
-        }
-        for r in df.to_dict("records")
-    ]
+    kline = _kline_records(df)
     return {
         "stock_code": code,
         "stock_name": get_stock_name(code),

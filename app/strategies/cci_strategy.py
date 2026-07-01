@@ -3,6 +3,22 @@ import pandas as pd
 from .base import BaseStrategy
 
 
+def _rolling_mad(values: np.ndarray, n: int) -> np.ndarray:
+    """滚动平均绝对离差(mean absolute deviation),向量化实现。
+
+    等价于 ``rolling(n).apply(lambda x: np.abs(x - x.mean()).mean())``,
+    但用 ``sliding_window_view`` 一次性算完所有窗口,不再每个窗口都触发一次
+    Python 回调 —— 长序列下能快一个数量级。
+    """
+    out = np.full(values.shape, np.nan)
+    if len(values) < n:
+        return out
+    windows = np.lib.stride_tricks.sliding_window_view(values, n)
+    means = windows.mean(axis=1)
+    out[n - 1:] = np.abs(windows - means[:, None]).mean(axis=1)
+    return out
+
+
 class CCIStrategy(BaseStrategy):
     """
     CCI 顺势指标 (Commodity Channel Index)
@@ -36,8 +52,7 @@ class CCIStrategy(BaseStrategy):
 
         tp = (df["high"] + df["low"] + df["close"]) / 3
         ma_tp = tp.rolling(n).mean()
-        # mean absolute deviation — use np.abs since raw=True gives ndarray
-        md = tp.rolling(n).apply(lambda x: np.abs(x - x.mean()).mean(), raw=True)
+        md = pd.Series(_rolling_mad(tp.to_numpy(dtype=float), n), index=df.index)
         cci = (tp - ma_tp) / (0.015 * md.replace(0, float("nan")))
         cci = cci.fillna(0)
 

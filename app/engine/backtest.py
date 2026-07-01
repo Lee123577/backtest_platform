@@ -71,10 +71,19 @@ def run_backtest(
     trades: List[dict] = []
     equity_values: List[float] = []
 
-    for i, (_, row) in enumerate(df.iterrows()):
+    # 仓位/止损是有状态的逐日模拟,循环本身没法消除;但提前把要用到的列转成
+    # numpy 数组/预格式化的日期字符串,避免 iterrows() 每行都现造一个跨 dtype
+    # 提升的 Series(长回测下能省不少时间)。
+    n = len(df)
+    opens = df["open"].to_numpy(dtype=float)
+    closes = df["close"].to_numpy(dtype=float)
+    date_strs = df["date"].dt.strftime("%Y-%m-%d").to_numpy()
+    sig_arr = signals.to_numpy()
+
+    for i in range(n):
         if i > 0:
-            sig = int(signals.iloc[i - 1])
-            open_price = float(row["open"])
+            sig = int(sig_arr[i - 1])
+            open_price = float(opens[i])
 
             # Forced sell (stop-loss / take-profit triggered previous close)
             if forced_sell and position > 0:
@@ -93,7 +102,7 @@ def run_backtest(
                         entry_price = float(exec_price_d)
                         capital = round_cent(capital - cost - comm)
                         trades.append({
-                            "date": str(row["date"].date()),
+                            "date": str(date_strs[i]),
                             "type": "买入",
                             "price": round(float(exec_price_d), 3),
                             "shares": shares,
@@ -109,7 +118,7 @@ def run_backtest(
                 tax = revenue * stamp_tax_rate_d
                 capital = round_cent(capital + revenue - comm - tax)
                 trades.append({
-                    "date": str(row["date"].date()),
+                    "date": str(date_strs[i]),
                     "type": "卖出",
                     "price": round(float(exec_price_d), 3),
                     "shares": position,
@@ -121,7 +130,7 @@ def run_backtest(
                 entry_price = 0.0
 
         # End-of-day: check stop-loss / take-profit against close price
-        close_price = float(row["close"])
+        close_price = float(closes[i])
         if position > 0 and entry_price > 0:
             if stop_loss and close_price <= entry_price * (1 - stop_loss):
                 forced_sell = True
@@ -136,15 +145,14 @@ def run_backtest(
 
     # Force-close remaining position at last close
     if position > 0:
-        last_row = df.iloc[-1]
-        last_price = float(last_row["close"])
+        last_price = float(closes[-1])
         exec_price_d = D(last_price) * slippage_sell
         revenue = D(position) * exec_price_d
         comm = max(revenue * commission_rate_d, min_commission_d)
         tax = revenue * stamp_tax_rate_d
         capital = round_cent(capital + revenue - comm - tax)
         trades.append({
-            "date": str(last_row["date"].date()),
+            "date": str(date_strs[-1]),
             "type": "卖出",
             "price": round(float(exec_price_d), 3),
             "shares": position,
@@ -157,8 +165,8 @@ def run_backtest(
 
     equity = pd.Series(equity_values)
     equity_curve = [
-        {"date": str(df.iloc[i]["date"].date()), "value": round(equity_values[i], 2)}
-        for i in range(len(df))
+        {"date": str(date_strs[i]), "value": round(equity_values[i], 2)}
+        for i in range(n)
     ]
 
     return {
@@ -191,12 +199,12 @@ def calc_benchmark(
     remaining = round_cent(initial_d - cost - comm)
     remaining_f = float(remaining)
 
-    equity_values = [
-        remaining_f + shares * float(row["close"]) for _, row in df.iterrows()
-    ]
+    closes = df["close"].to_numpy(dtype=float)
+    date_strs = df["date"].dt.strftime("%Y-%m-%d").to_numpy()
+    equity_values = (remaining_f + shares * closes).tolist()
     equity = pd.Series(equity_values)
     equity_curve = [
-        {"date": str(df.iloc[i]["date"].date()), "value": round(equity_values[i], 2)}
+        {"date": str(date_strs[i]), "value": round(equity_values[i], 2)}
         for i in range(len(df))
     ]
 
