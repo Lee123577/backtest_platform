@@ -201,15 +201,6 @@ def fetch_stocks_by_settle_status(status: str) -> List[Dict[str, Any]]:
         return cur.fetchall()
 
 
-def mark_stock_code_not_found(stock_id: int) -> None:
-    conn = _get_pool()
-    with conn.cursor() as cur:
-        cur.execute(
-            "UPDATE ai_hotsector_stock SET settle_status='code_not_found' WHERE id=%s",
-            (stock_id,),
-        )
-
-
 def fill_buy_price(stock_id: int, buy_price: float) -> None:
     conn = _get_pool()
     with conn.cursor() as cur:
@@ -297,11 +288,21 @@ def get_equity_curve(limit: int = 365) -> List[Dict[str, Any]]:
 
 # ── 行情/校验（runner 用）────────────────────────────────────────────────────
 
+class DbUnavailableError(RuntimeError):
+    """数据库连接暂时不可用 —— 区别于"查询成功但代码确实不存在"，调用方不应把
+    这种情况当成 code_not_found 落库(那样会把本来有效的代码永久误判掉，
+    而 predict 只校验一次、没有重试机会)。"""
+
+
 def lookup_stock(code: str, as_of: _Date) -> Optional[Dict[str, Any]]:
-    """校验 code 在 as_of 时点是否是真实存在且未退市的 A 股，返回 {code, name}。"""
+    """校验 code 在 as_of 时点是否是真实存在且未退市的 A 股，返回 {code, name}。
+
+    数据库连接不可用时抛 DbUnavailableError(而不是返回 None)——
+    调用方(predict_once)据此整批标记失败重试，避免把连接抖动误判成代码无效。
+    """
     conn = _get_pool()
     if conn is None:
-        return None
+        raise DbUnavailableError("数据库连接不可用，无法校验股票代码")
     with conn.cursor() as cur:
         cur.execute(
             """

@@ -73,41 +73,44 @@ async def predict_once(pick_date: Optional[_Date] = None) -> PredictResult:
             stock_messages(pick_date, sector_names)
         )
         stocks_resp = stocks_json.get("sectors") or []
-    except DeepSeekError as e:
+
+        # 按位置对齐 sectors_resp[i] ↔ stocks_resp[i](防止模型选股调用时板块措辞对不上)
+        stock_rows: List[Dict[str, Any]] = []
+        for idx, sec in enumerate(sectors_resp):
+            sector_rank = idx + 1
+            sector_name = str(sec.get("name") or "").strip()
+            sector_reason = str(sec.get("reason") or "")[:255]
+            if idx >= len(stocks_resp):
+                continue
+            stock_list = (stocks_resp[idx].get("stocks") or [])[:3]
+            for j, st in enumerate(stock_list):
+                raw_code = str(st.get("code") or "").strip()
+                if not raw_code:
+                    continue
+                code = normalize_code(raw_code)
+                ai_name = str(st.get("name") or "").strip()
+                reason = str(st.get("reason") or "")[:255]
+                # DbUnavailableError 会向上抛到下面的 except，整批标记 failed 重试，
+                # 不会把"数据库暂时连不上"误判成"代码不存在"(code_not_found 没有
+                # 重试机会，误判会永久丢一只本来有效的股票)
+                lookup = db.lookup_stock(code, pick_date)
+                stock_rows.append({
+                    "sector_name": sector_name,
+                    "sector_rank": sector_rank,
+                    "sector_reason": sector_reason,
+                    "code": code,
+                    "name": lookup["name"] if lookup else ai_name,
+                    "stock_rank": j + 1,
+                    "stock_reason": reason,
+                    "settle_status": "pending_price" if lookup else "code_not_found",
+                })
+    except (DeepSeekError, db.DbUnavailableError) as e:
         logger.error("[%s] AI 热门板块预测失败: %s", pick_date, e)
         db.upsert_pick(
             pick_date, "deepseek-chat", SECTOR_PROMPT_VERSION, STOCK_PROMPT_VERSION,
             None, None, "failed", str(e),
         )
         return PredictResult(pick_date=pick_date, status="failed", error_msg=str(e))
-
-    # 按位置对齐 sectors_resp[i] ↔ stocks_resp[i](防止模型选股调用时板块措辞对不上)
-    stock_rows: List[Dict[str, Any]] = []
-    for idx, sec in enumerate(sectors_resp):
-        sector_rank = idx + 1
-        sector_name = str(sec.get("name") or "").strip()
-        sector_reason = str(sec.get("reason") or "")[:255]
-        if idx >= len(stocks_resp):
-            continue
-        stock_list = (stocks_resp[idx].get("stocks") or [])[:3]
-        for j, st in enumerate(stock_list):
-            raw_code = str(st.get("code") or "").strip()
-            if not raw_code:
-                continue
-            code = normalize_code(raw_code)
-            ai_name = str(st.get("name") or "").strip()
-            reason = str(st.get("reason") or "")[:255]
-            lookup = db.lookup_stock(code, pick_date)
-            stock_rows.append({
-                "sector_name": sector_name,
-                "sector_rank": sector_rank,
-                "sector_reason": sector_reason,
-                "code": code,
-                "name": lookup["name"] if lookup else ai_name,
-                "stock_rank": j + 1,
-                "stock_reason": reason,
-                "settle_status": "pending_price" if lookup else "code_not_found",
-            })
 
     # 去重(同一代码在不同板块重复出现)—— (pick_date, code) 是唯一键，保留先出现的
     seen: set = set()
@@ -142,12 +145,18 @@ def settle_once(as_of_date: Optional[_Date] = None) -> SettleResult:
     result = SettleResult()
 
     # ── 1. 回填买入价:pending_price 且 pick_date 当天收盘价已入库 ─────────
+    priced_pick_dates: "set[_Date]" = set()
     for row in db.fetch_stocks_by_settle_status("pending_price"):
         px = db.get_close_price(row["code"], row["pick_date"])
         if px is None:
             continue  # 数据还没到(停牌/daily_update 尚未跑),下次再试
         db.fill_buy_price(row["id"], px)
         result.priced_count += 1
+        priced_pick_dates.add(row["pick_date"])
+
+    # pick 状态推进到 'priced'(仅用于前端历史列表展示进度，不影响结算逻辑)
+    for pick_date in priced_pick_dates:
+        db.update_pick_status(pick_date, "priced")
 
     # ── 2. 回填卖出价 + 结算:priced 且下一交易日收盘价已入库 ──────────────
     # fetch 按 pick_date 升序,保证同批多天补跑时资金曲线按时间顺序滚动复利
