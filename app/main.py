@@ -134,22 +134,7 @@ async def page_ai_hotsector():
 
 # ── Paper trading (实盘信号观察) ──────────────────────────────────────────────
 
-def _json_safe(rows):
-    """把 DECIMAL/date/datetime 等转成 JSON 可序列化的类型。"""
-    import datetime as _dt
-    import decimal
-    out = []
-    for r in rows:
-        d = {}
-        for k, v in r.items():
-            if isinstance(v, decimal.Decimal):
-                d[k] = float(v)
-            elif isinstance(v, (_dt.date, _dt.datetime)):
-                d[k] = v.isoformat() if isinstance(v, _dt.datetime) else str(v)
-            else:
-                d[k] = v
-        out.append(d)
-    return out
+from .json_safe import json_safe as _json_safe  # noqa: E402
 
 
 @app.get("/api/paper_trading/account")

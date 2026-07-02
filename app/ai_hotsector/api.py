@@ -12,28 +12,12 @@ GET /api/ai_hotsector/stats    — 累计胜率 + 累计收益 + 当前模拟资
 """
 from __future__ import annotations
 
-import datetime as _dt
-import decimal
-from typing import Any
-
 from fastapi import APIRouter
 
+from ..json_safe import json_safe as _json_safe
 from . import db
 
 router = APIRouter(prefix="/api/ai_hotsector", tags=["ai_hotsector"])
-
-
-def _json_safe(obj: Any) -> Any:
-    """递归把 DECIMAL/date/datetime 转成 JSON 可序列化类型。"""
-    if isinstance(obj, decimal.Decimal):
-        return float(obj)
-    if isinstance(obj, (_dt.date, _dt.datetime)):
-        return obj.isoformat() if isinstance(obj, _dt.datetime) else str(obj)
-    if isinstance(obj, dict):
-        return {k: _json_safe(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_json_safe(v) for v in obj]
-    return obj
 
 
 @router.get("/today")

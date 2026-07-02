@@ -57,8 +57,9 @@ DDL_STATEMENTS = [
         sell_price      DECIMAL(10,3) NULL COMMENT 'sell_date 收盘价',
         pct_change      DECIMAL(10,6) NULL COMMENT '(sell_price-buy_price)/buy_price',
         is_win          TINYINT       NULL COMMENT '1=次日收盘价高于买入价,0=持平或下跌',
-        settle_status   ENUM('pending_price','priced','settled','code_not_found')
-                                      NOT NULL DEFAULT 'pending_price',
+        settle_status   ENUM('pending_price','priced','settled','code_not_found','suspended')
+                                      NOT NULL DEFAULT 'pending_price'
+                                      COMMENT 'suspended=停牌等长期无行情,超时被强制排除,不计入胜率',
         created_at      DATETIME      DEFAULT CURRENT_TIMESTAMP,
         UNIQUE KEY uq_pick_code (pick_date, code),
         INDEX idx_pick_date (pick_date)
@@ -74,6 +75,8 @@ DDL_STATEMENTS = [
         capital_before  DECIMAL(18,2) NOT NULL,
         capital_after   DECIMAL(18,2) NOT NULL,
         cum_return      DECIMAL(10,6) NOT NULL COMMENT '相对 initial_capital(10万)的累计收益率',
+        excluded_count  TINYINT       NOT NULL DEFAULT 0
+                                      COMMENT '该批被排除不计入胜率的股票数(代码无效+长期停牌强制排除)',
         created_at      DATETIME      DEFAULT CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AI 热门板块模拟资金曲线(每日滚动复利)'
     """,
@@ -87,7 +90,50 @@ def ensure_tables() -> None:
     with conn.cursor() as cur:
         for sql in DDL_STATEMENTS:
             cur.execute(sql)
+    # ── 增量迁移(旧库补字段/补枚举值，幂等) ──────────────────────────────────
+    _migrate_table_columns(conn, "ai_hotsector_equity", [
+        ("excluded_count",
+         "TINYINT NOT NULL DEFAULT 0 COMMENT "
+         "'该批被排除不计入胜率的股票数(代码无效+长期停牌强制排除)'"),
+    ])
+    _migrate_settle_status_enum(conn)
     logger.info("ai_hotsector 表已就绪")
+
+
+def _migrate_table_columns(conn, table: str, columns: List[tuple]) -> None:
+    """幂等给指定表补充列；新库 DDL_STATEMENTS 里已有则跳过，旧库执行 ALTER。"""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS "
+            "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=%s",
+            (table,),
+        )
+        existing = {r["COLUMN_NAME"] for r in cur.fetchall()}
+        for col_name, col_def in columns:
+            if col_name not in existing:
+                cur.execute(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_def}")
+                logger.info("迁移：%s 新增列 %s", table, col_name)
+
+
+def _migrate_settle_status_enum(conn) -> None:
+    """旧库的 settle_status 枚举里没有 'suspended' 时补上(MODIFY COLUMN，幂等)。"""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT COLUMN_TYPE FROM INFORMATION_SCHEMA.COLUMNS "
+            "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ai_hotsector_stock' "
+            "AND COLUMN_NAME='settle_status'"
+        )
+        row = cur.fetchone()
+        if row and "'suspended'" not in row["COLUMN_TYPE"]:
+            cur.execute(
+                """
+                ALTER TABLE ai_hotsector_stock
+                MODIFY COLUMN settle_status
+                    ENUM('pending_price','priced','settled','code_not_found','suspended')
+                    NOT NULL DEFAULT 'pending_price'
+                """
+            )
+            logger.info("迁移：ai_hotsector_stock.settle_status 新增 'suspended' 枚举值")
 
 
 # ── pick（批次）──────────────────────────────────────────────────────────────
@@ -210,6 +256,17 @@ def fill_buy_price(stock_id: int, buy_price: float) -> None:
         )
 
 
+def mark_stock_suspended(stock_id: int) -> None:
+    """长期停牌/无行情导致买入价或卖出价迟迟拿不到，超时强制排除该股票，
+    不再阻塞其它股票和后续交易日的结算(不计入胜率/日均涨跌)。"""
+    conn = _get_pool()
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE ai_hotsector_stock SET settle_status='suspended' WHERE id=%s",
+            (stock_id,),
+        )
+
+
 def settle_stock(
     stock_id: int,
     sell_date: _Date,
@@ -250,9 +307,10 @@ def insert_equity(row: Dict[str, Any]) -> None:
             """
             INSERT INTO ai_hotsector_equity
                 (pick_date, sell_date, win_count, total_count, day_return,
-                 capital_before, capital_after, cum_return)
+                 capital_before, capital_after, cum_return, excluded_count)
             VALUES (%(pick_date)s, %(sell_date)s, %(win_count)s, %(total_count)s,
-                    %(day_return)s, %(capital_before)s, %(capital_after)s, %(cum_return)s)
+                    %(day_return)s, %(capital_before)s, %(capital_after)s, %(cum_return)s,
+                    %(excluded_count)s)
             ON DUPLICATE KEY UPDATE
                 sell_date=VALUES(sell_date),
                 win_count=VALUES(win_count),
@@ -260,9 +318,10 @@ def insert_equity(row: Dict[str, Any]) -> None:
                 day_return=VALUES(day_return),
                 capital_before=VALUES(capital_before),
                 capital_after=VALUES(capital_after),
-                cum_return=VALUES(cum_return)
+                cum_return=VALUES(cum_return),
+                excluded_count=VALUES(excluded_count)
             """,
-            row,
+            {**row, "excluded_count": row.get("excluded_count", 0)},
         )
 
 
@@ -351,7 +410,8 @@ def get_history(limit: int = 30) -> List[Dict[str, Any]]:
         cur.execute(
             """
             SELECT p.pick_date, p.status, p.error_msg,
-                   e.win_count, e.total_count, e.day_return, e.cum_return
+                   e.win_count, e.total_count, e.day_return, e.cum_return,
+                   e.excluded_count
             FROM ai_hotsector_pick p
             LEFT JOIN ai_hotsector_equity e ON e.pick_date = p.pick_date
             ORDER BY p.pick_date DESC

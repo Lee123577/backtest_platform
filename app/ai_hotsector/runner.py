@@ -40,6 +40,11 @@ logger = logging.getLogger(__name__)
 # 畸形代码直接插入会报 "Data too long" 崩掉整批 —— 必须先按格式过滤
 _CODE_RE = re.compile(r"^\d{6}$")
 
+# 停牌/长期无行情的股票如果一直等真实价格，会永久卡住整批结算(资金曲线那一天
+# 永远不出现，且界面上没有任何提示)。超过这么多个交易日仍拿不到价格 →
+# 强制排除(settle_status='suspended')，不计入胜率，但不再阻塞其它股票/后续交易日。
+FORCE_RESOLVE_TRADING_DAYS = 5
+
 
 @dataclass
 class PredictResult:
@@ -54,6 +59,7 @@ class PredictResult:
 class SettleResult:
     priced_count: int = 0            # 本次新回填 buy_price 的股票数
     settled_stock_count: int = 0     # 本次新结算(sell_price)的股票数
+    suspended_count: int = 0         # 本次因长期无行情被强制排除的股票数
     settled_pick_dates: List[_Date] = field(default_factory=list)  # 本次新生成资金曲线的批次
 
 
@@ -66,6 +72,16 @@ async def predict_once(pick_date: Optional[_Date] = None) -> PredictResult:
     if not calendar.is_trading_day(pick_date):
         logger.info("[%s] 非交易日,跳过 AI 热门板块预测", pick_date)
         return PredictResult(pick_date=pick_date, status="skipped")
+
+    # 已结算的日期拒绝重跑:replace_stocks 会先删后插,把已结算的 9 行清空重置，
+    # 而资金曲线的 capital_before 链条是按 pick_date 顺序滚动复利的，历史批次
+    # 一旦被清空重插，后面的资金曲线不会重新计算，整条链条就对不上了。
+    # 只在手动补跑历史日期(--date)时才可能踩到——正常 cron 只跑当天，不会触发。
+    existing = db.get_pick(pick_date)
+    if existing is not None and existing.get("status") == "settled":
+        msg = f"{pick_date} 已结算，拒绝重新预测(会打乱资金曲线复利链)"
+        logger.warning(msg)
+        return PredictResult(pick_date=pick_date, status="skipped", error_msg=msg)
 
     try:
         sectors_json, sectors_raw = await chat_json(sector_messages(pick_date))
@@ -152,6 +168,7 @@ async def predict_once(pick_date: Optional[_Date] = None) -> PredictResult:
 
 def settle_once(as_of_date: Optional[_Date] = None) -> SettleResult:
     db.ensure_tables()
+    today = as_of_date or _Date.today()
 
     result = SettleResult()
 
@@ -159,11 +176,21 @@ def settle_once(as_of_date: Optional[_Date] = None) -> SettleResult:
     priced_pick_dates: "set[_Date]" = set()
     for row in db.fetch_stocks_by_settle_status("pending_price"):
         px = db.get_close_price(row["code"], row["pick_date"])
-        if px is None:
-            continue  # 数据还没到(停牌/daily_update 尚未跑),下次再试
-        db.fill_buy_price(row["id"], px)
-        result.priced_count += 1
-        priced_pick_dates.add(row["pick_date"])
+        if px is not None:
+            db.fill_buy_price(row["id"], px)
+            result.priced_count += 1
+            priced_pick_dates.add(row["pick_date"])
+            continue
+        # 数据还没到(停牌/daily_update 尚未跑) —— 拖太久就强制排除,别让它
+        # 永远卡住这一批的结算
+        if calendar.count_trading_days(row["pick_date"], today) >= FORCE_RESOLVE_TRADING_DAYS:
+            db.mark_stock_suspended(row["id"])
+            result.suspended_count += 1
+            priced_pick_dates.add(row["pick_date"])
+            logger.warning(
+                "[%s] %s 超过 %d 个交易日仍无买入价(疑似长期停牌),强制排除",
+                row["pick_date"], row["code"], FORCE_RESOLVE_TRADING_DAYS,
+            )
 
     # pick 状态推进到 'priced'(仅用于前端历史列表展示进度，不影响结算逻辑)。
     # 只有该批不再有 pending_price 行才推进 —— 部分回填就标"已回填买入价"
@@ -174,41 +201,72 @@ def settle_once(as_of_date: Optional[_Date] = None) -> SettleResult:
             db.update_pick_status(pick_date, "priced")
 
     # ── 2. 回填卖出价 + 结算:priced 且下一交易日收盘价已入库 ──────────────
-    # fetch 按 pick_date 升序,保证同批多天补跑时资金曲线按时间顺序滚动复利
-    pick_dates_touched: "list[_Date]" = []
+    # touched 收集"本次可能让某批变成全部已解决"的所有 pick_date —— 既包括
+    # step1 摸过的(填了买入价/强制排除都算),也包括这里 step2 摸过的。
+    # 单只股票就在 step1 被强制排除的批次不会出现在 step2 的查询里，如果
+    # 漏掉 priced_pick_dates 就永远不会进入 step3 检查，批次会卡死不生成资金曲线。
+    touched: "set[_Date]" = set(priced_pick_dates)
     for row in db.fetch_stocks_by_settle_status("priced"):
         pick_date = row["pick_date"]
         next_day = calendar.next_n_trading_days(pick_date, 1)
         if next_day is None:
             continue
         px = db.get_close_price(row["code"], next_day)
-        if px is None:
-            continue  # 停牌/数据未到,下次再试
-        buy_price = float(row["buy_price"])
-        pct = (px - buy_price) / buy_price if buy_price > 0 else 0.0
-        is_win = 1 if pct > 0 else 0
-        db.settle_stock(row["id"], next_day, px, pct, is_win)
-        result.settled_stock_count += 1
-        if pick_date not in pick_dates_touched:
-            pick_dates_touched.append(pick_date)
+        if px is not None:
+            buy_price = float(row["buy_price"])
+            pct = (px - buy_price) / buy_price if buy_price > 0 else 0.0
+            is_win = 1 if pct > 0 else 0
+            db.settle_stock(row["id"], next_day, px, pct, is_win)
+            result.settled_stock_count += 1
+            touched.add(pick_date)
+            continue
+        # 卖出价迟迟拿不到(次日起长期停牌) —— 同样超时强制排除
+        if calendar.count_trading_days(pick_date, today) >= FORCE_RESOLVE_TRADING_DAYS:
+            db.mark_stock_suspended(row["id"])
+            result.suspended_count += 1
+            touched.add(pick_date)
+            logger.warning(
+                "[%s] %s 超过 %d 个交易日仍无卖出价(疑似长期停牌),强制排除",
+                pick_date, row["code"], FORCE_RESOLVE_TRADING_DAYS,
+            )
 
-    # ── 3. 对本次有新结算的每个批次,检查是否"全批已解决"→ 生成资金曲线 ────
-    for pick_date in pick_dates_touched:
+    # ── 3. 对本次摸过的每个批次,检查是否"全批已解决"→ 生成资金曲线 ──────
+    # 按 pick_date 升序处理,保证同批多天补跑时资金曲线按时间顺序滚动复利
+    for pick_date in sorted(touched):
         all_rows = db.get_stocks_by_pick_date(pick_date)
         unresolved = [r for r in all_rows
                       if r["settle_status"] in ("pending_price", "priced")]
         if unresolved:
-            continue  # 还有股票没结算完(比如停牌),这批先不生成资金曲线
+            continue  # 还有股票没结算完(比如停牌未超时),这批先不生成资金曲线
 
         settled = [r for r in all_rows if r["settle_status"] == "settled"]
+        excluded_count = sum(
+            1 for r in all_rows if r["settle_status"] in ("code_not_found", "suspended")
+        )
+
+        prev_eq = db.get_latest_equity()
+        capital_before = float(prev_eq["capital_after"]) if prev_eq else db.INITIAL_CAPITAL
+
         if not settled:
-            continue  # 全是 code_not_found,没有可统计的股票
+            # 全部被排除(代码无效/长期停牌),没有可统计的股票 —— 仍然把批次标记
+            # 完结(按 0 涨跌处理,不产生真实交易),避免永远卡在 priced 不动
+            db.insert_equity({
+                "pick_date": pick_date, "sell_date": today,
+                "win_count": 0, "total_count": 0, "day_return": 0.0,
+                "capital_before": round(capital_before, 2),
+                "capital_after": round(capital_before, 2),
+                "cum_return": round(capital_before / db.INITIAL_CAPITAL - 1, 6),
+                "excluded_count": excluded_count,
+            })
+            db.update_pick_status(pick_date, "settled")
+            result.settled_pick_dates.append(pick_date)
+            logger.warning("[%s] 全部 %d 只股票被排除,该批按 0 涨跌记账",
+                           pick_date, excluded_count)
+            continue
 
         win_count = sum(1 for r in settled if r["is_win"])
         total_count = len(settled)
         day_return = sum(float(r["pct_change"]) for r in settled) / total_count
-        prev_eq = db.get_latest_equity()
-        capital_before = float(prev_eq["capital_after"]) if prev_eq else db.INITIAL_CAPITAL
         capital_after = capital_before * (1 + day_return)
         cum_return = capital_after / db.INITIAL_CAPITAL - 1
         sell_date = max(r["sell_date"] for r in settled)
@@ -220,12 +278,14 @@ def settle_once(as_of_date: Optional[_Date] = None) -> SettleResult:
             "capital_before": round(capital_before, 2),
             "capital_after": round(capital_after, 2),
             "cum_return": round(cum_return, 6),
+            "excluded_count": excluded_count,
         })
         db.update_pick_status(pick_date, "settled")
         result.settled_pick_dates.append(pick_date)
         logger.info(
-            "[%s] AI 热门板块结算完成: 胜率=%d/%d, 当批收益=%.2f%%, 资金=%.2f",
+            "[%s] AI 热门板块结算完成: 胜率=%d/%d, 当批收益=%.2f%%, 资金=%.2f%s",
             pick_date, win_count, total_count, day_return * 100, capital_after,
+            f", 排除{excluded_count}只" if excluded_count else "",
         )
 
     return result

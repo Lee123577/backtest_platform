@@ -184,6 +184,9 @@ function renderStockRow(st) {
   if (st.settle_status === 'code_not_found') {
     badge = '<span class="settle-badge na">代码无效</span>';
     priceLine = '';
+  } else if (st.settle_status === 'suspended') {
+    badge = '<span class="settle-badge na">停牌排除</span>';
+    priceLine = '长期无行情，已排除不计入胜率';
   } else if (st.settle_status === 'settled') {
     const isWin = st.is_win === 1;
     badge = isWin
@@ -223,13 +226,16 @@ async function loadHistory() {
     const trs = rows.map(r => {
       const statusText = { predicted: '已预测(待回填)', priced: '已回填买入价',
                             settled: '已结算', failed: '预测失败' }[r.status] || r.status;
-      const winRate = r.total_count ? `${r.win_count}/${r.total_count}` : '—';
+      const excludedNote = r.excluded_count ? `（排除${r.excluded_count}只）` : '';
+      const winRate = r.total_count
+        ? `${r.win_count}/${r.total_count}${excludedNote}`
+        : (excludedNote ? `—${excludedNote}` : '—');
       const cls = r.status === 'failed' ? 'status-failed' : '';
       return `
         <tr class="${cls}">
-          <td>${r.pick_date}</td>
-          <td>${statusText}</td>
-          <td>${winRate}</td>
+          <td>${esc(r.pick_date)}</td>
+          <td>${esc(statusText)}</td>
+          <td>${esc(winRate)}</td>
           <td>${r.day_return !== null && r.day_return !== undefined ? fmtPct(r.day_return) : '—'}</td>
           <td>${r.cum_return !== null && r.cum_return !== undefined ? fmtPct(r.cum_return) : '—'}</td>
         </tr>
