@@ -1,8 +1,15 @@
 /* AI 热门板块页面专用样式（通用摘要卡片/图表容器复用 paper_trading.css / style.css） */
 
+.hs-rule-hint {
+  font-size: 12px;
+  color: var(--txt2);
+  margin: -4px 0 12px;
+  line-height: 1.6;
+}
+
 .sector-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: 14px;
   margin-top: 10px;
 }
@@ -10,8 +17,8 @@
 .sector-card {
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 12px 14px;
-  background: var(--bg);
+  padding: 14px 16px;
+  background: var(--bg2);
 }
 
 .sector-card-head {
@@ -42,32 +49,38 @@
 .sector-reason {
   font-size: 12px;
   color: var(--txt2);
-  margin-bottom: 8px;
-  line-height: 1.5;
+  margin-bottom: 10px;
+  line-height: 1.6;
 }
 
 .stock-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 0;
+  padding: 10px 0;
   border-top: 1px dashed var(--border);
-  font-size: 13px;
 }
 
 .stock-row:first-of-type { border-top: none; }
 
-.stock-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
-.stock-code-name { font-weight: 600; }
-.stock-code-name .code { color: var(--txt2); font-weight: 400; font-size: 12px; margin-left: 4px; }
-.stock-reason { font-size: 11px; color: var(--txt2); }
+.stock-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
+.stock-code-name { font-weight: 600; font-size: 14px; }
+.stock-code-name .code { color: var(--txt2); font-weight: 400; font-size: 12px; margin-left: 6px; }
+.stock-reason { font-size: 12px; color: var(--txt2); line-height: 1.5; }
 
-.stock-perf { text-align: right; white-space: nowrap; padding-left: 10px; }
-.stock-pct { font-weight: 700; }
+.stock-perf {
+  text-align: right;
+  white-space: nowrap;
+  padding-left: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: flex-end;
+}
+.stock-pct { font-weight: 700; font-size: 15px; }
 .stock-pct.pos { color: var(--up); }
 .stock-pct.neg { color: var(--down); }
-.stock-pct.na { color: var(--txt2); font-weight: 400; }
-.stock-price-line { font-size: 11px; color: var(--txt2); }
+.stock-price-line { font-size: 12px; color: var(--txt2); }
 
 .settle-badge {
   display: inline-block;

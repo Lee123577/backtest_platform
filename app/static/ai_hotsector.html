@@ -31,8 +31,9 @@
   <div class="panel">
     <div class="panel-title">
       AI 热门板块 · 模拟账户
-      <span class="tip-badge">DeepSeek 每日选板块/选股，T 日收盘买入 · T+1 收盘卖出，仅供研究不构成投资建议</span>
+      <span class="tip-badge">仅供研究，不构成投资建议</span>
     </div>
+    <div class="hs-rule-hint">DeepSeek 每日收盘后选 3 个热门板块 × 3 只强势股，按 T 日收盘价买入、T+1 收盘价卖出，10 万本金等权滚动</div>
     <div class="summary-grid" id="hsSummaryGrid">
       <div class="sum-card"><div class="sum-label">初始资金</div><div class="sum-val" id="hsInitCapital">—</div></div>
       <div class="sum-card"><div class="sum-label">当前模拟资金</div><div class="sum-val" id="hsCapital">—</div></div>
@@ -41,13 +42,7 @@
     </div>
   </div>
 
-  <!-- 2. 资金曲线 -->
-  <div class="panel">
-    <div class="panel-title">模拟资金曲线 <span>10 万本金 · 每日滚动复利</span></div>
-    <div class="chart-wrap-sm" id="hsEquityChart"></div>
-  </div>
-
-  <!-- 3. 今日 AI 荐股 -->
+  <!-- 2. 今日 AI 荐股（信息量最大，放最前） -->
   <div class="panel">
     <div class="panel-title">
       今日 AI 荐股 <span id="hsTodayDate"></span>
@@ -55,6 +50,12 @@
     <div id="hsTodayWrap">
       <div class="no-data">加载中…</div>
     </div>
+  </div>
+
+  <!-- 3. 资金曲线 -->
+  <div class="panel">
+    <div class="panel-title">模拟资金曲线 <span>10 万本金 · 每日滚动复利</span></div>
+    <div class="chart-wrap-sm" id="hsEquityChart"></div>
   </div>
 
   <!-- 4. 历史批次 -->

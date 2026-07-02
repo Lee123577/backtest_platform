@@ -42,8 +42,8 @@ async function loadStats() {
   try {
     const res = await fetch('/api/ai_hotsector/stats');
     const s = await res.json();
-    document.getElementById('hsInitCapital').textContent = fmtMoney(s.initial_capital);
-    document.getElementById('hsCapital').textContent = fmtMoney(s.capital);
+    document.getElementById('hsInitCapital').textContent = `¥${fmtMoney(s.initial_capital)}`;
+    document.getElementById('hsCapital').textContent = `¥${fmtMoney(s.capital)}`;
 
     const cumEl = document.getElementById('hsCumReturn');
     cumEl.textContent = fmtPct(s.cum_return);
@@ -77,11 +77,15 @@ function renderEquityChart(data) {
     hsEquityChart = echarts.init(document.getElementById('hsEquityChart'));
     window.addEventListener('resize', () => hsEquityChart && hsEquityChart.resize());
   }
-  if (!data.length) {
+  // 单点画不出曲线,空图很难看 —— 少于 2 个结算日时用文字占位
+  if (data.length < 2) {
+    const msg = data.length === 0
+      ? '暂无已结算数据，资金曲线将在首批预测结算后出现'
+      : `已结算 1 个交易日（${data[0].pick_date}，${(Number(data[0].day_return) * 100).toFixed(2)}%），再结算 1 天即可画出曲线`;
     hsEquityChart.clear();
     hsEquityChart.setOption({
-      title: { text: '暂无数据', left: 'center', top: 'center',
-               textStyle: { color: '#57606a', fontSize: 13 } },
+      title: { text: msg, left: 'center', top: 'center',
+               textStyle: { color: '#57606a', fontSize: 13, fontWeight: 'normal' } },
     });
     return;
   }
@@ -174,11 +178,12 @@ function renderSectorCard(rank, sector) {
 
 function renderStockRow(st) {
   let badge = '<span class="settle-badge pending">待结算</span>';
-  let pctHtml = '<span class="stock-pct na">—</span>';
-  let priceLine = '';
+  let pctHtml = '';   // 未结算不显示悬空的"—"，右侧只留价格行
+  let priceLine = '等待买入价回填';
 
   if (st.settle_status === 'code_not_found') {
     badge = '<span class="settle-badge na">代码无效</span>';
+    priceLine = '';
   } else if (st.settle_status === 'settled') {
     const isWin = st.is_win === 1;
     badge = isWin
