@@ -243,12 +243,21 @@ function renderStockRow(st) {
 // ── 盘中浮动盈亏(priced 状态:已买入、还没到次日收盘)──────────────────────────
 
 async function loadIntraday() {
+  const hint = document.getElementById('hsIntradayUpdated');
   try {
     const res = await fetch('/api/ai_hotsector/intraday');
     const rows = (await res.json()).intraday || [];
     applyIntraday(rows);
+    if (hint) {
+      const now = new Date();
+      const hh = String(now.getHours()).padStart(2, '0');
+      const mm = String(now.getMinutes()).padStart(2, '0');
+      const ss = String(now.getSeconds()).padStart(2, '0');
+      hint.textContent = `盘中数据更新于 ${hh}:${mm}:${ss}`;
+    }
   } catch (e) {
     console.error(e);
+    if (hint) hint.textContent = '盘中数据更新失败，将于 30 秒后重试';
   }
 }
 
@@ -331,8 +340,10 @@ async function loadSectorStats() {
         : '—';
       const avgPct = r.avg_pct_change !== null && r.avg_pct_change !== undefined
         ? fmtPct(r.avg_pct_change) : '—';
+      // 出现天数 >= 3 视为"AI 反复推荐同一板块"，高亮提示同质化
+      const rowClass = r.days_picked >= 3 ? ' class="hs-repeat-sector"' : '';
       return `
-        <tr>
+        <tr${rowClass}>
           <td>${esc(r.sector_name)}</td>
           <td>${r.days_picked}</td>
           <td>${r.settled_count}/${r.stock_count}</td>

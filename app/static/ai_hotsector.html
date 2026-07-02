@@ -48,6 +48,7 @@
   <div class="panel">
     <div class="panel-title">
       今日 AI 荐股 <span id="hsTodayDate"></span>
+      <span class="hs-updated-hint" id="hsIntradayUpdated"></span>
     </div>
     <div id="hsTodayWrap">
       <div class="no-data">加载中…</div>
@@ -61,19 +62,21 @@
   </div>
 
   <!-- 4. 板块表现 + 提示词版本对比 -->
-  <div class="panel">
-    <div class="panel-title">
-      板块表现 <span>出现天数越多，说明 AI 越倾向反复推荐同一板块(同质化信号)</span>
+  <div class="hs-two-col">
+    <div class="panel">
+      <div class="panel-title">
+        板块表现 <span>出现天数越多，说明 AI 越倾向反复推荐同一板块(同质化信号)</span>
+      </div>
+      <div id="hsSectorStatsWrap">
+        <div class="no-data">加载中…</div>
+      </div>
     </div>
-    <div id="hsSectorStatsWrap">
-      <div class="no-data">加载中…</div>
-    </div>
-  </div>
 
-  <div class="panel">
-    <div class="panel-title">提示词版本对比 <span>迭代提示词后，用胜率验证是否真的变好了</span></div>
-    <div id="hsPromptStatsWrap">
-      <div class="no-data">加载中…</div>
+    <div class="panel">
+      <div class="panel-title">提示词版本对比 <span>迭代提示词后，用胜率验证是否真的变好了</span></div>
+      <div id="hsPromptStatsWrap">
+        <div class="no-data">加载中…</div>
+      </div>
     </div>
   </div>
 
