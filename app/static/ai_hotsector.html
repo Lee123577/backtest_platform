@@ -38,6 +38,8 @@
       <div class="sum-card"><div class="sum-label">初始资金</div><div class="sum-val" id="hsInitCapital">—</div></div>
       <div class="sum-card"><div class="sum-label">当前模拟资金</div><div class="sum-val" id="hsCapital">—</div></div>
       <div class="sum-card"><div class="sum-label">累计收益</div><div class="sum-val" id="hsCumReturn">—</div></div>
+      <div class="sum-card"><div class="sum-label">扣费后收益</div><div class="sum-val" id="hsCumReturnAfterFee">—</div></div>
+      <div class="sum-card"><div class="sum-label">同期中证1000</div><div class="sum-val" id="hsBenchmarkReturn">—</div></div>
       <div class="sum-card"><div class="sum-label">累计胜率</div><div class="sum-val" id="hsWinRate">—</div></div>
     </div>
   </div>
@@ -54,11 +56,28 @@
 
   <!-- 3. 资金曲线 -->
   <div class="panel">
-    <div class="panel-title">模拟资金曲线 <span>10 万本金 · 每日滚动复利</span></div>
+    <div class="panel-title">模拟资金曲线 <span>10 万本金 · 每日滚动复利 · 对比中证1000 · 扣费后</span></div>
     <div class="chart-wrap-sm" id="hsEquityChart"></div>
   </div>
 
-  <!-- 4. 历史批次 -->
+  <!-- 4. 板块表现 + 提示词版本对比 -->
+  <div class="panel">
+    <div class="panel-title">
+      板块表现 <span>出现天数越多，说明 AI 越倾向反复推荐同一板块(同质化信号)</span>
+    </div>
+    <div id="hsSectorStatsWrap">
+      <div class="no-data">加载中…</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">提示词版本对比 <span>迭代提示词后，用胜率验证是否真的变好了</span></div>
+    <div id="hsPromptStatsWrap">
+      <div class="no-data">加载中…</div>
+    </div>
+  </div>
+
+  <!-- 5. 历史批次 -->
   <div class="panel">
     <div class="panel-title">历史批次</div>
     <div id="hsHistoryWrap">

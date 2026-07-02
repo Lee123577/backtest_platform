@@ -32,8 +32,14 @@ function esc(s) {
 document.addEventListener('DOMContentLoaded', () => {
   loadStats();
   loadEquity();
-  loadToday();
+  // loadIntraday 依赖 loadToday 先把 .stock-row 渲染到 DOM 里，
+  // 并发跑的话会因为元素还不存在而"更新"了个寂寞
+  loadToday().then(loadIntraday);
   loadHistory();
+  loadSectorStats();
+  loadPromptStats();
+  // 盘中浮动盈亏会变，定时刷新；用 setInterval 而不是整页重载，避免打断阅读
+  setInterval(loadIntraday, 30_000);
 });
 
 // ── 1. 统计条 ────────────────────────────────────────────────────────────────
@@ -48,6 +54,14 @@ async function loadStats() {
     const cumEl = document.getElementById('hsCumReturn');
     cumEl.textContent = fmtPct(s.cum_return);
     cumEl.className = 'sum-val ' + (s.cum_return > 0 ? 'pos' : s.cum_return < 0 ? 'neg' : '');
+
+    const feeEl = document.getElementById('hsCumReturnAfterFee');
+    feeEl.textContent = fmtPct(s.cum_return_after_fee);
+    feeEl.className = 'sum-val ' + (s.cum_return_after_fee > 0 ? 'pos' : s.cum_return_after_fee < 0 ? 'neg' : '');
+
+    const bmEl = document.getElementById('hsBenchmarkReturn');
+    bmEl.textContent = fmtPct(s.benchmark_cum_return);
+    bmEl.className = 'sum-val ' + (s.benchmark_cum_return > 0 ? 'pos' : s.benchmark_cum_return < 0 ? 'neg' : '');
 
     const winEl = document.getElementById('hsWinRate');
     if (s.total_count > 0) {
@@ -92,11 +106,17 @@ function renderEquityChart(data) {
 
   const dates = data.map(d => d.pick_date);
   const cum = data.map(d => Number(d.cum_return) * 100);
+  const bmCum = data.map(d => d.benchmark_cum_return !== null && d.benchmark_cum_return !== undefined
+    ? Number(d.benchmark_cum_return) * 100 : null);
+  const feeCum = data.map(d => d.cum_return_after_fee !== null && d.cum_return_after_fee !== undefined
+    ? Number(d.cum_return_after_fee) * 100 : null);
 
   hsEquityChart.setOption({
     tooltip: { trigger: 'axis', axisPointer: { type: 'cross' },
                valueFormatter: (v) => v == null ? '—' : `${v.toFixed(2)}%` },
-    grid: { left: 60, right: 30, top: 30, bottom: 50 },
+    legend: { data: ['AI 热门板块', '扣费后', '中证1000(基准)'], top: 0,
+              textStyle: { fontSize: 11 } },
+    grid: { left: 60, right: 30, top: 40, bottom: 50 },
     xAxis: { type: 'category', data: dates, boundaryGap: false,
              axisLabel: { color: '#57606a', fontSize: 11 } },
     yAxis: { type: 'value', name: '累计收益(%)',
@@ -108,6 +128,14 @@ function renderEquityChart(data) {
         lineStyle: { width: 2, color: '#0969da' },
         itemStyle: { color: '#0969da' },
         areaStyle: { color: 'rgba(9,105,218,0.10)' },
+        symbol: 'none' },
+      { name: '扣费后', type: 'line', data: feeCum, smooth: true,
+        lineStyle: { width: 2, color: '#9a6700', type: 'dashed' },
+        itemStyle: { color: '#9a6700' },
+        symbol: 'none' },
+      { name: '中证1000(基准)', type: 'line', data: bmCum, smooth: true,
+        lineStyle: { width: 2, color: '#57606a' },
+        itemStyle: { color: '#57606a' },
         symbol: 'none' },
     ],
   });
@@ -199,17 +227,48 @@ function renderStockRow(st) {
   }
 
   return `
-    <div class="stock-row">
+    <div class="stock-row" data-code="${esc(st.code)}" data-settle-status="${esc(st.settle_status)}">
       <div class="stock-main">
         <div class="stock-code-name">${esc(st.name)}<span class="code">${esc(st.code)}</span>${badge}</div>
         <div class="stock-reason">${esc(st.stock_reason)}</div>
       </div>
       <div class="stock-perf">
-        ${pctHtml}
+        <span class="stock-pct-slot">${pctHtml}</span>
         <div class="stock-price-line">${priceLine}</div>
       </div>
     </div>
   `;
+}
+
+// ── 盘中浮动盈亏(priced 状态:已买入、还没到次日收盘)──────────────────────────
+
+async function loadIntraday() {
+  try {
+    const res = await fetch('/api/ai_hotsector/intraday');
+    const rows = (await res.json()).intraday || [];
+    applyIntraday(rows);
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+function applyIntraday(rows) {
+  if (!rows.length) return;
+  const byCode = new Map(rows.map(r => [r.code, r]));
+  document.querySelectorAll('.stock-row[data-settle-status="priced"]').forEach(el => {
+    const info = byCode.get(el.dataset.code);
+    if (!info || info.realtime_price === null || info.realtime_price === undefined) return;
+    const isUp = info.floating_pct !== null && info.floating_pct > 0;
+    const isDown = info.floating_pct !== null && info.floating_pct < 0;
+    const pctSlot = el.querySelector('.stock-pct-slot');
+    if (pctSlot) {
+      pctSlot.innerHTML = `<span class="stock-pct ${isUp ? 'pos' : isDown ? 'neg' : ''}">${fmtPct(info.floating_pct)}</span>`;
+    }
+    const priceLine = el.querySelector('.stock-price-line');
+    if (priceLine) {
+      priceLine.textContent = `买 ${fmtPrice(info.buy_price)} → 现价 ${fmtPrice(info.realtime_price)}(盘中)`;
+    }
+  });
 }
 
 // ── 4. 历史批次 ──────────────────────────────────────────────────────────────
@@ -245,6 +304,88 @@ async function loadHistory() {
       <div class="holdings-table-wrap">
         <table class="hs-tbl">
           <thead><tr><th>日期</th><th>状态</th><th>当批胜率</th><th>当批收益</th><th>累计收益</th></tr></thead>
+          <tbody>${trs}</tbody>
+        </table>
+      </div>
+    `;
+  } catch (e) {
+    console.error(e);
+    wrap.innerHTML = '<div class="no-data">加载失败</div>';
+  }
+}
+
+// ── 5. 板块表现 ──────────────────────────────────────────────────────────────
+
+async function loadSectorStats() {
+  const wrap = document.getElementById('hsSectorStatsWrap');
+  try {
+    const res = await fetch('/api/ai_hotsector/sector_stats');
+    const rows = (await res.json()).sectors || [];
+    if (!rows.length) {
+      wrap.innerHTML = '<div class="no-data">暂无数据</div>';
+      return;
+    }
+    const trs = rows.map(r => {
+      const winRate = r.settled_count > 0
+        ? fmtPct(r.win_count / r.settled_count)
+        : '—';
+      const avgPct = r.avg_pct_change !== null && r.avg_pct_change !== undefined
+        ? fmtPct(r.avg_pct_change) : '—';
+      return `
+        <tr>
+          <td>${esc(r.sector_name)}</td>
+          <td>${r.days_picked}</td>
+          <td>${r.settled_count}/${r.stock_count}</td>
+          <td>${r.settled_count > 0 ? `${r.win_count}/${r.settled_count}（${winRate}）` : '—'}</td>
+          <td>${avgPct}</td>
+        </tr>
+      `;
+    }).join('');
+    wrap.innerHTML = `
+      <div class="holdings-table-wrap">
+        <table class="hs-tbl">
+          <thead><tr><th>板块</th><th>出现天数</th><th>已结算/累计出现</th><th>胜率</th><th>平均涨跌幅</th></tr></thead>
+          <tbody>${trs}</tbody>
+        </table>
+      </div>
+    `;
+  } catch (e) {
+    console.error(e);
+    wrap.innerHTML = '<div class="no-data">加载失败</div>';
+  }
+}
+
+// ── 6. 提示词版本对比 ────────────────────────────────────────────────────────
+
+async function loadPromptStats() {
+  const wrap = document.getElementById('hsPromptStatsWrap');
+  try {
+    const res = await fetch('/api/ai_hotsector/prompt_stats');
+    const rows = (await res.json()).prompts || [];
+    if (!rows.length) {
+      wrap.innerHTML = '<div class="no-data">暂无数据</div>';
+      return;
+    }
+    const trs = rows.map(r => {
+      const winRate = r.settled_count > 0
+        ? fmtPct(r.win_count / r.settled_count)
+        : '—';
+      const avgPct = r.avg_pct_change !== null && r.avg_pct_change !== undefined
+        ? fmtPct(r.avg_pct_change) : '—';
+      return `
+        <tr>
+          <td>${esc(r.stock_prompt_version)}</td>
+          <td>${r.days_used}</td>
+          <td>${r.settled_count}/${r.stock_count}</td>
+          <td>${r.settled_count > 0 ? `${r.win_count}/${r.settled_count}（${winRate}）` : '—'}</td>
+          <td>${avgPct}</td>
+        </tr>
+      `;
+    }).join('');
+    wrap.innerHTML = `
+      <div class="holdings-table-wrap">
+        <table class="hs-tbl">
+          <thead><tr><th>提示词版本</th><th>使用天数</th><th>已结算/累计出现</th><th>胜率</th><th>平均涨跌幅</th></tr></thead>
           <tbody>${trs}</tbody>
         </table>
       </div>

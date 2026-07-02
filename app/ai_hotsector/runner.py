@@ -25,6 +25,7 @@ from typing import Any, Dict, List, Optional
 
 from ..data import calendar
 from ..data.data_loader import normalize_code
+from ..engine.fees import COMMISSION_RATE, MIN_COMMISSION, STAMP_TAX_RATE
 from . import db
 from .deepseek_client import DeepSeekError, chat_json
 from .prompts import (
@@ -44,6 +45,32 @@ _CODE_RE = re.compile(r"^\d{6}$")
 # 永远不出现，且界面上没有任何提示)。超过这么多个交易日仍拿不到价格 →
 # 强制排除(settle_status='suspended')，不计入胜率，但不再阻塞其它股票/后续交易日。
 FORCE_RESOLVE_TRADING_DAYS = 5
+
+# 基准:中证1000(000852) —— 与 paper_trading 的小市值策略同一个基准，方便横向对比
+BENCHMARK_INDEX = "000852"
+
+
+def _compute_benchmark(pick_date: _Date) -> tuple[Optional[float], Optional[float]]:
+    """返回 (当日收盘点位, 相对资金曲线第一天的累计涨跌幅)。指数当日无数据返回 (None, None)。"""
+    close = db.get_index_close(BENCHMARK_INDEX, pick_date)
+    if close is None:
+        return None, None
+    first = db.get_first_equity_benchmark()
+    first_close = float(first["benchmark_close"]) if first else close  # 自己是第一行→起点=自己,累计=0
+    cum = (close - first_close) / first_close if first_close > 0 else None
+    return close, cum
+
+
+def _round_trip_cost_rate(position_value: float) -> float:
+    """单只股票"买入+次日卖出"的费率成本(佣金双边+印花税单边卖出)，
+    按当前批次的等权仓位金额算 —— 仓位小的话佣金最低 5 元会顶格，
+    实际费率比"名义费率×2"更高，这里如实反映。"""
+    if position_value <= 0:
+        return 0.0
+    buy_comm = max(position_value * COMMISSION_RATE, MIN_COMMISSION)
+    sell_comm = max(position_value * COMMISSION_RATE, MIN_COMMISSION)
+    stamp = position_value * STAMP_TAX_RATE
+    return (buy_comm + sell_comm + stamp) / position_value
 
 
 @dataclass
@@ -246,10 +273,17 @@ def settle_once(as_of_date: Optional[_Date] = None) -> SettleResult:
 
         prev_eq = db.get_latest_equity()
         capital_before = float(prev_eq["capital_after"]) if prev_eq else db.INITIAL_CAPITAL
+        capital_before_after_fee = (
+            float(prev_eq["capital_after_fee"])
+            if prev_eq and prev_eq.get("capital_after_fee") is not None
+            else db.INITIAL_CAPITAL
+        )
+        bm_close, bm_cum = _compute_benchmark(pick_date)
 
         if not settled:
             # 全部被排除(代码无效/长期停牌),没有可统计的股票 —— 仍然把批次标记
-            # 完结(按 0 涨跌处理,不产生真实交易),避免永远卡在 priced 不动
+            # 完结(按 0 涨跌处理,不产生真实交易),避免永远卡在 priced 不动。
+            # 没有真实成交,扣费口径也按 0 涨跌处理(不产生手续费)
             db.insert_equity({
                 "pick_date": pick_date, "sell_date": today,
                 "win_count": 0, "total_count": 0, "day_return": 0.0,
@@ -257,6 +291,11 @@ def settle_once(as_of_date: Optional[_Date] = None) -> SettleResult:
                 "capital_after": round(capital_before, 2),
                 "cum_return": round(capital_before / db.INITIAL_CAPITAL - 1, 6),
                 "excluded_count": excluded_count,
+                "benchmark_close": bm_close, "benchmark_cum_return": bm_cum,
+                "day_return_after_fee": 0.0,
+                "capital_after_fee": round(capital_before_after_fee, 2),
+                "cum_return_after_fee": round(
+                    capital_before_after_fee / db.INITIAL_CAPITAL - 1, 6),
             })
             db.update_pick_status(pick_date, "settled")
             result.settled_pick_dates.append(pick_date)
@@ -271,6 +310,15 @@ def settle_once(as_of_date: Optional[_Date] = None) -> SettleResult:
         cum_return = capital_after / db.INITIAL_CAPITAL - 1
         sell_date = max(r["sell_date"] for r in settled)
 
+        # 扣费口径:按当批等权仓位金额算一次往返(买+卖)的佣金/印花税成本，
+        # 从平均涨跌幅里减掉 —— 小仓位下佣金最低 5 元顶格，实际费率比双边
+        # 万三+千一印花税更高(参考 app/engine/fees.py 的费率常量)
+        position_value = capital_before / total_count
+        cost_rate = _round_trip_cost_rate(position_value)
+        day_return_after_fee = day_return - cost_rate
+        capital_after_fee = capital_before_after_fee * (1 + day_return_after_fee)
+        cum_return_after_fee = capital_after_fee / db.INITIAL_CAPITAL - 1
+
         db.insert_equity({
             "pick_date": pick_date, "sell_date": sell_date,
             "win_count": win_count, "total_count": total_count,
@@ -279,12 +327,17 @@ def settle_once(as_of_date: Optional[_Date] = None) -> SettleResult:
             "capital_after": round(capital_after, 2),
             "cum_return": round(cum_return, 6),
             "excluded_count": excluded_count,
+            "benchmark_close": bm_close, "benchmark_cum_return": bm_cum,
+            "day_return_after_fee": round(day_return_after_fee, 6),
+            "capital_after_fee": round(capital_after_fee, 2),
+            "cum_return_after_fee": round(cum_return_after_fee, 6),
         })
         db.update_pick_status(pick_date, "settled")
         result.settled_pick_dates.append(pick_date)
         logger.info(
-            "[%s] AI 热门板块结算完成: 胜率=%d/%d, 当批收益=%.2f%%, 资金=%.2f%s",
-            pick_date, win_count, total_count, day_return * 100, capital_after,
+            "[%s] AI 热门板块结算完成: 胜率=%d/%d, 当批收益=%.2f%%(扣费后%.2f%%), 资金=%.2f%s",
+            pick_date, win_count, total_count, day_return * 100,
+            day_return_after_fee * 100, capital_after,
             f", 排除{excluded_count}只" if excluded_count else "",
         )
 

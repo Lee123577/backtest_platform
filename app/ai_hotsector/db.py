@@ -77,6 +77,11 @@ DDL_STATEMENTS = [
         cum_return      DECIMAL(10,6) NOT NULL COMMENT '相对 initial_capital(10万)的累计收益率',
         excluded_count  TINYINT       NOT NULL DEFAULT 0
                                       COMMENT '该批被排除不计入胜率的股票数(代码无效+长期停牌强制排除)',
+        benchmark_close        DECIMAL(10,3) NULL COMMENT '基准指数(中证1000)当日收盘点位',
+        benchmark_cum_return    DECIMAL(10,6) NULL COMMENT '基准指数相对首个交易日的累计涨跌幅(买入持有对比)',
+        day_return_after_fee    DECIMAL(10,6) NULL COMMENT '扣除佣金/印花税后的当批平均涨跌幅',
+        capital_after_fee       DECIMAL(18,2) NULL COMMENT '扣费后滚动复利资金',
+        cum_return_after_fee    DECIMAL(10,6) NULL COMMENT '扣费后相对 initial_capital 的累计收益率',
         created_at      DATETIME      DEFAULT CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AI 热门板块模拟资金曲线(每日滚动复利)'
     """,
@@ -95,6 +100,14 @@ def ensure_tables() -> None:
         ("excluded_count",
          "TINYINT NOT NULL DEFAULT 0 COMMENT "
          "'该批被排除不计入胜率的股票数(代码无效+长期停牌强制排除)'"),
+        ("benchmark_close", "DECIMAL(10,3) NULL COMMENT '基准指数(中证1000)当日收盘点位'"),
+        ("benchmark_cum_return",
+         "DECIMAL(10,6) NULL COMMENT '基准指数相对首个交易日的累计涨跌幅(买入持有对比)'"),
+        ("day_return_after_fee",
+         "DECIMAL(10,6) NULL COMMENT '扣除佣金/印花税后的当批平均涨跌幅'"),
+        ("capital_after_fee", "DECIMAL(18,2) NULL COMMENT '扣费后滚动复利资金'"),
+        ("cum_return_after_fee",
+         "DECIMAL(10,6) NULL COMMENT '扣费后相对 initial_capital 的累计收益率'"),
     ])
     _migrate_settle_status_enum(conn)
     logger.info("ai_hotsector 表已就绪")
@@ -301,16 +314,23 @@ def get_latest_equity() -> Optional[Dict[str, Any]]:
 
 
 def insert_equity(row: Dict[str, Any]) -> None:
+    defaults = {
+        "excluded_count": 0, "benchmark_close": None, "benchmark_cum_return": None,
+        "day_return_after_fee": None, "capital_after_fee": None, "cum_return_after_fee": None,
+    }
     conn = _get_pool()
     with conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO ai_hotsector_equity
                 (pick_date, sell_date, win_count, total_count, day_return,
-                 capital_before, capital_after, cum_return, excluded_count)
+                 capital_before, capital_after, cum_return, excluded_count,
+                 benchmark_close, benchmark_cum_return,
+                 day_return_after_fee, capital_after_fee, cum_return_after_fee)
             VALUES (%(pick_date)s, %(sell_date)s, %(win_count)s, %(total_count)s,
                     %(day_return)s, %(capital_before)s, %(capital_after)s, %(cum_return)s,
-                    %(excluded_count)s)
+                    %(excluded_count)s, %(benchmark_close)s, %(benchmark_cum_return)s,
+                    %(day_return_after_fee)s, %(capital_after_fee)s, %(cum_return_after_fee)s)
             ON DUPLICATE KEY UPDATE
                 sell_date=VALUES(sell_date),
                 win_count=VALUES(win_count),
@@ -319,9 +339,14 @@ def insert_equity(row: Dict[str, Any]) -> None:
                 capital_before=VALUES(capital_before),
                 capital_after=VALUES(capital_after),
                 cum_return=VALUES(cum_return),
-                excluded_count=VALUES(excluded_count)
+                excluded_count=VALUES(excluded_count),
+                benchmark_close=VALUES(benchmark_close),
+                benchmark_cum_return=VALUES(benchmark_cum_return),
+                day_return_after_fee=VALUES(day_return_after_fee),
+                capital_after_fee=VALUES(capital_after_fee),
+                cum_return_after_fee=VALUES(cum_return_after_fee)
             """,
-            {**row, "excluded_count": row.get("excluded_count", 0)},
+            {**defaults, **row},
         )
 
 
@@ -333,7 +358,8 @@ def get_equity_curve(limit: int = 365) -> List[Dict[str, Any]]:
         cur.execute(
             """
             SELECT pick_date, sell_date, win_count, total_count, day_return,
-                   capital_after, cum_return
+                   capital_after, cum_return, benchmark_cum_return,
+                   cum_return_after_fee
             FROM ai_hotsector_equity
             ORDER BY pick_date DESC
             LIMIT %s
@@ -343,6 +369,35 @@ def get_equity_curve(limit: int = 365) -> List[Dict[str, Any]]:
         rows = list(cur.fetchall())
     rows.reverse()
     return rows
+
+
+def get_first_equity_benchmark() -> Optional[Dict[str, Any]]:
+    """资金曲线里最早一行的基准收盘点位 —— 用作基准"买入持有"的起点。"""
+    conn = _get_pool()
+    if conn is None:
+        return None
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT pick_date, benchmark_close FROM ai_hotsector_equity
+            WHERE benchmark_close IS NOT NULL
+            ORDER BY pick_date LIMIT 1
+            """
+        )
+        return cur.fetchone()
+
+
+def get_index_close(index_code: str, trade_date: _Date) -> Optional[float]:
+    conn = _get_pool()
+    if conn is None:
+        return None
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT close FROM index_daily WHERE index_code=%s AND trade_date=%s",
+            (index_code, trade_date),
+        )
+        row = cur.fetchone()
+    return float(row["close"]) if row and row["close"] is not None else None
 
 
 # ── 行情/校验（runner 用）────────────────────────────────────────────────────
@@ -423,12 +478,13 @@ def get_history(limit: int = 30) -> List[Dict[str, Any]]:
 
 
 def get_stats() -> Dict[str, Any]:
-    """全部已结算股票的累计胜率 + 最新资金曲线状态。"""
+    """全部已结算股票的累计胜率 + 最新资金曲线状态(含基准/扣费后对比)。"""
     conn = _get_pool()
     if conn is None:
         return {
             "win_count": 0, "total_count": 0, "win_rate": None,
             "capital": INITIAL_CAPITAL, "cum_return": 0.0,
+            "cum_return_after_fee": None, "benchmark_cum_return": None,
             "initial_capital": INITIAL_CAPITAL,
         }
     with conn.cursor() as cur:
@@ -444,11 +500,68 @@ def get_stats() -> Dict[str, Any]:
     latest_eq = get_latest_equity()
     capital = float(latest_eq["capital_after"]) if latest_eq else INITIAL_CAPITAL
     cum_return = float(latest_eq["cum_return"]) if latest_eq else 0.0
+    cum_return_after_fee = (
+        float(latest_eq["cum_return_after_fee"])
+        if latest_eq and latest_eq.get("cum_return_after_fee") is not None else None
+    )
+    benchmark_cum_return = (
+        float(latest_eq["benchmark_cum_return"])
+        if latest_eq and latest_eq.get("benchmark_cum_return") is not None else None
+    )
     return {
         "win_count": wins,
         "total_count": total,
         "win_rate": (wins / total) if total > 0 else None,
         "capital": capital,
         "cum_return": cum_return,
+        "cum_return_after_fee": cum_return_after_fee,
+        "benchmark_cum_return": benchmark_cum_return,
         "initial_capital": INITIAL_CAPITAL,
     }
+
+
+def get_sector_stats() -> List[Dict[str, Any]]:
+    """按板块名聚合:出现天数、已结算股票数、胜率、平均涨跌幅。
+    板块名逐字匹配(DeepSeek 每天措辞可能略有差异，这里不做模糊归并，
+    先如实反映"同一名字重复出现"这个信号本身)。"""
+    conn = _get_pool()
+    if conn is None:
+        return []
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT sector_name,
+                   COUNT(DISTINCT pick_date) AS days_picked,
+                   COUNT(*) AS stock_count,
+                   SUM(CASE WHEN settle_status='settled' THEN 1 ELSE 0 END) AS settled_count,
+                   SUM(CASE WHEN settle_status='settled' AND is_win=1 THEN 1 ELSE 0 END) AS win_count,
+                   AVG(CASE WHEN settle_status='settled' THEN pct_change ELSE NULL END) AS avg_pct_change
+            FROM ai_hotsector_stock
+            GROUP BY sector_name
+            ORDER BY days_picked DESC, settled_count DESC
+            """
+        )
+        return cur.fetchall()
+
+
+def get_prompt_version_stats() -> List[Dict[str, Any]]:
+    """按选股提示词版本聚合胜率 —— 迭代提示词后能直接看到版本间的效果差异。"""
+    conn = _get_pool()
+    if conn is None:
+        return []
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT p.stock_prompt_version,
+                   COUNT(DISTINCT p.pick_date) AS days_used,
+                   COUNT(s.id) AS stock_count,
+                   SUM(CASE WHEN s.settle_status='settled' THEN 1 ELSE 0 END) AS settled_count,
+                   SUM(CASE WHEN s.settle_status='settled' AND s.is_win=1 THEN 1 ELSE 0 END) AS win_count,
+                   AVG(CASE WHEN s.settle_status='settled' THEN s.pct_change ELSE NULL END) AS avg_pct_change
+            FROM ai_hotsector_pick p
+            LEFT JOIN ai_hotsector_stock s ON s.pick_date = p.pick_date
+            GROUP BY p.stock_prompt_version
+            ORDER BY p.stock_prompt_version
+            """
+        )
+        return cur.fetchall()
