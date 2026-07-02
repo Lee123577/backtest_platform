@@ -60,14 +60,6 @@ app = FastAPI(title="A股量化回测平台", version="1.2.0")
 from .visit_log import VisitLogMiddleware  # noqa: E402
 app.add_middleware(VisitLogMiddleware)
 
-# 因子分析 API
-from .factors.api import router as factors_router  # noqa: E402
-app.include_router(factors_router)
-
-# Walk-Forward 优化 API
-from .engine.walk_forward_api import router as wf_router  # noqa: E402
-app.include_router(wf_router)
-
 # 今日数据入库状态 API
 from .data_status.api import router as data_status_router  # noqa: E402
 app.include_router(data_status_router)
@@ -109,16 +101,6 @@ async def root():
 @app.get("/paper_trading")
 async def paper_trading_page():
     return FileResponse(str(STATIC_DIR / "paper_trading.html"))
-
-
-@app.get("/factors", include_in_schema=False)
-async def page_factors():
-    return FileResponse(str(STATIC_DIR / "factors.html"))
-
-
-@app.get("/walk_forward", include_in_schema=False)
-async def page_walk_forward():
-    return FileResponse(str(STATIC_DIR / "walk_forward.html"))
 
 
 @app.get("/cloudmap", include_in_schema=False)

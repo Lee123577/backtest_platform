@@ -151,8 +151,6 @@ python run.py
 | `/` | 单股回测页 |
 | `/portfolio` | 组合回测页(SSE 进度流) |
 | `/paper_trading` | 模拟盘:持仓/收益曲线/成交流水/参数编辑 |
-| `/factors` | 因子分析(IC 计算、分组收益) |
-| `/walk_forward` | 走查优化:IS/OOS 窗口结果 + 参数稳定性 |
 | `/cloudmap` | 大盘云图 treemap |
 | `/tasks` | 调度任务监控:历史运行/状态/手动触发 |
 | `/api/llm_assistant/analyze?symbol=600000` | LLM 股票分析(markdown 报告) |
@@ -287,7 +285,7 @@ PORTFOLIO_REGISTRY["my_portfolio"] = MyPortfolioStrategy
 scripts/run_scheduled_tasks.py
    ↓
 scheduler.runner.run_due()  →  subprocess 跑各任务
-   ├─ daily_update          weekday 17:00  增量 K 线 / 财务 / 指数 / 北向 / 因子
+   ├─ daily_update          weekday 17:00  增量 K 线 / 财务 / 指数 / 北向
    ├─ daily_signal          weekday 17:30  依赖 daily_update,跑小市值选股
    ├─ backfill_geo          daily 00:00    回填访问日志 IP 地理位置
    └─ backfill_dividend_full daily 02:00   每月 1 号全市场 ex_div 回填(自查日期)
@@ -350,7 +348,6 @@ scheduler.runner.run_due()  →  subprocess 跑各任务
 | `index_daily` | import_history / daily_update | 主要指数日线 |
 | `index_constituent` | import_history / daily_update | 指数成分股(月度刷新) |
 | `north_fund_flow` | daily_update | 北向资金净流入 |
-| `factor_value` | daily_update | 因子值(动量/反转/低波动/换手/规模/价值) |
 | `market_universe_snapshot` | market_data 自动 | 全市场快照备份 |
 | `paper_account` | paper_trading | 模拟账户单行状态 |
 | `paper_holdings` | paper_trading | 当前持仓(带 `last_dividend_check_date`) |
@@ -439,8 +436,6 @@ app/
   engine/                    回测引擎
     backtest.py                单股策略回测
     portfolio_backtest.py     组合策略回测
-    walk_forward.py            Walk-Forward 优化(交易日整数切窗)
-    walk_forward_api.py        Walk-Forward FastAPI 路由
     money.py                   Decimal 钱算工具
   strategies/                策略实现(11 个 + base/portfolio_base/registry)
   paper_trading/             模拟盘
@@ -452,7 +447,6 @@ app/
     registry.py                任务清单
     db.py                      task_run_log CRUD
   cloudmap/                  大盘云图(ECharts treemap)
-  factors/                   因子分析(IC 计算、分组收益)
   llm_assistant/             LLM 股票分析(MCP 客户端)
     mcp_client.py              httpx streamable-http JSON-RPC
     api.py                     /api/llm_assistant/analyze + /health
@@ -521,7 +515,6 @@ with get_conn() as conn:
 - `app/engine/backtest.py` `run_backtest` — 给定合成 OHLCV,assert metrics 精确值
 - `app/engine/portfolio_backtest.py` — 3 只股 + 1 个 rebalance,assert 末次平仓计入 trades
 - `app/data/quality.py` — 主板 ST 跳 6% 应触发 SUSPECT_JUMP
-- `app/engine/walk_forward.py` — assert `is_end - is_start == is_days`(防 calendar days 退步)
 - `app/data/db_pool.py` — 上限 + 背压
 
 ---

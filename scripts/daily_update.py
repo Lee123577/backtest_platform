@@ -1086,49 +1086,6 @@ def _find_missing_kline_dates(conn, today: date, lookback_days: int = 30) -> lis
     return missing
 
 
-def update_factors(conn, trade_date: str):
-    """
-    增量算当日的全市场因子值并写入 factor_value。
-    依赖 stock_kline 已更新到 trade_date —— 必须放在 update_kline 之后。
-
-    SKIP_FACTORS=1 时跳过（首次部署 / 数据稀疏期可关）
-    """
-    if os.getenv("SKIP_FACTORS"):
-        log.info(f"SKIP_FACTORS=1，跳过 {trade_date} 因子计算")
-        return
-
-    log.info(f"更新 factor_value: {trade_date}")
-    # 延迟 import：避免 daily_update 主流程在 app 模块加载失败时被阻断
-    from app.factors import FactorRegistry
-    from app.factors.base import ensure_factor_value_table, save_factor_values
-
-    try:
-        ensure_factor_value_table()
-    except Exception as e:
-        log.error(f"factor_value 建表失败: {e}")
-        return
-
-    all_factors = FactorRegistry.list_all()
-    if not all_factors:
-        log.warning("没有已注册的因子，跳过")
-        return
-
-    total_written = 0
-    for name in all_factors:
-        try:
-            cls = FactorRegistry.get(name)
-            df = cls().compute(trade_date, trade_date)
-            if df is None or df.empty:
-                log.info(f"  {name}: 当日无数据（窗口不足或停牌）")
-                continue
-            n = save_factor_values(df, name)
-            total_written += n
-            log.info(f"  {name}: 写入 {n} 条")
-        except Exception as e:
-            log.warning(f"  因子 {name} 失败: {e}")
-    log.info(f"factor_value {trade_date} 累计写入 {total_written} 条")
-
-
 def _run_for_date(conn, trade_date: str) -> list[str]:
     """对单个交易日跑全部更新步骤，返回失败步骤列表。"""
     steps = [
@@ -1139,8 +1096,6 @@ def _run_for_date(conn, trade_date: str) -> list[str]:
         ("stock_finance",     lambda: update_stock_finance(conn, trade_date)),
         ("stock_dividend",    lambda: update_stock_dividend(conn, trade_date)),
         ("index_constituent", lambda: update_index_constituent(conn, trade_date)),
-        # 因子值：必须在 stock_kline 之后跑（依赖当日 K 线 + 历史窗口）
-        ("factor_value",      lambda: update_factors(conn, trade_date)),
     ]
     failed = []
     for name, fn in steps:

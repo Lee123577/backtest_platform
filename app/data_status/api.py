@@ -179,24 +179,6 @@ def get_today_status():
         note=f"近 7 天公告 {weekday_label}",
     ))
 
-    # 7. 6 个因子
-    from ..factors import FactorRegistry
-    with conn.cursor() as cur:
-        cur.execute("""
-            SELECT factor_name, COUNT(*) AS n FROM factor_value
-            WHERE trade_date=%s GROUP BY factor_name
-        """, (target,))
-        rows = cur.fetchall()
-    factor_actuals = {r["factor_name"]: int(r["n"]) for r in rows}
-
-    factor_expected = kline_actual  # 因子依赖 K 线，最多和 K 线一样多
-    for fname, finfo in FactorRegistry.list_all().items():
-        items.append(_make_item(
-            f"factor_{fname}", f"因子·{fname}", "🔬",
-            factor_actuals.get(fname, 0), factor_expected,
-            note=finfo.get("description", "") or "",
-        ))
-
     return {
         "target_date": target.isoformat(),
         "is_today": is_today,
