@@ -17,6 +17,18 @@ function fmtPrice(v) {
   return Number(v).toFixed(3);
 }
 
+// DeepSeek 返回的板块名/股票名/理由是模型生成的自由文本，插入 innerHTML 前必须转义，
+// 否则模型输出里一旦带 HTML 就是存储型 XSS
+function esc(s) {
+  if (s === null || s === undefined) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   loadStats();
   loadEquity();
@@ -112,7 +124,7 @@ async function loadToday() {
     document.getElementById('hsTodayDate').textContent = `（${pick.pick_date}）`;
 
     if (pick.status === 'failed') {
-      wrap.innerHTML = `<div class="no-data">最近一次预测失败：${pick.error_msg || ''}</div>`;
+      wrap.innerHTML = `<div class="no-data">最近一次预测失败：${esc(pick.error_msg)}</div>`;
       return;
     }
 
@@ -152,9 +164,9 @@ function renderSectorCard(rank, sector) {
   return `
     <div class="sector-card">
       <div class="sector-card-head">
-        <div><span class="sector-rank">${rank}</span><span class="sector-name">${sector.name}</span></div>
+        <div><span class="sector-rank">${rank}</span><span class="sector-name">${esc(sector.name)}</span></div>
       </div>
-      <div class="sector-reason">${sector.reason || ''}</div>
+      <div class="sector-reason">${esc(sector.reason)}</div>
       ${stockRows}
     </div>
   `;
@@ -181,8 +193,8 @@ function renderStockRow(st) {
   return `
     <div class="stock-row">
       <div class="stock-main">
-        <div class="stock-code-name">${st.name || ''}<span class="code">${st.code}</span>${badge}</div>
-        <div class="stock-reason">${st.stock_reason || ''}</div>
+        <div class="stock-code-name">${esc(st.name)}<span class="code">${esc(st.code)}</span>${badge}</div>
+        <div class="stock-reason">${esc(st.stock_reason)}</div>
       </div>
       <div class="stock-perf">
         ${pctHtml}

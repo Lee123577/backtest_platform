@@ -18,6 +18,7 @@ app/ai_hotsector/db.py 的 settle_status 状态机注释。
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import date as _Date
 from typing import Any, Dict, List, Optional
@@ -34,6 +35,10 @@ from .prompts import (
 )
 
 logger = logging.getLogger(__name__)
+
+# code 列是 CHAR(6)、生产库 sql_mode=STRICT_TRANS_TABLES:超长/非数字的
+# 畸形代码直接插入会报 "Data too long" 崩掉整批 —— 必须先按格式过滤
+_CODE_RE = re.compile(r"^\d{6}$")
 
 
 @dataclass
@@ -78,7 +83,7 @@ async def predict_once(pick_date: Optional[_Date] = None) -> PredictResult:
         stock_rows: List[Dict[str, Any]] = []
         for idx, sec in enumerate(sectors_resp):
             sector_rank = idx + 1
-            sector_name = str(sec.get("name") or "").strip()
+            sector_name = str(sec.get("name") or "").strip()[:40]  # 列 VARCHAR(40)
             sector_reason = str(sec.get("reason") or "")[:255]
             if idx >= len(stocks_resp):
                 continue
@@ -88,7 +93,13 @@ async def predict_once(pick_date: Optional[_Date] = None) -> PredictResult:
                 if not raw_code:
                     continue
                 code = normalize_code(raw_code)
-                ai_name = str(st.get("name") or "").strip()
+                if not _CODE_RE.match(code):
+                    # 畸形代码塞不进 CHAR(6)(严格模式直接报错),丢弃该行;
+                    # 原始内容在 stocks_raw 里仍可审计
+                    logger.warning("[%s] 丢弃畸形股票代码 %r (板块 %s)",
+                                   pick_date, raw_code, sector_name)
+                    continue
+                ai_name = str(st.get("name") or "").strip()[:20]  # name 列 VARCHAR(20)
                 reason = str(st.get("reason") or "")[:255]
                 # DbUnavailableError 会向上抛到下面的 except，整批标记 failed 重试，
                 # 不会把"数据库暂时连不上"误判成"代码不存在"(code_not_found 没有
@@ -154,9 +165,13 @@ def settle_once(as_of_date: Optional[_Date] = None) -> SettleResult:
         result.priced_count += 1
         priced_pick_dates.add(row["pick_date"])
 
-    # pick 状态推进到 'priced'(仅用于前端历史列表展示进度，不影响结算逻辑)
+    # pick 状态推进到 'priced'(仅用于前端历史列表展示进度，不影响结算逻辑)。
+    # 只有该批不再有 pending_price 行才推进 —— 部分回填就标"已回填买入价"
+    # 会误导人以为整批都填完了
     for pick_date in priced_pick_dates:
-        db.update_pick_status(pick_date, "priced")
+        rows = db.get_stocks_by_pick_date(pick_date)
+        if not any(r["settle_status"] == "pending_price" for r in rows):
+            db.update_pick_status(pick_date, "priced")
 
     # ── 2. 回填卖出价 + 结算:priced 且下一交易日收盘价已入库 ──────────────
     # fetch 按 pick_date 升序,保证同批多天补跑时资金曲线按时间顺序滚动复利

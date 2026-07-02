@@ -57,18 +57,22 @@ async def chat_json(messages: List[dict], *, timeout: float = 60.0) -> Tuple[Dic
         raise DeepSeekError(
             f"DeepSeek HTTP {e.response.status_code}: {e.response.text[:300]}"
         ) from e
-    except (httpx.HTTPError, httpx.TimeoutException) as e:
+    except httpx.HTTPError as e:  # TimeoutException 也是 HTTPError 子类
         raise DeepSeekError(f"DeepSeek 请求失败: {e}") from e
 
-    data = resp.json()
     try:
+        data = resp.json()
         content = data["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError) as e:
-        raise DeepSeekError(f"DeepSeek 响应格式异常: {str(data)[:300]}") from e
+    except (json.JSONDecodeError, KeyError, IndexError, TypeError) as e:
+        raise DeepSeekError(f"DeepSeek 响应格式异常: {resp.text[:300]}") from e
 
     try:
         parsed = json.loads(content)
     except json.JSONDecodeError as e:
         raise DeepSeekError(f"DeepSeek 返回非合法 JSON: {content[:300]}") from e
+    # response_format=json_object 理论上保证是对象，但模型偶发违约(返回数组/
+    # 字符串)时 runner 里的 .get() 会炸出未捕获的 AttributeError —— 在这里挡掉
+    if not isinstance(parsed, dict):
+        raise DeepSeekError(f"DeepSeek 返回的 JSON 不是对象: {content[:300]}")
 
     return parsed, content
