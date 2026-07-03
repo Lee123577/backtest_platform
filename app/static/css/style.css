@@ -37,9 +37,18 @@ header {
   z-index: 200;
   box-shadow: 0 1px 3px rgba(27,31,36,.06);
 }
-header h1 { font-size: 18px; font-weight: 700; color: var(--accent); letter-spacing: .5px; }
+header h1 { font-size: 18px; font-weight: 700; color: var(--accent); letter-spacing: .5px; white-space: nowrap; flex-shrink: 0; }
 
-.header-nav { display: flex; gap: 6px; }
+/* 窄屏时导航横向滚动,而不是被 flex 压缩成竖排文字 */
+.header-nav {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;        /* Firefox 隐藏滚动条 */
+  -webkit-overflow-scrolling: touch;
+}
+.header-nav::-webkit-scrollbar { display: none; }
 .nav-btn {
   background: transparent;
   border: 1px solid var(--border);
@@ -50,6 +59,8 @@ header h1 { font-size: 18px; font-weight: 700; color: var(--accent); letter-spac
   font-weight: 500;
   cursor: pointer;
   transition: all .15s;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .nav-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 700; }
 .nav-btn:not(.active):hover { border-color: var(--accent); color: var(--accent); background: rgba(9,105,218,.06); }
@@ -127,7 +138,8 @@ input[type=text]:focus, input[type=date]:focus, input[type=number]:focus, select
   box-shadow: 0 0 0 3px rgba(9,105,218,.12);
 }
 .inline-group { display: flex; gap: 6px; align-items: flex-end; }
-.inline-group input { flex: 1; }
+.inline-group input { flex: 1; min-width: 0; }
+.inline-group .btn { white-space: nowrap; flex-shrink: 0; }
 
 .stock-tag {
   font-size: 12px;
@@ -489,3 +501,17 @@ table.holdings-tbl { width: 100%; border-collapse: collapse; font-size: 12px; mi
 .method-boards label { font-size: 13px; color: var(--txt); cursor: pointer; }
 .method-boards label input { margin-right: 4px; vertical-align: middle; }
 .method-boards-hint { flex-basis: 100%; font-size: 12px; color: var(--txt2); margin-left: 0; }
+
+/* ── 响应式（≤768px 手机 / 窄窗口，全站共用）─────────────────────────── */
+@media (max-width: 768px) {
+  header { padding: 0 12px; gap: 12px; }
+  header h1 { font-size: 16px; }
+  main { padding: 12px; gap: 12px; }
+  .panel { padding: 14px; border-radius: 8px; }
+  .chart-wrap { height: 320px; }
+  .chart-wrap-sm { height: 240px; }
+  .form-row { gap: 10px; }
+  /* 输入框在窄屏占满一行,避免挤成一排小格子 */
+  .form-group { flex: 1 1 45%; min-width: 0; }
+  .form-group input, .form-group select { width: 100%; }
+}

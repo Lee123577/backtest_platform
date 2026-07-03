@@ -574,3 +574,10 @@ table.pt-tbl {
   color: var(--txt2);
   font-size: 12px;
 }
+
+/* ── 响应式:窄屏多列表格自身横向滚动 ─────────────────────────────────────
+   pt-tbl 由 JS innerHTML 注入,没有外层滚动容器;display:block 让表格
+   在自己的盒子里滚,不再把整个页面撑出横向滚动条(375px 下曾撑到 909px) */
+@media (max-width: 768px) {
+  table.pt-tbl { display: block; overflow-x: auto; }
+}

@@ -4,10 +4,11 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>定时任务监控</title>
-  <link rel="stylesheet" href="/static/css/style.css">
-  <link rel="stylesheet" href="/static/css/paper_trading.css">
+  <link rel="stylesheet" href="/static/css/style.css?v=20260703">
+  <link rel="stylesheet" href="/static/css/paper_trading.css?v=20260703">
   <style>
-    .tasks-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 12px; margin-bottom: 16px; }
+    /* min(360px,100%):视口窄于 360px 时列宽跟随容器,不再横向溢出 */
+    .tasks-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr)); gap: 12px; margin-bottom: 16px; }
     .task-card { background: #fff; border: 1px solid #d0d7de; border-radius: 6px; padding: 14px; }
     .task-card .name { font-size: 15px; font-weight: 600; color: #1f2328; margin-bottom: 4px; }
     .task-card .desc { font-size: 12px; color: #57606a; margin-bottom: 12px; }

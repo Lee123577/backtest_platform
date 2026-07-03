@@ -16,7 +16,8 @@
 
 .hs-two-col {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  /* min(420px,100%):窄屏时列宽跟随容器,不把 panel 撑到 420px 溢出 */
+  grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr));
   gap: 16px;
 }
 .hs-two-col > .panel { margin: 0; }
@@ -130,3 +131,8 @@ table.hs-tbl {
 .hs-tbl tr.status-failed td { background: rgba(207,34,46,.04); }
 .hs-tbl tr.hs-repeat-sector td { background: rgba(154,103,0,.08); }
 .hs-tbl tr.hs-repeat-sector td:first-child { color: #9a6700; font-weight: 700; }
+
+/* 窄屏:多列统计表改为自身横向滚动(表格由 JS innerHTML 注入,无外层滚动容器) */
+@media (max-width: 768px) {
+  table.hs-tbl { display: block; overflow-x: auto; }
+}
