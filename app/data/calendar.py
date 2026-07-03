@@ -21,6 +21,7 @@ A 股交易日历（含节假日调整）—— 全项目共享
 from __future__ import annotations
 
 import logging
+import time
 from bisect import bisect_left, bisect_right
 from datetime import date as _Date, timedelta
 from typing import List, Optional
@@ -30,13 +31,26 @@ logger = logging.getLogger(__name__)
 # 进程内缓存（首次访问时填充）
 _CAL: Optional[List[_Date]] = None
 _CAL_SET: Optional[set] = None
+_loaded_at: float = 0.0   # 上次成功加载的时刻
+_failed_at: float = 0.0   # 上次加载失败的时刻（退避重试用）
+
+# 成功缓存 7 天后重拉一次:常驻进程跨长假/跨年后能拿到新日历,
+# 也避免跑到日历末端(新浪日历只含未来 1~2 年)后 next_n_trading_days 失效。
+_CAL_TTL = 7 * 86400
+# 加载失败后的重试间隔:启动时一次网络抖动不应让进程终生退化成
+# "周一到周五"判断(旧实现的问题),但也不能每次调用都打一次远端。
+_RETRY_INTERVAL = 300
 
 
 def _load() -> None:
-    """从 akshare 加载日历到内存。失败时填充空集合（后续退回工作日判断）。"""
-    global _CAL, _CAL_SET
-    if _CAL is not None:
-        return
+    """从 akshare 加载日历到内存。失败时退避 _RETRY_INTERVAL 后重试；
+    重试期间 / 从未成功过时退回到工作日判断（节假日可能误判，但主流程不挂）。"""
+    global _CAL, _CAL_SET, _loaded_at, _failed_at
+    now = time.time()
+    if _CAL and now - _loaded_at < _CAL_TTL:
+        return  # 缓存仍新鲜
+    if _failed_at and now - _failed_at < _RETRY_INTERVAL:
+        return  # 失败退避中,先用现有缓存(可能为空 → 工作日兜底)
     try:
         import akshare as ak
         import pandas as pd
@@ -45,14 +59,20 @@ def _load() -> None:
         dates = sorted(pd.to_datetime(df[col]).dt.date.tolist())
         _CAL = dates
         _CAL_SET = set(dates)
+        _loaded_at = now
+        _failed_at = 0.0
         logger.info("交易日历加载完成：共 %d 个交易日", len(dates))
     except Exception as exc:
+        _failed_at = now
         logger.warning(
-            "交易日历加载失败 (%s)，退回到工作日判断（节假日可能误判，但主流程不挂）",
+            "交易日历加载失败 (%s)，%s（%d 秒后重试）",
             exc,
+            "沿用旧缓存" if _CAL else "退回到工作日判断（节假日可能误判，但主流程不挂）",
+            _RETRY_INTERVAL,
         )
-        _CAL = []
-        _CAL_SET = set()
+        if _CAL is None:
+            _CAL = []
+            _CAL_SET = set()
 
 
 def get_calendar() -> List[_Date]:
@@ -118,6 +138,8 @@ def count_trading_days(start: _Date, end: _Date) -> int:
 
 def reset_cache() -> None:
     """测试 / 长期运行时手动重新拉一次。"""
-    global _CAL, _CAL_SET
+    global _CAL, _CAL_SET, _loaded_at, _failed_at
     _CAL = None
     _CAL_SET = None
+    _loaded_at = 0.0
+    _failed_at = 0.0

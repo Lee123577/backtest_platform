@@ -182,6 +182,20 @@ def _last_run_date() -> Optional[_Date]:
     return row["d"] if row and row["d"] else None
 
 
+def _ran_success_on(trade_date: _Date) -> bool:
+    """指定交易日是否已成功跑过一次(用于同日重跑的幂等判断)。"""
+    conn = _get_pool()
+    if conn is None:
+        return False
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM paper_signal_run "
+            "WHERE run_date=%s AND status='success' LIMIT 1",
+            (trade_date,),
+        )
+        return cur.fetchone() is not None
+
+
 def _load_universe_snapshot(
     trade_date: _Date,
     cap_min: float,
@@ -363,6 +377,22 @@ def _open_limit_flags(code: str, px: Dict[str, float]) -> Tuple[bool, bool]:
     return chg >= limit - 0.3, chg <= -(limit - 0.3)
 
 
+def _last_close_on_or_before(code: str, trade_date: _Date) -> Optional[float]:
+    """≤ trade_date 的最近收盘价 —— 停牌持仓估值用(与回测引擎 last_close 同口径)。"""
+    conn = _get_pool()
+    if conn is None:
+        return None
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT close FROM stock_kline "
+            "WHERE code=%s AND trade_date<=%s "
+            "ORDER BY trade_date DESC LIMIT 1",
+            (code, trade_date),
+        )
+        row = cur.fetchone()
+    return float(row["close"]) if row and row["close"] is not None else None
+
+
 def _get_index_close(index_code: str, trade_date: _Date) -> Optional[float]:
     conn = _get_pool()
     if conn is None:
@@ -462,6 +492,10 @@ def run_once(
         universe_size=0,
     )
 
+    # 同日重跑(手动"立即扫描"在 cron 已跑后再点)不重复推进调仓计数,
+    # 否则每重跑一次 counter 多 +1,调仓周期被悄悄提前
+    already_ran_today = _ran_success_on(trade_date)
+
     holdings = db.get_holdings()
     # 当日价格要覆盖:现持仓 + 挂单里的买入/止损代码(执行挂单要用今日开盘价)
     codes_needed = set(holdings.keys())
@@ -485,6 +519,7 @@ def run_once(
         holdings=holdings, day_prices=day_prices,
         positions_log=positions_log, result=result,
         dry_run=dry_run,
+        already_ran_today=already_ran_today,
     )
 
     # dry_run 不落库 → 无需事务。正常运行把整段调仓+落库放进单事务:中途任何
@@ -516,7 +551,7 @@ def _run_once_body(
     initial_capital, cap_min, cap_max, stock_num, hold_days,
     stop_loss_pct, allow_boards, trade_date, cash, last_rb,
     rebalance_counter, pending, holdings, day_prices,
-    positions_log, result, dry_run,
+    positions_log, result, dry_run, already_ran_today=False,
 ) -> RunResult:
     """run_once 的实际主体,提出来避免给整段代码加一层 try/with 缩进。"""
     # 资金全程 Decimal,与回测引擎(engine/money.py)口径一致。费率也转 Decimal
@@ -684,7 +719,9 @@ def _run_once_body(
                     pending.get("decided_on"), trade_date)
 
     # ── 步骤 2: 调仓计数推进(非成交日 +1;成交日已重置为 1) ────────────────
-    if not executed_rebalance:
+    # 同日重跑不再 +1:首次运行已把 +1 后的 counter 落库,重跑读到的就是
+    # 推进过的值,再加会导致调仓提前
+    if not executed_rebalance and not already_ran_today:
         rebalance_counter += 1
 
     # ── 步骤 3: 止损评估(截至今日收盘) → 生成次日开盘卖出挂单 ─────────────
@@ -797,7 +834,10 @@ def _run_once_body(
         if px:
             pos_value += int(h["shares"]) * px["close"]
         else:
-            pos_value += int(h["shares"]) * float(h["buy_price"])  # 停牌按成本
+            # 停牌:用最后已知收盘价(与回测引擎 last_close 同口径),
+            # 查不到(理论上不会,买入价来自 stock_kline)再退到买入价
+            lc = _last_close_on_or_before(code, trade_date)
+            pos_value += int(h["shares"]) * (lc if lc else float(h["buy_price"]))
     # cash 是 Decimal,出口转 float 与 pos_value 合并
     cash = float(round_cent(cash))
     total_value = cash + pos_value

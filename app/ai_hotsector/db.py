@@ -20,7 +20,7 @@ import logging
 from datetime import date as _Date
 from typing import Any, Dict, List, Optional
 
-from ..data.data_loader import _get_pool
+from ..data.data_loader import _get_pool, transaction_flag
 
 logger = logging.getLogger(__name__)
 
@@ -215,22 +215,40 @@ def get_latest_pick_date() -> Optional[_Date]:
 # ── stock（明细）──────────────────────────────────────────────────────────────
 
 def replace_stocks(pick_date: _Date, stocks: List[Dict[str, Any]]) -> None:
-    """先删后插当天的 9 行明细，便于手动重跑同一天覆盖。"""
+    """先删后插当天的 9 行明细，便于手动重跑同一天覆盖。
+
+    DELETE + INSERT 放同一事务:连接默认 autocommit,不包事务的话
+    两步之间断连会留下"当天明细被清空"的半截状态。transaction_flag
+    禁止事务期间 ping 重连(重连会换成没有 BEGIN 上下文的新连接)。
+    """
     conn = _get_pool()
-    with conn.cursor() as cur:
-        cur.execute("DELETE FROM ai_hotsector_stock WHERE pick_date=%s", (pick_date,))
-        if not stocks:
-            return
-        cur.executemany(
-            """
-            INSERT INTO ai_hotsector_stock
-                (pick_date, sector_name, sector_rank, sector_reason,
-                 code, name, stock_rank, stock_reason, settle_status)
-            VALUES (%(pick_date)s, %(sector_name)s, %(sector_rank)s, %(sector_reason)s,
-                    %(code)s, %(name)s, %(stock_rank)s, %(stock_reason)s, %(settle_status)s)
-            """,
-            [{**s, "pick_date": pick_date} for s in stocks],
-        )
+    with transaction_flag():
+        conn.begin()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM ai_hotsector_stock WHERE pick_date=%s",
+                    (pick_date,),
+                )
+                if stocks:
+                    cur.executemany(
+                        """
+                        INSERT INTO ai_hotsector_stock
+                            (pick_date, sector_name, sector_rank, sector_reason,
+                             code, name, stock_rank, stock_reason, settle_status)
+                        VALUES (%(pick_date)s, %(sector_name)s, %(sector_rank)s,
+                                %(sector_reason)s, %(code)s, %(name)s,
+                                %(stock_rank)s, %(stock_reason)s, %(settle_status)s)
+                        """,
+                        [{**s, "pick_date": pick_date} for s in stocks],
+                    )
+            conn.commit()
+        except BaseException:
+            try:
+                conn.rollback()
+            except Exception:
+                logger.exception("replace_stocks 事务回滚失败")
+            raise
 
 
 def get_stocks_by_pick_date(pick_date: _Date) -> List[Dict[str, Any]]:
@@ -347,6 +365,39 @@ def insert_equity(row: Dict[str, Any]) -> None:
                 cum_return_after_fee=VALUES(cum_return_after_fee)
             """,
             {**defaults, **row},
+        )
+
+
+def fetch_equity_all() -> List[Dict[str, Any]]:
+    """全部资金曲线行,按 pick_date 升序 —— 供 runner 重算复利链用。"""
+    conn = _get_pool()
+    if conn is None:
+        return []
+    with conn.cursor() as cur:
+        cur.execute("SELECT * FROM ai_hotsector_equity ORDER BY pick_date")
+        return cur.fetchall()
+
+
+# 复利链重算允许改写的列(白名单,防 SQL 注入面扩大;
+# day_return/win_count/total_count 等"事实"字段不在其中)
+_EQUITY_CHAIN_COLS = frozenset({
+    "capital_before", "capital_after", "cum_return",
+    "day_return_after_fee", "capital_after_fee", "cum_return_after_fee",
+    "benchmark_cum_return",
+})
+
+
+def update_equity_chain_fields(pick_date: _Date, fields: Dict[str, Any]) -> None:
+    """更新单行资金曲线的复利链派生列(重算用)。"""
+    cols = [k for k in fields if k in _EQUITY_CHAIN_COLS]
+    if not cols:
+        return
+    conn = _get_pool()
+    assign = ", ".join(f"{c}=%s" for c in cols)
+    with conn.cursor() as cur:
+        cur.execute(
+            f"UPDATE ai_hotsector_equity SET {assign} WHERE pick_date=%s",
+            (*[fields[c] for c in cols], pick_date),
         )
 
 

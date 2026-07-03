@@ -120,7 +120,7 @@ from .json_safe import json_safe as _json_safe  # noqa: E402
 
 
 @app.get("/api/paper_trading/account")
-async def api_paper_account():
+def api_paper_account():
     """
     返回账户摘要 + 当前持仓（含浮盈）+ 最近一次运行概览。
 
@@ -128,6 +128,9 @@ async def api_paper_account():
       实时价 > 数据库最新收盘价 > 买入价
     顶部"总值/持仓市值/累计收益"也按实时价重算 —— 而不是用上次 daily_signal
     跑完时落库的快照，避免开盘后 / 当天涨跌后页面不更新。
+
+    普通 def 路由:FastAPI 自动丢 anyio 线程池,同步 DB / requests 调用
+    不会阻塞事件循环(此前是 async def + 直接同步查 DB,DB 抖动会卡住全部请求)。
     """
     try:
         paper_db.ensure_tables()
@@ -140,15 +143,12 @@ async def api_paper_account():
     runs = paper_db.list_runs(limit=1)
     latest = runs[0] if runs else None
 
-    # ── 实时价（线程池里跑，因为 requests 是同步的）───────────────────────
+    # ── 实时价(本函数已在线程池,直接同步调)────────────────────────────────
     codes = [h["code"] for h in holdings if h.get("code")]
     realtime: Dict[str, float] = {}
     if codes:
-        loop = asyncio.get_running_loop()
         try:
-            realtime = await loop.run_in_executor(
-                None, lambda: get_realtime_prices(codes)
-            )
+            realtime = get_realtime_prices(codes)
         except Exception:
             realtime = {}
 
@@ -186,8 +186,9 @@ async def api_paper_account():
         })
 
     # ── 顶部摘要：用实时价重算总值/收益（覆盖最近一次 run 的 DB 快照）────
+    # 空仓(全部卖出)时也要重算:total = cash + 0,否则总值停留在旧快照
     latest_out = _json_safe([latest])[0] if latest else None
-    if latest_out is not None and (realtime or holdings_out):
+    if latest_out is not None:
         total_value = cash_from_account + total_pos_value
         latest_out["total_value"] = round(total_value, 2)
         latest_out["position_value"] = round(total_pos_value, 2)
@@ -247,7 +248,7 @@ async def api_paper_account():
 
 
 @app.get("/api/paper_trading/runs")
-async def api_paper_runs(limit: int = 30):
+def api_paper_runs(limit: int = 30):
     try:
         paper_db.ensure_tables()
     except Exception:
@@ -257,22 +258,18 @@ async def api_paper_runs(limit: int = 30):
 
 
 @app.get("/api/paper_trading/universe_preview")
-async def api_paper_universe_preview(cap_min: float, cap_max: float):
+def api_paper_universe_preview(cap_min: float, cap_max: float):
     """
     实时预览：给定市值范围，返回今日全市场命中数 + 整体分位数 + 头部样本。
     供策略参数编辑器在用户输入时显示「此范围内 X 只」，避免"未找到股票"的死胡同。
     """
     if cap_min < 0 or cap_max < 0 or cap_min >= cap_max:
         raise HTTPException(400, "需满足 0 ≤ cap_min < cap_max")
-    loop = asyncio.get_running_loop()
-    stats = await loop.run_in_executor(
-        None, lambda: get_universe_stats(cap_min, cap_max)
-    )
-    return stats
+    return get_universe_stats(cap_min, cap_max)
 
 
 @app.get("/api/paper_trading/strategy_params")
-async def api_paper_get_strategy_params():
+def api_paper_get_strategy_params():
     """
     返回当前策略参数 + 默认值（首次未初始化时空表用得上）。
     前端编辑后调 POST 写回，下次 daily_signal 跑就用新参数。
@@ -311,7 +308,7 @@ class StrategyParamsPatch(BaseModel):
 
 
 @app.post("/api/paper_trading/strategy_params")
-async def api_paper_update_strategy_params(
+def api_paper_update_strategy_params(
     patch: StrategyParamsPatch,
     admin: str = Depends(paper_admin_ip.require_admin_ip),
 ):
@@ -356,7 +353,7 @@ async def api_paper_update_strategy_params(
 
 
 @app.get("/api/paper_trading/trades")
-async def api_paper_trades(limit: int = 200):
+def api_paper_trades(limit: int = 200):
     """
     成交流水（只含真买卖，已 FIFO 配对算出每笔卖出的实现盈亏）。
     用于前端"成交流水"面板，比"历史运行记录"更聚焦。
@@ -370,7 +367,7 @@ async def api_paper_trades(limit: int = 200):
 
 
 @app.get("/api/paper_trading/run/{run_id}")
-async def api_paper_run_detail(run_id: int):
+def api_paper_run_detail(run_id: int):
     try:
         paper_db.ensure_tables()
     except Exception as e:
@@ -386,8 +383,13 @@ async def api_paper_run_detail(run_id: int):
 
 # ── 定时任务监控 ──────────────────────────────────────────────────────────────
 
+# 手动触发任务的常驻执行池(线程复用 → _get_pool 的 thread-local 连接也复用)
+from concurrent.futures import ThreadPoolExecutor as _TPE  # noqa: E402
+_task_runner_pool = _TPE(max_workers=2, thread_name_prefix="task-run")
+
+
 @app.get("/api/tasks/summary")
-async def api_tasks_summary():
+def api_tasks_summary():
     """每个任务的：注册信息 + 最近一次状态 + 近 30 天成功率 + 今天是否已成功。"""
     try:
         scheduler_db.ensure_table()
@@ -424,7 +426,7 @@ async def api_tasks_summary():
 
 
 @app.get("/api/tasks/runs")
-async def api_tasks_runs(task: Optional[str] = None, limit: int = 100):
+def api_tasks_runs(task: Optional[str] = None, limit: int = 100):
     try:
         scheduler_db.ensure_table()
     except Exception:
@@ -451,7 +453,7 @@ async def api_tasks_runs(task: Optional[str] = None, limit: int = 100):
 
 
 @app.post("/api/tasks/{name}/run")
-async def api_tasks_run(
+def api_tasks_run(
     name: str,
     force: bool = False,
     admin: str = Depends(paper_admin_ip.require_admin_ip),
@@ -500,10 +502,11 @@ async def api_tasks_run(
             return {"task": name, "status": "skipped", "reason": check["reason"],
                     "hint": "可调用 POST /api/tasks/{name}/run?force=1 跳过依赖检查"}
 
-    loop = asyncio.get_running_loop()
     trigger = "manual-force" if force else "manual"
-    # subprocess 阻塞调用，丢线程池；不 await，立即返回
-    loop.run_in_executor(None, lambda: scheduler_runner.run_one(name, trigger))
+    # subprocess 阻塞调用,丢到常驻小线程池跑,HTTP 立即返回。
+    # 用常驻池而非每次新起线程:run_one 内部经 _get_pool() 借 thread-local
+    # 连接且线程死亡不归还,一次性线程会逐次泄漏连接池计数
+    _task_runner_pool.submit(scheduler_runner.run_one, name, trigger)
     from datetime import datetime as _DT
     return {"task": name, "status": "queued", "force": force,
             "queued_at": _DT.now().isoformat()}
@@ -533,7 +536,7 @@ class AdminIpAddRequest(BaseModel):
 
 
 @app.get("/api/admin/ip/me")
-async def api_admin_ip_me(request: Request):
+def api_admin_ip_me(request: Request):
     """
     公开端点：返回当前请求 IP 和它是否在白名单。前端用它决定按钮禁不禁用。
     DB 未就绪时降级到只返回 IP，is_admin=False。
@@ -552,7 +555,7 @@ async def api_admin_ip_me(request: Request):
 
 
 @app.get("/api/admin/ip")
-async def api_admin_ip_list(admin: str = Depends(paper_admin_ip.require_admin_ip)):
+def api_admin_ip_list(admin: str = Depends(paper_admin_ip.require_admin_ip)):
     """列出全部白名单 IP（仅 admin 可见）。"""
     return {
         "current_ip": admin,
@@ -561,7 +564,7 @@ async def api_admin_ip_list(admin: str = Depends(paper_admin_ip.require_admin_ip
 
 
 @app.post("/api/admin/ip")
-async def api_admin_ip_add(
+def api_admin_ip_add(
     payload: AdminIpAddRequest,
     admin: str = Depends(paper_admin_ip.require_admin_ip),
 ):
@@ -574,7 +577,7 @@ async def api_admin_ip_add(
 
 
 @app.delete("/api/admin/ip/{ip}")
-async def api_admin_ip_delete(
+def api_admin_ip_delete(
     ip: str,
     admin: str = Depends(paper_admin_ip.require_admin_ip),
 ):
@@ -598,7 +601,7 @@ async def api_admin_ip_delete(
 # ── 旧分组：paper trading equity ──────────────────────────────────────────────
 
 @app.get("/api/paper_trading/equity")
-async def api_paper_equity(start: Optional[str] = None, end: Optional[str] = None):
+def api_paper_equity(start: Optional[str] = None, end: Optional[str] = None):
     try:
         paper_db.ensure_tables()
     except Exception:
@@ -617,14 +620,14 @@ async def api_list_strategies():
 # ── Single-stock endpoints ────────────────────────────────────────────────────
 
 @app.get("/api/stock/{code}/info")
-async def api_stock_info(code: str):
+def api_stock_info(code: str):
     code = normalize_code(code)
     name = get_stock_name(code)
     return {"code": code, "name": name}
 
 
 @app.get("/api/stock/{code}/kline")
-async def api_kline(code: str, start_date: str, end_date: str, adjust: str = "qfq"):
+def api_kline(code: str, start_date: str, end_date: str, adjust: str = "qfq"):
     _validate_date_range(start_date, end_date)
     code = normalize_code(code)
     try:
@@ -655,7 +658,9 @@ class BacktestRequest(BaseModel):
 
 
 @app.post("/api/backtest")
-async def api_backtest(req: BacktestRequest):
+def api_backtest(req: BacktestRequest):
+    # 普通 def:数据加载(DB/akshare) + 回测计算都是同步重活,
+    # 让 FastAPI 丢 anyio 线程池,不阻塞事件循环
     _validate_date_range(req.start_date, req.end_date)
     if req.initial_capital <= 0:
         raise HTTPException(400, "初始资金必须大于 0")

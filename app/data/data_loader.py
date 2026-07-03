@@ -96,13 +96,71 @@ def transaction_flag():
         _db_local.in_txn = False
 
 
+# 完整性校验容差:DB 数据头/尾缺口超过这么多交易日,视为"回填不全"降级到 API。
+# 留 15 天余量是为了不把正常的短期停牌误判成数据缺失(长期停牌走 API 也无害,
+# 只是慢一点,拿到的数据一样)。
+_MAX_MISSING_TRADING_DAYS = 15
+
+
+def _kline_range_complete(
+    conn, code: str, start_date: str, end_date: str, rows: list
+) -> bool:
+    """校验 DB 返回的行是否覆盖了 [start_date, end_date] 的头尾。
+
+    头部:首行应接近 max(start_date, 上市日);尾部:末行应接近
+    min(end_date, 退市前一日, 全库最新交易日)。任一端缺口超过
+    _MAX_MISSING_TRADING_DAYS 个交易日 → 判为不完整(daily_update 中断 /
+    新股未回填等),返回 False 让上层降级到 API 拿全量。
+    """
+    from datetime import date as _date, timedelta as _td
+
+    from .calendar import count_trading_days
+
+    try:
+        req_start = _date.fromisoformat(start_date[:10])
+        req_end = _date.fromisoformat(end_date[:10])
+    except ValueError:
+        return True  # 日期格式异常不在这里拦,交给上层
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT list_date, delist_date FROM stock_info WHERE code=%s",
+            (code,),
+        )
+        info = cur.fetchone() or {}
+        cur.execute("SELECT MAX(trade_date) AS d FROM stock_kline")
+        row = cur.fetchone()
+        db_latest = row["d"] if row else None
+
+    first_row_d, last_row_d = rows[0]["date"], rows[-1]["date"]
+
+    # 头部预期:请求起点与上市日取晚者
+    expected_start = req_start
+    if info.get("list_date"):
+        expected_start = max(expected_start, info["list_date"])
+    if count_trading_days(expected_start, first_row_d) > _MAX_MISSING_TRADING_DAYS:
+        return False
+
+    # 尾部预期:请求终点、退市前一日、全库最新交易日三者取早者
+    expected_end = req_end
+    if info.get("delist_date"):
+        expected_end = min(expected_end, info["delist_date"] - _td(days=1))
+    if db_latest:
+        expected_end = min(expected_end, db_latest)
+    if count_trading_days(last_row_d, expected_end) > _MAX_MISSING_TRADING_DAYS:
+        return False
+
+    return True
+
+
 def _query_kline_from_db(
     code: str, start_date: str, end_date: str
 ) -> pd.DataFrame | None:
     """
     从 stock_kline 表查询前复权日K线。
-    仅当数据库中该股票在 [start_date, end_date] 内的数据完整时才返回，
-    否则返回 None 让上层降级到 API。
+    仅当数据库中该股票在 [start_date, end_date] 内的数据完整
+    (头尾缺口 ≤ _MAX_MISSING_TRADING_DAYS 个交易日)时才返回，
+    否则返回 None 让上层降级到 API —— 避免在回填不全的截断数据上回测。
     """
     conn = _get_pool()
     if conn is None:
@@ -126,6 +184,13 @@ def _query_kline_from_db(
             rows = cur.fetchall()
 
         if not rows:
+            return None
+
+        if not _kline_range_complete(conn, code, start_date, end_date, rows):
+            logger.warning(
+                "[%s] stock_kline 在 %s~%s 内数据不完整(首行 %s / 末行 %s)，降级到 API",
+                code, start_date, end_date, rows[0]["date"], rows[-1]["date"],
+            )
             return None
 
         df = pd.DataFrame(rows)

@@ -16,6 +16,7 @@ Built-in implementation:
 from __future__ import annotations
 
 import os
+import threading
 import time
 import urllib.request
 from abc import ABC, abstractmethod
@@ -23,6 +24,13 @@ from typing import Optional
 
 import akshare as ak
 import pandas as pd
+
+# 禁代理调用的全局锁(feed._remove_proxy 与 universe_fetcher.call_no_proxy 共用):
+# 两者都通过"改 os.environ + monkeypatch getproxies"实现,是进程级副作用。
+# download_universe_history 在 ThreadPoolExecutor 里并发调用时,若不加锁,
+# 一个线程 finally 恢复代理设置的瞬间会影响其它线程尚在飞行的请求(竞态)。
+# RLock 允许嵌套(call_no_proxy(get_kline_data) → feed 内部再 _remove_proxy)。
+_NO_PROXY_LOCK = threading.RLock()
 
 
 # ── Abstract base ──────────────────────────────────────────────────────────────
@@ -57,26 +65,31 @@ class DataFeed(ABC):
 # ── Akshare (default) ─────────────────────────────────────────────────────────
 
 def _remove_proxy(func, *args, **kwargs):
-    """Disable proxy for one call — patches both urllib and requests.utils."""
+    """Disable proxy for one call — patches both urllib and requests.utils.
+
+    进程级副作用(env + monkeypatch),全程持 _NO_PROXY_LOCK 串行化,
+    防止并发线程互相覆盖/提前恢复代理设置。
+    """
     import requests.utils as _ru
 
-    proxy_vars = ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
-                  "ALL_PROXY", "all_proxy")
-    saved = {k: os.environ.pop(k, None) for k in proxy_vars}
+    with _NO_PROXY_LOCK:
+        proxy_vars = ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
+                      "ALL_PROXY", "all_proxy")
+        saved = {k: os.environ.pop(k, None) for k in proxy_vars}
 
-    orig_urllib = urllib.request.getproxies
-    urllib.request.getproxies = lambda: {}
-    orig_req = _ru.getproxies
-    _ru.getproxies = lambda: {}
+        orig_urllib = urllib.request.getproxies
+        urllib.request.getproxies = lambda: {}
+        orig_req = _ru.getproxies
+        _ru.getproxies = lambda: {}
 
-    try:
-        return func(*args, **kwargs)
-    finally:
-        urllib.request.getproxies = orig_urllib
-        _ru.getproxies = orig_req
-        for k, v in saved.items():
-            if v is not None:
-                os.environ[k] = v
+        try:
+            return func(*args, **kwargs)
+        finally:
+            urllib.request.getproxies = orig_urllib
+            _ru.getproxies = orig_req
+            for k, v in saved.items():
+                if v is not None:
+                    os.environ[k] = v
 
 
 def _akshare_kline(code: str, start: str, end: str, adjust: str) -> pd.DataFrame:

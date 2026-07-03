@@ -97,7 +97,13 @@ def run_backtest(
                 if shares > 0:
                     cost = D(shares) * exec_price_d
                     comm = max(cost * commission_rate_d, min_commission_d)
-                    if cost + comm <= capital:
+                    # 预算未给手续费留头寸时(整除边界/最低佣金顶格)减一手补救,
+                    # 而不是整笔跳过错过信号 —— 与组合引擎同口径
+                    while shares > 0 and cost + comm > capital:
+                        shares -= 100
+                        cost = D(shares) * exec_price_d
+                        comm = max(cost * commission_rate_d, min_commission_d)
+                    if shares > 0:
                         position = shares
                         entry_price = float(exec_price_d)
                         capital = round_cent(capital - cost - comm)

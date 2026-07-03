@@ -191,6 +191,87 @@ async def predict_once(pick_date: Optional[_Date] = None) -> PredictResult:
     )
 
 
+# ── 资金曲线复利链重算 ────────────────────────────────────────────────────────
+
+def _chain_val_changed(old, new) -> bool:
+    if old is None and new is None:
+        return False
+    if old is None or new is None:
+        return True
+    return abs(float(old) - float(new)) > 1e-9
+
+
+def rebuild_equity_chain() -> int:
+    """按 pick_date 升序重算 ai_hotsector_equity 整条复利链,返回改写行数。
+
+    为什么每次结算后全量重算:批次可能**乱序**完成 —— 含停牌股的批次要等
+    FORCE_RESOLVE_TRADING_DAYS 超时,比后面几天的批次更晚落地。逐行
+    "接 get_latest_equity() 上一行"的增量写法在乱序时有两个错:
+      1. 晚到的旧批次 capital_before 接到了比它晚的批次上(时间倒挂);
+      2. 它永远不是"按 pick_date 最新"的那行,下一个新批次会跳过它接链,
+         其收益被永久甩出复利链,cum_return 从此失真。
+    表最多几百行(每天一行),全量重算是最简单且不会错的做法。
+
+    重算列:capital_before/after、cum_return、扣费链三列、
+    benchmark_cum_return(基准起点=按 pick_date 最早的非空 benchmark_close)。
+    day_return / win_count / total_count / benchmark_close 等事实列不动。
+    """
+    rows = db.fetch_equity_all()
+    if not rows:
+        return 0
+
+    bm_base = next(
+        (float(r["benchmark_close"]) for r in rows
+         if r.get("benchmark_close") is not None),
+        None,
+    )
+    capital = db.INITIAL_CAPITAL
+    capital_fee = db.INITIAL_CAPITAL
+    updated = 0
+    for r in rows:
+        day_return = float(r["day_return"])
+        total_count = int(r["total_count"] or 0)
+
+        capital_before = capital
+        capital_after = capital_before * (1 + day_return)
+        cum_return = capital_after / db.INITIAL_CAPITAL - 1
+
+        # 扣费链:费率取决于当批等权仓位金额(资金/只数),链条变了费率也要重算
+        if total_count > 0:
+            cost_rate = _round_trip_cost_rate(capital_fee / total_count)
+            day_return_after_fee = day_return - cost_rate
+        else:
+            day_return_after_fee = 0.0   # 全排除批次,无真实成交不产生费用
+        capital_after_fee = capital_fee * (1 + day_return_after_fee)
+        cum_return_after_fee = capital_after_fee / db.INITIAL_CAPITAL - 1
+
+        bm_close = (float(r["benchmark_close"])
+                    if r.get("benchmark_close") is not None else None)
+        bm_cum = ((bm_close - bm_base) / bm_base
+                  if bm_close is not None and bm_base else None)
+
+        new_vals = {
+            "capital_before": round(capital_before, 2),
+            "capital_after": round(capital_after, 2),
+            "cum_return": round(cum_return, 6),
+            "day_return_after_fee": round(day_return_after_fee, 6),
+            "capital_after_fee": round(capital_after_fee, 2),
+            "cum_return_after_fee": round(cum_return_after_fee, 6),
+            "benchmark_cum_return": (round(bm_cum, 6)
+                                     if bm_cum is not None else None),
+        }
+        if any(_chain_val_changed(r.get(k), v) for k, v in new_vals.items()):
+            db.update_equity_chain_fields(r["pick_date"], new_vals)
+            updated += 1
+
+        capital = capital_after
+        capital_fee = capital_after_fee
+
+    if updated:
+        logger.info("资金曲线复利链重算: 改写 %d 行(共 %d 行)", updated, len(rows))
+    return updated
+
+
 # ── 结算 ─────────────────────────────────────────────────────────────────────
 
 def settle_once(as_of_date: Optional[_Date] = None) -> SettleResult:
@@ -340,5 +421,12 @@ def settle_once(as_of_date: Optional[_Date] = None) -> SettleResult:
             day_return_after_fee * 100, capital_after,
             f", 排除{excluded_count}只" if excluded_count else "",
         )
+
+    # ── 4. 复利链重算:修正乱序结算(停牌批次晚落地)造成的接链错误 ──────────
+    if result.settled_pick_dates:
+        try:
+            rebuild_equity_chain()
+        except Exception:
+            logger.exception("资金曲线复利链重算失败(下次结算会再试)")
 
     return result

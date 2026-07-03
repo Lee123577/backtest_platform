@@ -17,9 +17,7 @@
 from __future__ import annotations
 
 import logging
-import os
 import time
-import urllib.request
 from typing import Optional
 
 import akshare as ak
@@ -55,26 +53,12 @@ def call_no_proxy(func, *args, **kwargs):
 
     必须**同时**处理 urllib + requests.utils（requests 在 import 时就把
     getproxies 拷过去了，单纯改 urllib 不够）。
+
+    实现直接复用 feed._remove_proxy —— 那边持全局 _NO_PROXY_LOCK 串行化,
+    多线程并发调用不会互相覆盖/提前恢复代理设置(此前两处各一份无锁实现)。
     """
-    import requests.utils as _ru
-
-    proxy_vars = ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
-                  "ALL_PROXY", "all_proxy")
-    saved = {k: os.environ.pop(k, None) for k in proxy_vars}
-
-    orig_urllib = urllib.request.getproxies
-    urllib.request.getproxies = lambda: {}
-    orig_req = _ru.getproxies
-    _ru.getproxies = lambda: {}
-
-    try:
-        return func(*args, **kwargs)
-    finally:
-        urllib.request.getproxies = orig_urllib
-        _ru.getproxies = orig_req
-        for k, v in saved.items():
-            if v is not None:
-                os.environ[k] = v
+    from .feed import _remove_proxy
+    return _remove_proxy(func, *args, **kwargs)
 
 
 # 历史别名，外部脚本一直叫这个，保留别名向后兼容

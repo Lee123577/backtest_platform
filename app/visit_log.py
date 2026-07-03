@@ -271,13 +271,25 @@ class VisitLogMiddleware:
         try:
             await self.app(scope, receive, send_wrapper)
         finally:
-            # 响应已发完(SSE 流也结束)再旁路记录,不影响下发时序
+            # 响应已发完(SSE 流也结束)再旁路记录,不影响下发时序。
+            # 整段 _record 丢线程池:admin 缓存过期时会同步查一次 DB,
+            # 若留在事件循环里,DB 抖动(ping/连接超时数秒)会卡住全部请求
             try:
-                self._record(scope, status_code)
+                asyncio.get_running_loop().run_in_executor(
+                    None, self._record, scope, status_code
+                )
             except Exception as e:
                 logger.warning("访问日志埋点异常: %s", e)
 
     def _record(self, scope, status_code: int) -> None:
+        """整个函数跑在线程池 worker 里(含可能的 admin 缓存 DB 查询和入库)。
+        fire-and-forget 调用,异常自行吞掉打日志(executor 的 Future 无人 await)。"""
+        try:
+            self._record_inner(scope, status_code)
+        except Exception as e:
+            logger.warning("访问日志埋点异常: %s", e)
+
+    def _record_inner(self, scope, status_code: int) -> None:
         request = Request(scope)
         path = request.url.path
         if _should_skip(path):
@@ -314,6 +326,5 @@ class VisitLogMiddleware:
             "isp":     (isp[:128] if isp else None),
         }
 
-        # 丢到线程池，不阻塞响应发送
-        loop = asyncio.get_running_loop()
-        loop.run_in_executor(None, _insert_log_sync, payload)
+        # 已在线程池 worker 里(__call__ 把整个 _record 丢了进来),直接同步写
+        _insert_log_sync(payload)
