@@ -52,6 +52,10 @@ MAX_WORKERS = int(os.getenv("MAX_WORKERS", "5"))
 # 避免每个交易日都重新调一次 30 秒 EM 重试再降级到 DB 兜底
 _cached_snap: dict | None = None
 
+# _get_valuation_snap 拉 EM 全市场快照成功时把完整 DataFrame 存这里：
+# 同一份响应里就有当日 OHLC，update_kline 快速路径直接复用，零额外请求
+_spot_em_df: "pd.DataFrame | None" = None
+
 MAJOR_INDICES = [
     "000001", "000300", "000905", "000852",
     "000016", "399001", "399006", "399303", "000688",
@@ -109,6 +113,7 @@ def _get_valuation_snap() -> dict:
     """
     from app.data.market_data import _call_no_proxy, get_universe_snapshot
 
+    global _spot_em_df
     snap: dict = {}
 
     for label, fn in [
@@ -120,6 +125,7 @@ def _get_valuation_snap() -> dict:
             if df is None or df.empty:
                 continue
             df["代码"] = df["代码"].astype(str).str.zfill(6)
+            _spot_em_df = df  # 同一份响应含当日 OHLC，供 update_kline 快速路径复用
             for _, r in df.iterrows():
                 mc_yuan  = _safe(r, "总市值")
                 cmc_yuan = _safe(r, "流通市值")
@@ -160,7 +166,9 @@ _EM_PROBE_THRESHOLD = 5  # 进入 update_kline 时先抽样探测 EM；全部失
 
 
 def _sina_symbol(code: str) -> str:
-    """A 股 6 位代码 → sina 接口要求的带交易所前缀的 symbol。"""
+    """A 股 6 位代码 → sina/腾讯接口要求的带交易所前缀的 symbol。"""
+    if code.startswith("920"):     # 北交所新段（920xxx），先于沪 B 股(900xxx)判断
+        return f"bj{code}"
     if code.startswith(("6", "9")):
         return f"sh{code}"
     if code.startswith(("4", "8")):
@@ -263,6 +271,137 @@ def _fetch_one(code: str, date_nodash: str, em_enabled: bool) -> tuple["pd.DataF
     return None, None, last_err
 
 
+# ── 全市场快照快速路径 ────────────────────────────────────────────────────────
+# 逐只抓 5000+ 次 HTTP 是每日更新最大的耗时来源（EM 被拦时全走 sina 要 30~40 分钟）。
+# trade_date 恰为「最近一个已收盘的交易日」时，收盘后的实时快照 = 当日日K：
+#   1. EM 全市场快照 —— 估值那步已经拉过，直接复用，零额外请求
+#   2. 腾讯 qt.gtimg.cn 批量行情 —— 80 只/请求，全市场 ~70 个请求几十秒搞定，
+#      该端点在云服务器上长期稳定（EM push2 被拦时的主力替代）
+# 快照没覆盖的少数股票才回落到逐只抓取；回补历史日期仍走原逐只路径。
+
+_TENCENT_BATCH = 80
+
+
+def _spot_covers(trade_date: str) -> bool:
+    """trade_date 是否等于最近一个已收盘的交易日（此时实时快照=该日日K）。"""
+    from datetime import datetime
+    now = datetime.now()
+    d = now.date()
+    # 当天是交易日但还没收盘 → 快照是盘中数据，不能当日K用
+    if is_trading_day(d) and now.strftime("%H%M") < "1505":
+        d -= timedelta(days=1)
+    while not is_trading_day(d):
+        d -= timedelta(days=1)
+    return trade_date == d.strftime("%Y-%m-%d")
+
+
+def _bars_from_em_spot() -> "dict | None":
+    """从估值快照那次 EM 全市场响应提取当日 OHLC。返回 {code: bar|None}。"""
+    df = _spot_em_df
+    if df is None or df.empty:
+        return None
+    need = ["今开", "最高", "最低", "最新价", "成交量", "成交额", "换手率", "涨跌幅"]
+    if any(c not in df.columns for c in need):
+        return None
+    bars: dict = {}
+    for _, r in df.iterrows():
+        code = str(r["代码"]).zfill(6)
+        close = _safe(r, "最新价")
+        vol = _safe(r, "成交量")
+        if close is None or not vol:  # 停牌/无成交 → 当日无K线
+            bars[code] = None
+            continue
+        mc = _safe(r, "总市值")
+        cmc = _safe(r, "流通市值")
+        bars[code] = {
+            "open": _safe(r, "今开"), "high": _safe(r, "最高"),
+            "low": _safe(r, "最低"), "close": close,
+            "volume": int(vol), "amount": _safe(r, "成交额"),
+            "turnover": _safe(r, "换手率"), "pct": _safe(r, "涨跌幅"),
+            "mc": mc / 1e8 if mc is not None else None,      # 元 → 亿元
+            "cmc": cmc / 1e8 if cmc is not None else None,
+            "pe": _safe(r, "市盈率-动态"), "pb": _safe(r, "市净率"),
+        }
+    return bars
+
+
+def _tencent_symbol(code: str, is_index: bool = False) -> str:
+    if is_index:
+        return ("sz" if code.startswith("39") else "sh") + code
+    return _sina_symbol(code)  # 股票前缀规则与 sina 相同（sh/sz/bj）
+
+
+def _fetch_spot_tencent(codes: list, date_nodash: str,
+                        is_index: bool = False) -> "dict | None":
+    """
+    腾讯 qt.gtimg.cn 批量行情。返回 {code: bar|None}：
+    None 表示确认当日无成交（停牌）；不在 dict 里 = 接口没给，调用方回落逐只抓。
+    响应 ~ 分隔字段：3=现价 5=今开 30=时间戳 32=涨跌% 33=最高 34=最低
+    36=成交量(手) 37=成交额(万) 38=换手率 39=PE 44=流通市值(亿) 45=总市值(亿) 46=PB
+    """
+    import requests
+
+    sess = requests.Session()
+    sess.trust_env = False  # 禁系统代理（服务器上代理不可用）
+    batches = [codes[i:i + _TENCENT_BATCH]
+               for i in range(0, len(codes), _TENCENT_BATCH)]
+    out: dict = {}
+    fail = 0
+
+    def _one(batch):
+        url = "https://qt.gtimg.cn/q=" + ",".join(
+            _tencent_symbol(c, is_index) for c in batch)
+        r = sess.get(url, timeout=10)
+        r.encoding = "gbk"
+        return r.text
+
+    def _num(fields, i):
+        try:
+            return float(fields[i])
+        except (ValueError, IndexError, TypeError):
+            return None
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as exe:
+        futs = [exe.submit(_one, b) for b in batches]
+        for fut in as_completed(futs):
+            try:
+                text = fut.result()
+            except Exception:
+                fail += 1
+                continue
+            for seg in text.split(";"):
+                if "=" not in seg:
+                    continue
+                _, _, body = seg.partition("=")
+                fields = body.strip().strip('"').split("~")
+                if len(fields) < 47 or len(fields[2]) != 6:
+                    continue
+                code = fields[2]
+                close = _num(fields, 3)
+                vol = _num(fields, 36)
+                ts = fields[30] if len(fields) > 30 else ""
+                # 无成交，或时间戳日期对不上（长期停牌残留旧行情）→ 当日无K线
+                if not close or not vol or not ts.startswith(date_nodash):
+                    out[code] = None
+                    continue
+                # 腾讯科创板(688/689)成交量单位是股，其余板块是手；统一转手对齐 EM
+                if not is_index and code.startswith(("688", "689")):
+                    vol = vol / 100
+                out[code] = {
+                    "open": _num(fields, 5), "high": _num(fields, 33),
+                    "low": _num(fields, 34), "close": close,
+                    "volume": int(vol),
+                    "amount": (_num(fields, 37) or 0) * 1e4,  # 万 → 元
+                    "turnover": _num(fields, 38), "pct": _num(fields, 32),
+                    "mc": _num(fields, 45), "cmc": _num(fields, 44),  # 已是亿元
+                    "pe": _num(fields, 39), "pb": _num(fields, 46),
+                }
+    if not out or fail > len(batches) * 0.3:
+        log.warning(f"腾讯快照批量失败过多({fail}/{len(batches)})，放弃快速路径")
+        return None
+    return out
+
+
 def update_kline(conn, trade_date: str):
     log.info(f"更新 stock_kline: {trade_date}")
     date_nodash = trade_date.replace("-", "")
@@ -325,14 +464,43 @@ def update_kline(conn, trade_date: str):
             quality_flag=VALUES(quality_flag)
     """
 
+    # ── 快速路径：trade_date 为最近已收盘交易日 → 全市场快照一次拿齐 ─────────
+    fast_bars: dict = {}
+    fast_src = ""
+    if _spot_covers(trade_date):
+        bars = _bars_from_em_spot()
+        fast_src = "em_spot"
+        if bars is None:
+            try:
+                bars = _fetch_spot_tencent(codes, date_nodash)
+            except Exception as e:
+                log.warning(f"腾讯快照异常，回落逐只抓取: {e}")
+                bars = None
+            fast_src = "tencent"
+        if bars:
+            fast_bars = bars
+            covered = sum(1 for c in codes if c in fast_bars)
+            log.info(f"全市场快照快速路径({fast_src}): 覆盖 {covered}/{len(codes)} 只")
+            # 腾讯快照自带市值/PE/PB，顺手补进估值 snap
+            #（EM 挂掉时 snap 往往只剩 DB 里的旧市值，甚至覆盖不全）
+            for c, b in fast_bars.items():
+                if b and b.get("mc") is not None and c not in snap:
+                    snap[c] = {"mc": b["mc"], "cmc": b.get("cmc"),
+                               "pe": b.get("pe"), "pb": b.get("pb")}
+
+    # 快照没覆盖的才走逐只抓取（通常只剩极少数；回补历史日期时为全部）
+    slow_codes = [c for c in codes if c not in fast_bars]
+
     # 在并发抓取前探测 EM 是否整体可用，避免 5000 只各试一次失败
     # SKIP_EM=1 时直接跳过探测全走 sina —— 用于 EM 间歇性可用但探测命中
     # 后续抓取又失败的场景（push2his 节点波动），避免每只浪费 0.5s 超时
-    if os.getenv("SKIP_EM"):
+    if not slow_codes:
+        em_enabled = False
+    elif os.getenv("SKIP_EM"):
         em_enabled = False
         log.info(f"stock_kline {trade_date}: SKIP_EM=1，跳过 EM 探测，全走 sina")
     else:
-        probe_sample = codes[:_EM_PROBE_THRESHOLD]
+        probe_sample = slow_codes[:_EM_PROBE_THRESHOLD]
         em_enabled = _probe_em(date_nodash, probe_sample)
         if not em_enabled:
             log.info(f"stock_kline {trade_date}: EM 全部失败，本次全走 sina")
@@ -355,7 +523,7 @@ def update_kline(conn, trade_date: str):
             ))
         return code, rows, source, err
 
-    total = len(codes)
+    total = len(slow_codes)
     done_count = 0
     pending_rows: list = []
     written_total = 0
@@ -378,11 +546,36 @@ def update_kline(conn, trade_date: str):
                      for row, flag in zip(cleaned, flags)]
         return batch_insert(conn, sql, full_rows)
 
+    # ── 先写快照路径拿到的行 ────────────────────────────────────────────────
+    for c in codes:
+        bar = fast_bars.get(c)
+        if c not in fast_bars:
+            continue
+        if bar is None:
+            empty_codes.append(c)
+            continue
+        info = snap.get(c, {})
+        pending_rows.append((
+            c, trade_date,
+            bar["open"], bar["high"], bar["low"], bar["close"],
+            bar["volume"], bar["amount"], bar["turnover"], bar["pct"],
+            bar["mc"] if bar["mc"] is not None else info.get("mc"),
+            bar["cmc"] if bar["cmc"] is not None else info.get("cmc"),
+            bar["pe"] if bar["pe"] is not None else info.get("pe"),
+            bar["pb"] if bar["pb"] is not None else info.get("pb"),
+        ))
+        source_count[fast_src] = source_count.get(fast_src, 0) + 1
+    if pending_rows:
+        n = _flush(pending_rows)
+        written_total += n
+        log.info(f"stock_kline {trade_date} 快照路径写入 {n} 条")
+        pending_rows = []
+
     # _call_no_proxy 临时 unset 代理环境变量。多线程并发时
     # 这会引入竞态（一个线程恢复时另一个还在用空 env），
     # 但比起每只都失败的现状，宁可接受降级；并发数维持原值。
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as exe:
-        futures = {exe.submit(_fetch, c): c for c in codes}
+        futures = {exe.submit(_fetch, c): c for c in slow_codes}
         for fut in as_completed(futures):
             code, rows, source, err = fut.result()
             if rows:
@@ -419,7 +612,8 @@ def update_kline(conn, trade_date: str):
 
     log.info(
         f"stock_kline {trade_date} 写入 {written_total} 条 "
-        f"(em={source_count.get('em', 0)}, sina={source_count.get('sina', 0)}, "
+        f"(spot={source_count.get('em_spot', 0) + source_count.get('tencent', 0)}, "
+        f"em={source_count.get('em', 0)}, sina={source_count.get('sina', 0)}, "
         f"fail={len(fail_codes)}, empty={len(empty_codes)})"
     )
     # 数据质量统计
@@ -737,7 +931,29 @@ def update_index_daily(conn, trade_date: str):
     date_nodash = trade_date.replace("-", "")
 
     rows = []
-    for idx_code in MAJOR_INDICES:
+    remaining = list(MAJOR_INDICES)
+
+    # 快速路径：腾讯批量接口一个请求拿齐全部指数
+    #（EM 被拦时旧逻辑每只指数要重试 6 路径 ×3 轮，9 只烧掉好几分钟）
+    if _spot_covers(trade_date):
+        try:
+            bars = _fetch_spot_tencent(MAJOR_INDICES, date_nodash,
+                                       is_index=True) or {}
+        except Exception as e:
+            log.warning(f"index_daily 腾讯快照失败，回落逐只抓取: {e}")
+            bars = {}
+        for idx_code in MAJOR_INDICES:
+            bar = bars.get(idx_code)
+            if not bar:
+                continue
+            rows.append((idx_code, trade_date,
+                         bar["open"], bar["high"], bar["low"], bar["close"],
+                         bar["volume"], bar["amount"], bar["pct"]))
+            remaining.remove(idx_code)
+        if rows:
+            log.info(f"index_daily 腾讯快照覆盖 {len(rows)}/{len(MAJOR_INDICES)} 只")
+
+    for idx_code in remaining:
         try:
             raw = _fetch_index_bar_retry(idx_code, date_nodash)
             if raw is None or raw.empty:
