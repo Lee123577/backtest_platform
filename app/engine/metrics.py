@@ -25,6 +25,9 @@ import pandas as pd
 
 TRADING_DAYS_PER_YEAR = 252
 RISK_FREE_ANNUAL = 0.03
+# 净值序列短于这么多条时不做年化:(1+r)^(252/days) 会把几天的涨跌
+# 放大成荒谬的年化数字(例:3 天涨 2% → 年化 435%)。返回 None,前端显示"—"。
+MIN_ANNUALIZE_PERIODS = 20
 
 
 def compute_risk_metrics(
@@ -46,7 +49,10 @@ def compute_risk_metrics(
     """
     total_return = (equity.iloc[-1] - initial_capital) / initial_capital
     days = len(equity)
-    annual_return = (1 + total_return) ** (periods_per_year / days) - 1 if days > 0 else 0.0
+    annual_return = (
+        (1 + total_return) ** (periods_per_year / days) - 1
+        if days >= MIN_ANNUALIZE_PERIODS else None
+    )
 
     cummax = equity.cummax()
     drawdown = (equity - cummax) / cummax
@@ -74,15 +80,21 @@ def compute_risk_metrics(
         if len(downside) > 1 and downside.std() > 0 else 0.0
     )
 
-    calmar = round(annual_return / abs(max_drawdown), 3) if max_drawdown != 0 else 0.0
+    if annual_return is None:
+        calmar = None            # 期太短未年化 → Calmar 同样无意义
+    elif max_drawdown != 0:
+        calmar = round(annual_return / abs(max_drawdown), 3)
+    else:
+        calmar = 0.0
 
     return {
         "total_return": round(total_return * 100, 2),
-        "annual_return": round(annual_return * 100, 2),
+        "annual_return": (round(annual_return * 100, 2)
+                          if annual_return is not None else None),
         "max_drawdown": round(max_drawdown * 100, 2),
         "max_drawdown_days": max_dd_days,
         "sharpe_ratio": round(sharpe, 3),
         "sortino_ratio": round(sortino, 3),
-        "calmar_ratio": round(calmar, 3),
+        "calmar_ratio": round(calmar, 3) if calmar is not None else None,
         "final_value": round(float(equity.iloc[-1]), 2),
     }

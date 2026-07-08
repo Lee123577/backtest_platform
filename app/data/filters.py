@@ -19,7 +19,8 @@ from typing import Iterable, Tuple
 _MAIN_PREFIXES = ("600", "601", "603", "605", "000", "001", "002", "003")
 _GEM_PREFIXES  = ("300", "301")
 _STAR_PREFIXES = ("688", "689")
-_BJ_PREFIXES   = ("4", "8")
+# 北交所:老段 4xx/8xx + 2024 年起的新段 920xxx
+_BJ_PREFIXES   = ("4", "8", "920")
 
 
 def is_st_name(name: str) -> bool:

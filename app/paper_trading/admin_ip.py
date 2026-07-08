@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
@@ -54,6 +55,7 @@ DDL_STATEMENTS = [
 _table_ready = False
 _env_bootstrap_done = False
 _first_run_checked = False
+_first_run_lock = threading.Lock()   # 并发首个写请求只允许一个做 bootstrap
 
 
 def ensure_table() -> None:
@@ -243,18 +245,20 @@ def require_admin_ip(request: Request) -> str:
     ip = get_request_ip(request)
 
     if not _first_run_checked:
-        _first_run_checked = True
-        if count_ips() == 0:
-            try:
-                add_ip(ip, "first-run bootstrap", "system")
-                logger.warning(
-                    "⚠ First-run bootstrap：IP %s 已自动加入白名单。"
-                    "如部署在公网，请尽快通过 UI 或 SQL 检查并清理意外的 IP。",
-                    ip,
-                )
-                return ip
-            except Exception as e:
-                logger.error("First-run bootstrap 失败：%s", e)
+        with _first_run_lock:   # 双检:并发的两个首个写请求不能都走 bootstrap
+            if not _first_run_checked:
+                _first_run_checked = True
+                if count_ips() == 0:
+                    try:
+                        add_ip(ip, "first-run bootstrap", "system")
+                        logger.warning(
+                            "⚠ First-run bootstrap：IP %s 已自动加入白名单。"
+                            "如部署在公网，请尽快通过 UI 或 SQL 检查并清理意外的 IP。",
+                            ip,
+                        )
+                        return ip
+                    except Exception as e:
+                        logger.error("First-run bootstrap 失败：%s", e)
 
     if not is_admin(ip):
         raise HTTPException(

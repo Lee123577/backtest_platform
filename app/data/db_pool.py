@@ -28,6 +28,7 @@ import logging
 import os
 import queue
 import threading
+import time
 from contextlib import contextmanager
 from typing import Optional
 
@@ -111,21 +112,33 @@ def borrow(timeout: float = BORROW_TIMEOUT) -> Optional["pymysql.connections.Con
                 _created_count += 1
                 return conn
 
-    # ── 3. 已到上限:阻塞等 ───────────────────────────────────────────────
-    try:
-        conn = _pool.get(timeout=timeout)
-    except queue.Empty:
-        logger.error(
-            "连接池耗尽 (MAX=%d, in_use=%d),等待 %ss 超时",
-            MAX_CONNECTIONS, _created_count, timeout,
-        )
-        return None
-    try:
-        conn.ping(reconnect=True)
-        return conn
-    except Exception:
-        _discard(conn)
-        return None
+    # ── 3. 已到上限:阻塞等(坏连接不算数,在超时窗口内继续等/重建)──────────
+    deadline = time.monotonic() + timeout
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            conn = _pool.get(timeout=remaining)
+        except queue.Empty:
+            break
+        try:
+            conn.ping(reconnect=True)
+            return conn
+        except Exception:
+            _discard(conn)   # 计数已减一,先尝试新建再继续等
+        with _lock:
+            if _created_count < MAX_CONNECTIONS:
+                conn = _new_connection()
+                if conn is not None:
+                    _created_count += 1
+                    return conn
+
+    logger.error(
+        "连接池耗尽 (MAX=%d, in_use=%d),等待 %ss 超时",
+        MAX_CONNECTIONS, _created_count, timeout,
+    )
+    return None
 
 
 def release(conn) -> None:

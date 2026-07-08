@@ -230,9 +230,13 @@ def _load_universe_snapshot(
             name = (r.get("name") or "").strip()
             if r.get("is_st") or is_st_name(name):
                 continue
+            # 剔除当日涨停(次日开盘大概率买不进):阈值按板块涨跌停幅取,
+            # 创业板/科创板/北交所 20%,主板 10%,留 0.2% 容差
             pct = r.get("pct_change")
-            if pct is not None and float(pct) >= 9.8:
-                continue
+            if pct is not None:
+                limit = 20.0 if board_of(code) in ("gem", "star", "bj") else 10.0
+                if float(pct) >= limit - 0.2:
+                    continue
             mc = (
                 cap_lookup[code]
                 if cap_lookup and code in cap_lookup
@@ -406,6 +410,23 @@ def _get_index_close(index_code: str, trade_date: _Date) -> Optional[float]:
     return float(row["close"]) if row and row["close"] is not None else None
 
 
+def _pending_is_stale(decided: _Date, trade_date: _Date) -> bool:
+    """挂单是否已过时:decided_on 与 trade_date 之间隔了不止 1 个交易日。
+
+    正常路径(cron 补跑 run_catch_up)逐日重放,永远是隔 1 个交易日;只有
+    手动 --date/--single 跳日期才会隔更多 —— 此时按 T 日信号在 T+3 开盘
+    成交是错的,应作废重决策。相邻日历日必然 ≤1 个交易日,先用日历日差
+    做廉价预判,避免不必要的交易日历加载(离线测试也不触网)。
+    """
+    if (trade_date - decided).days <= 1:
+        return False
+    try:
+        from ..data.calendar import count_trading_days
+        return count_trading_days(decided, trade_date) > 1
+    except Exception:
+        return False   # 日历不可用时宁可执行,与旧行为一致
+
+
 def _cumulative_pct_change(
     code: str, buy_date: _Date, today: _Date
 ) -> Optional[float]:
@@ -469,6 +490,11 @@ def run_once(
     跑一次模拟策略。每个交易日只应跑一次（同一天再跑相当于覆盖）。
     """
     db.ensure_tables()
+    # 在进事务前(非事务上下文)建 stock_dividend 表:_apply_dividends_for_holdings
+    # 里的 dividend.ensure_table() 全程在 transaction_flag() 内跳过 DDL,新装环境
+    # 若只靠它,表要等每月 1 号的 backfill_dividend.py 才会建出来。这里保证首次
+    # 正常跑 run_once 当天就把表建好,不依赖月度任务。
+    dividend.ensure_table()
     db.init_account(initial_capital, {
         "cap_min": cap_min, "cap_max": cap_max,
         "stock_num": stock_num, "hold_days": hold_days,
@@ -482,6 +508,10 @@ def run_once(
 
     account = db.get_account()
     cash = float(account["cash"])
+    # 账户已开后本金以 DB 为准:--capital/DB 参数只在首次初始化时生效,
+    # 否则调用参数一变,cum_return 就随之漂移(与 api_paper_account 同口径)
+    if account.get("initial_capital") is not None:
+        initial_capital = float(account["initial_capital"])
     rebalance_counter = int(account.get("rebalance_counter") or 0)
     last_rb = account.get("last_rebalance_date")
     pending = db.get_pending_actions()
@@ -602,8 +632,25 @@ def _run_once_body(
     cash += D(_apply_dividends_for_holdings(holdings, trade_date, dry_run))
 
     # ── 步骤 1: 执行昨日收盘后生成的挂单(按今日开盘价成交) ────────────────
+    # 挂单只在 decided_on 的**下一个交易日**有效;隔了更多交易日(手动跳日期
+    # 补跑等)说明信号已过时,作废不执行 —— 止损今晚收盘会重新评估,调仓
+    # 因 counter 未被重置、今晚也会重新决策,均自动恢复。
     executed_rebalance = False
-    if pending and str(pending.get("decided_on") or "9999-12-31") < str(trade_date):
+    pending_due = pending and str(pending.get("decided_on") or "9999-12-31") < str(trade_date)
+    if pending_due:
+        try:
+            _decided = _Date.fromisoformat(str(pending["decided_on"])[:10])
+        except (TypeError, ValueError):
+            _decided = None
+        if _decided is not None and _pending_is_stale(_decided, trade_date):
+            logger.warning(
+                "挂单 decided_on=%s 距今日 %s 隔了不止 1 个交易日,信号过时,"
+                "作废不执行(今晚重新决策)", pending.get("decided_on"), trade_date,
+            )
+            pending = None
+            pending_due = False
+
+    if pending_due:
         # 1a. 止损挂单卖出
         for code in pending.get("stop_loss") or []:
             h = holdings.get(code)
@@ -747,9 +794,11 @@ def _run_once_body(
             buy_date_h = h.get("buy_date")
             cum_ret = _cumulative_pct_change(code, buy_date_h, trade_date) \
                       if buy_date_h is not None else None
+            # close 缺失(NULL→0)时不能走 close 直比兜底:(0-buy)/buy = -100%
+            # 会挂出假止损单
             loss_ratio = cum_ret if cum_ret is not None \
-                else (close_px - buy_px) / buy_px
-            if loss_ratio <= -stop_loss_ratio:
+                else ((close_px - buy_px) / buy_px if close_px > 0 else None)
+            if loss_ratio is not None and loss_ratio <= -stop_loss_ratio:
                 stop_queue.append(code)
                 logger.info(
                     "[%s] 收盘触发止损(亏损 %.2f%%),挂单次日开盘卖出",

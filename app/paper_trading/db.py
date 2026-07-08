@@ -108,8 +108,19 @@ DDL_STATEMENTS = [
 ]
 
 
+_tables_ready = False
+
+
 def ensure_tables() -> None:
-    """启动时确保所有表存在；已存在则忽略。同时做增量列迁移（旧库补字段）。"""
+    """启动时确保所有表存在；已存在则忽略。同时做增量列迁移（旧库补字段）。
+
+    进程内只真正执行一次:本函数被每个 /api/paper_trading/* 请求调用,
+    不加标志的话每个请求都是 5 条 DDL + 4 次 INFORMATION_SCHEMA 扫描。
+    失败时不置标志,下次调用重试。
+    """
+    global _tables_ready
+    if _tables_ready:
+        return
     conn = _get_pool()
     if conn is None:
         raise RuntimeError("数据库连接不可用，无法初始化 paper_trading 表")
@@ -139,6 +150,7 @@ def ensure_tables() -> None:
          "TEXT NULL COMMENT '次日开盘待执行挂单(JSON):"
          "{decided_on,rebalance,buy,buy_meta,stop_loss}'"),
     ])
+    _tables_ready = True
     logger.info("paper_trading 表已就绪")
 
 
@@ -545,19 +557,25 @@ def list_trades(limit: int = 200) -> List[Dict[str, Any]]:
     conn = _get_pool()
     if conn is None:
         return []
+    limit = max(1, min(limit, 1000))
     with conn.cursor() as cur:
-        # 先正序查全部历史买卖（含 run_id 用作详情跳转），后续算 PnL；
-        # 最后再倒序返回给前端
+        # 只取最近 limit 条(倒序),再翻正序做 FIFO 兜底配对 —— 不再每次全表
+        # 扫描(表按天增长,几年后全量拉取会越来越慢)。窗口边缘的旧式卖出行
+        # (DB 未直接存 buy_price 的历史数据)若配不到窗口外的买入,该笔的
+        # buy_date/hold_days/pnl/pnl_pct 会一起留空(前端按 "—" 展示);
+        # 新版行的 PnL 直接读存储值,不受窗口影响。
         cur.execute(
             """
             SELECT id, run_id, run_date, code, name, price, shares, amount, action,
                    buy_price, commission, pnl, pnl_pct
             FROM paper_signal_position
             WHERE action IN ('买入', '卖出', '止损卖出')
-            ORDER BY run_date ASC, id ASC
-            """
+            ORDER BY run_date DESC, id DESC
+            LIMIT %s
+            """,
+            (limit,),
         )
-        rows = cur.fetchall()
+        rows = list(cur.fetchall())[::-1]   # 翻回正序供 FIFO 配对
 
     # FIFO 配对（兜底）：只在 DB 里没有存储值时使用
     # 新版 runner.py 在卖出时直接写 buy_price/commission/pnl/pnl_pct，无需 FIFO
@@ -633,9 +651,9 @@ def list_trades(limit: int = 200) -> List[Dict[str, Any]]:
                 item["hold_days"] = hold_days
         enriched.append(item)
 
-    # 倒序后截断
+    # 倒序返回(查询已按 limit 截断)
     enriched.reverse()
-    return enriched[: max(1, min(limit, 1000))]
+    return enriched
 
 
 def get_latest_holdings_with_prices() -> List[Dict[str, Any]]:

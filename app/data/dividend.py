@@ -35,8 +35,9 @@ from typing import Any, Dict, List, Optional
 
 import akshare as ak
 import pandas as pd
+import pymysql
 
-from .data_loader import _get_pool
+from .data_loader import _get_pool, in_transaction
 
 logger = logging.getLogger(__name__)
 
@@ -62,9 +63,20 @@ _table_ready = False
 
 
 def ensure_table() -> None:
-    """启动时调一次即可,进程内幂等。"""
+    """启动时调一次即可,进程内幂等。
+
+    调用方处于显式事务中时**跳过 DDL**:CREATE TABLE(即使 IF NOT EXISTS 命中
+    已存在的表)是 DDL,会隐式提交调用方的事务;autocommit 连接下后续写入随之
+    逐条自动提交、无法回滚 —— paper_trading.run_once 的事务保护会被静默打穿。
+    表在生产上早已存在;万一真没建,get_events/apply_to_holding 会安全返回
+    空结果,不影响主流程。真正建表发生在非事务路径:runner.run_once() 进事务
+    前会先调一次本函数(保证新装环境当天即可用),scripts/backfill_dividend.py
+    (每月 1 号)是第二道保险。
+    """
     global _table_ready
     if _table_ready:
+        return
+    if in_transaction():
         return
     conn = _get_pool()
     if conn is None:
@@ -316,15 +328,25 @@ def get_events(
     conn = _get_pool()
     if conn is None:
         return []
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT ex_date, bonus_shares, converted_shares, cash_dividend "
-            "FROM stock_dividend "
-            "WHERE code=%s AND ex_date BETWEEN %s AND %s "
-            "ORDER BY ex_date",
-            (code, start, end),
-        )
-        return cur.fetchall()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT ex_date, bonus_shares, converted_shares, cash_dividend "
+                "FROM stock_dividend "
+                "WHERE code=%s AND ex_date BETWEEN %s AND %s "
+                "ORDER BY ex_date",
+                (code, start, end),
+            )
+            return cur.fetchall()
+    except pymysql.err.ProgrammingError as e:
+        # 1146 = table doesn't exist(事务中 ensure_table 跳过 DDL 的
+        # fresh-install 场景)。只吞这一种,按"无事件"处理,不让除权扫描
+        # 拖垮整个 run_once;其他错误(连接断开/SQL 语法等)必须往上抛,
+        # 否则会被静默误判成"无分红事件"。
+        if e.args and e.args[0] == 1146:
+            logger.warning("[%s] stock_dividend 表不存在,按无事件处理: %s", code, e)
+            return []
+        raise
 
 
 # ── 复权应用到持仓 ───────────────────────────────────────────────────────────

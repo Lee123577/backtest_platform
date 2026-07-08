@@ -47,13 +47,21 @@ CREATE TABLE IF NOT EXISTS task_run_log (
 _HOST = socket.gethostname()[:64]
 
 
+_table_ready = False
+
+
 def ensure_table() -> None:
+    """进程内只真正执行一次(每个 /api/tasks/* 请求都会调,不必反复跑 DDL)。"""
+    global _table_ready
+    if _table_ready:
+        return
     conn = _get_pool()
     if conn is None:
         return
     conn.ping(reconnect=True)
     with conn.cursor() as cur:
         cur.execute(_DDL)
+    _table_ready = True
 
 
 def insert_run(

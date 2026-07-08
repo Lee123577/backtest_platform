@@ -23,7 +23,7 @@ from typing import Any, Dict, List, Optional
 import akshare as ak
 import pandas as pd
 
-from .data_loader import _get_pool, get_kline_data
+from .data_loader import _get_pool, get_kline_data, in_transaction
 from .feed import get_feed
 from .universe_fetcher import (
     call_no_proxy,
@@ -131,6 +131,11 @@ def _ensure_snap_table() -> bool:
     global _snap_table_ready
     if _snap_table_ready:
         return True
+    if in_transaction():
+        # DDL 会隐式提交调用方的显式事务(paper_trading.run_once 的降级路径
+        # 会走到这里)。表在生产上早已存在,直接按"已就绪"放行;真没建时
+        # 后续读写有 try/except 兜底,下次非事务路径会补建。
+        return True
     try:
         conn = _get_pool()
         if conn is None:
@@ -147,9 +152,13 @@ def _ensure_snap_table() -> bool:
 
 def _write_universe_to_db(df: pd.DataFrame) -> bool:
     """
-    把全市场快照写入 market_universe_snapshot（以今天为 snap_date）。
+    把全市场快照写入 market_universe_snapshot（以最近一个交易日为 snap_date）。
     失败时静默返回 False，不影响调用方返回数据。
     同时清理 7 天前的旧快照，防止表无限增大。
+
+    当日快照已完整(≥ _MIN_UNIVERSE_SIZE 行)时直接跳过 —— get_universe_snapshot
+    的 Attempt 0 每次成功都会调本函数,而 universe_preview 等接口调用频繁,
+    不能每次都做 5000 行 upsert。
     """
     if not _ensure_snap_table():
         return False
@@ -158,19 +167,40 @@ def _write_universe_to_db(df: pd.DataFrame) -> bool:
         if conn is None:
             return False
         conn.ping(reconnect=True)
+
+        # 周末/节假日跑时归到最近一个交易日,避免同一份收盘数据在
+        # 非交易日重复建快照(日历不可用时退化为周一~周五判断)
+        from datetime import timedelta as _td
+        from .calendar import is_trading_day
         snap_date = Date.today()
+        for _ in range(15):
+            if is_trading_day(snap_date):
+                break
+            snap_date -= _td(days=1)
+
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) AS cnt FROM market_universe_snapshot "
+                "WHERE snap_date=%s AND market_cap IS NOT NULL",
+                (snap_date,),
+            )
+            row = cur.fetchone()
+        if row and int(row.get("cnt") or 0) >= _MIN_UNIVERSE_SIZE:
+            return True   # 当日快照已完整,无需重写
+
+        name_col = df["name"] if "name" in df.columns else [""] * len(df)
+        price_col = df["price"] if "price" in df.columns else [None] * len(df)
         rows = []
-        for _, r in df.iterrows():
-            mc = r.get("market_cap")
-            if mc is None or (isinstance(mc, float) and pd.isna(mc)):
+        for code, name, px, mc in zip(df["code"], name_col, price_col,
+                                      df["market_cap"]):
+            if mc is None or pd.isna(mc):
                 continue
-            px = r.get("price")
-            if isinstance(px, float) and pd.isna(px):
+            if px is not None and pd.isna(px):
                 px = None
             rows.append((
                 snap_date,
-                str(r["code"]).zfill(6),
-                str(r.get("name") or "")[:20],
+                str(code).zfill(6),
+                str(name or "")[:20],
                 float(px) if px is not None else None,
                 float(mc),
             ))

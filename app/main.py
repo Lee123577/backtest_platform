@@ -81,13 +81,20 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 def _kline_records(df: pd.DataFrame) -> List[Dict[str, Any]]:
-    """DataFrame → 前端 K 线数组用的记录列表(date/open/high/low/close/volume)。"""
+    """DataFrame → 前端 K 线数组用的记录列表(date/open/high/low/close/volume)。
+
+    NaN 一律转 None:json.dumps 会把 NaN 输出成裸 `NaN`(非法 JSON),
+    浏览器 fetch().json() 直接抛异常(DB 中 NULL 的 open/high/low 会触发)。
+    """
+    def _f(v):
+        return None if v is None or (isinstance(v, float) and pd.isna(v)) else v
+
     return [
         {
             "date": str(r["date"].date()),
-            "open": r["open"], "high": r["high"],
-            "low": r["low"],  "close": r["close"],
-            "volume": r["volume"],
+            "open": _f(r["open"]), "high": _f(r["high"]),
+            "low": _f(r["low"]),  "close": _f(r["close"]),
+            "volume": _f(r["volume"]),
         }
         for r in df.to_dict("records")
     ]
@@ -675,6 +682,8 @@ def api_backtest(req: BacktestRequest):
     if df.empty:
         raise HTTPException(status_code=400, detail="数据为空，请检查股票代码和日期范围")
 
+    stock_name = get_stock_name(code)   # 预检警告和响应体共用,只查一次
+
     # ── 资金充足性预检：A 股最小买入 100 股，资金低于"区间最低价×100"则无法成交 ──
     # 不直接拦截（用户可能仍想看价格曲线），但把警告塞进结果里，避免"0% 收益 0 笔交易"
     # 让人误以为是策略本身不出信号
@@ -683,7 +692,6 @@ def api_backtest(req: BacktestRequest):
         min_low = float(df["low"].min())
         min_buy_cost = min_low * 100 * 1.0005  # 留一点手续费余量
         if min_buy_cost > req.initial_capital:
-            stock_name = get_stock_name(code)
             recommended = int((min_low * 100 * 1.01 // 1000 + 1) * 1000)  # 上取整到 1000
             capital_warning = (
                 f"初始资金 ¥{req.initial_capital:,.0f} 不足以买入 1 手 {stock_name}（{code}）。"
@@ -715,7 +723,7 @@ def api_backtest(req: BacktestRequest):
     kline = _kline_records(df)
     return {
         "stock_code": code,
-        "stock_name": get_stock_name(code),
+        "stock_name": stock_name,
         "results": results,
         "benchmark": benchmark,
         "kline": kline,
