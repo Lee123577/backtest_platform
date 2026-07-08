@@ -86,6 +86,28 @@ main {
   gap: 16px;
 }
 
+/* ── Footer ── */
+.site-footer {
+  max-width: 1440px;
+  margin: 8px auto 20px;
+  padding: 14px 24px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px 10px;
+  text-align: center;
+  color: var(--txt2);
+  font-size: 12.5px;
+  border-top: 1px solid var(--border);
+}
+.site-footer a {
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: none;
+}
+.site-footer a:hover { text-decoration: underline; }
+
 .panel {
   background: var(--bg);
   border: 1px solid var(--border);
