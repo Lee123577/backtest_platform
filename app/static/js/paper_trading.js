@@ -31,6 +31,8 @@ let _allRuns = [];      // 缓存全量历史，供前端过滤
 let _allTrades = [];    // 缓存全量成交流水，供前端过滤
 let _equityData = [];   // 缓存净值曲线，今日浮盈卡片用
 let _lastAccountData = null;  // 最近一次 /account 响应，用于 equity 后到时回填浮盈
+let _lastAccountLoadAt = 0;   // loadAccount 最近一次发起时间，节流 visibilitychange 抢跑
+let _lastScanLoadAt = 0;      // loadScanStatus 同上
 
 // 全局权限状态：load() 时拉一次；admin=true 解锁所有写按钮
 let _adminInfo = { ip: '—', is_admin: false, whitelist_empty: false };
@@ -48,18 +50,20 @@ async function load() {
   _realtimeTimer = setInterval(loadAccount, REALTIME_REFRESH_MS);
   if (_scanTimer) clearInterval(_scanTimer);
   _scanTimer = setInterval(loadScanStatus, SCAN_REFRESH_MS);
-  // 切到后台标签时停掉，回到前台再启动 —— 不浪费请求
+  // 切到后台标签时停掉，回到前台再启动 —— 不浪费请求。
+  // 频繁切标签页时不重复抢跑：数据没到该刷新的时间点就只重启定时器，
+  // 不立即再发一次请求（之前的写法是只要切回前台就无条件立即 fetch）。
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
       if (_realtimeTimer) { clearInterval(_realtimeTimer); _realtimeTimer = null; }
       if (_scanTimer) { clearInterval(_scanTimer); _scanTimer = null; }
     } else {
       if (!_realtimeTimer) {
-        loadAccount();
+        if (Date.now() - _lastAccountLoadAt >= REALTIME_REFRESH_MS) loadAccount();
         _realtimeTimer = setInterval(loadAccount, REALTIME_REFRESH_MS);
       }
       if (!_scanTimer) {
-        loadScanStatus();
+        if (Date.now() - _lastScanLoadAt >= SCAN_REFRESH_MS) loadScanStatus();
         _scanTimer = setInterval(loadScanStatus, SCAN_REFRESH_MS);
       }
     }
@@ -69,6 +73,7 @@ async function load() {
 // ── 账户摘要 + 当前持仓 ─────────────────────────────────────────────────────
 
 async function loadAccount() {
+  _lastAccountLoadAt = Date.now();
   try {
     const res = await fetch('/api/paper_trading/account');
     const data = await res.json();
@@ -544,6 +549,7 @@ function renderTrades(trades) {
 // ── 今日扫描状态 ────────────────────────────────────────────────────────────
 
 async function loadScanStatus() {
+  _lastScanLoadAt = Date.now();
   try {
     const res = await fetch('/api/tasks/summary');
     const { tasks } = await res.json();

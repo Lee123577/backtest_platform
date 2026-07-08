@@ -140,6 +140,27 @@ _admin_cache_loaded_at: float = 0.0
 _ADMIN_CACHE_TTL = 60  # 秒
 
 
+def _refresh_admin_cache() -> None:
+    global _admin_set_cache, _admin_cache_loaded_at
+    now = _time.time()
+    if now - _admin_cache_loaded_at <= _ADMIN_CACHE_TTL:
+        return
+    try:
+        conn = _get_pool()
+        if conn is not None:
+            conn.ping(reconnect=True)
+            with conn.cursor() as cur:
+                cur.execute("SELECT ip FROM paper_admin_ip")
+                _admin_set_cache = {
+                    (r["ip"] if isinstance(r, dict) else r[0])
+                    for r in cur.fetchall()
+                }
+            _admin_cache_loaded_at = now
+    except Exception as e:
+        logger.warning("刷新 admin IP 缓存失败: %s", e)
+        # 不更新时间戳，下次请求会重试
+
+
 def is_admin_cached(ip: Optional[str]) -> bool:
     """
     缓存版 is_admin —— TTL 60s 内重复请求不打 DB。
@@ -147,26 +168,16 @@ def is_admin_cached(ip: Optional[str]) -> bool:
 
     新增/删除 admin IP 时调 invalidate_admin_cache() 让下次请求立即重载。
     """
-    global _admin_set_cache, _admin_cache_loaded_at
     if not ip:
         return False
-    now = _time.time()
-    if now - _admin_cache_loaded_at > _ADMIN_CACHE_TTL:
-        try:
-            conn = _get_pool()
-            if conn is not None:
-                conn.ping(reconnect=True)
-                with conn.cursor() as cur:
-                    cur.execute("SELECT ip FROM paper_admin_ip")
-                    _admin_set_cache = {
-                        (r["ip"] if isinstance(r, dict) else r[0])
-                        for r in cur.fetchall()
-                    }
-                _admin_cache_loaded_at = now
-        except Exception as e:
-            logger.warning("刷新 admin IP 缓存失败: %s", e)
-            # 不更新时间戳，下次请求会重试
+    _refresh_admin_cache()
     return ip in _admin_set_cache
+
+
+def whitelist_empty_cached() -> bool:
+    """基于 is_admin_cached 同一份缓存判断白名单是否为空，不再单独查一次 COUNT(*)。"""
+    _refresh_admin_cache()
+    return len(_admin_set_cache) == 0
 
 
 def invalidate_admin_cache() -> None:

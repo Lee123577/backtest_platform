@@ -1,6 +1,6 @@
 /* 定时任务监控页 */
 
-const REFRESH_MS = 15_000;
+const REFRESH_MS = 30_000;   // 任务状态几分钟才变一次，15s 轮询太激进（配合 N+1 修复前更明显）
 let _timer = null;
 let _adminInfo = { ip: '—', is_admin: false, whitelist_empty: false };
 let _allRuns = [];       // 缓存当前过滤条件下的全量记录，详情弹窗直接复用，避免二次请求

@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -403,9 +403,6 @@ def api_tasks_summary():
     except Exception as e:
         return {"tasks": [], "error": f"task_run_log 表未就绪：{e}"}
 
-    from datetime import date as _D
-    today = _D.today()
-
     agg_map = {a["task_name"]: a for a in scheduler_db.summarize_by_task(30)}
     out = []
     for name, spec in scheduler_registry.TASKS.items():
@@ -427,7 +424,9 @@ def api_tasks_summary():
             "recent_success": success,
             "recent_failed": int(a.get("recent_failed", 0)),
             "success_rate": round(success / total, 3) if total > 0 else None,
-            "ran_today_success": scheduler_db.already_ran_today(name, today, "success"),
+            # 并入 summarize_by_task 的同一次聚合查询里取,不再逐任务单独查
+            # already_ran_today —— 8 个任务就是 8 次多余的 DB 往返
+            "ran_today_success": bool(a.get("ran_today_success")),
         })
     return {"tasks": out}
 
@@ -554,10 +553,12 @@ def api_admin_ip_me(request: Request):
     except Exception as e:
         return {"ip": ip, "is_admin": False, "whitelist_empty": True,
                 "error": f"DB 未就绪：{e}"}
+    # 这是全站访问量最高的接口之一（几乎每次翻页都会调），改用 60s TTL 的
+    # 进程内缓存，同一份缓存顺带算出 whitelist_empty，不再各查一次 DB
     return {
         "ip": ip,
-        "is_admin": paper_admin_ip.is_admin(ip),
-        "whitelist_empty": paper_admin_ip.count_ips() == 0,
+        "is_admin": paper_admin_ip.is_admin_cached(ip),
+        "whitelist_empty": paper_admin_ip.whitelist_empty_cached(),
     }
 
 
@@ -620,7 +621,10 @@ def api_paper_equity(start: Optional[str] = None, end: Optional[str] = None):
 # ── Strategy list ─────────────────────────────────────────────────────────────
 
 @app.get("/api/strategies")
-async def api_list_strategies():
+async def api_list_strategies(response: Response):
+    # 纯内存静态列表，进程存活期间不变 —— 允许浏览器短时间内直接复用，
+    # 省掉每次翻页都重新拉一遍的往返（数据本身不查库，收益不大但几乎零成本）
+    response.headers["Cache-Control"] = "public, max-age=300"
     return list_strategies()
 
 

@@ -3,6 +3,7 @@
   const $ = (id) => document.getElementById(id);
   let chart = null;
   let autoTimer = null;
+  let lastLoadAt = 0;   // 节流 visibilitychange 抢跑用
   const AUTO_INTERVAL_MS = 60_000;   // 60s (后端 60s 缓存对齐)
 
   // ── 涨跌色阶（A 股红涨绿跌）──────────────────────────────────────────────
@@ -23,6 +24,7 @@
 
   // ── 数据请求 ────────────────────────────────────────────────────────────
   async function load() {
+    lastLoadAt = Date.now();
     const market = $('marketFilter').value;
     const minCap = $('minCapFilter').value;
     $('loading').style.display = '';
@@ -236,9 +238,11 @@
   });
   window.addEventListener('resize', () => chart && chart.resize());
 
-  // 页面隐藏停轮询，回前台首次立刻刷新
+  // 回前台时刷新，但数据没到该刷新的时间点就跳过 —— 避免频繁切标签页时
+  // 每次回前台都打一次 API（后端有 60s 缓存，短时间内重复请求没有意义）
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && $('autoRefresh').checked) {
+    if (document.visibilityState === 'visible' && $('autoRefresh').checked
+        && Date.now() - lastLoadAt >= AUTO_INTERVAL_MS) {
       load();
     }
   });

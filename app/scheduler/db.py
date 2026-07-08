@@ -238,7 +238,10 @@ def summarize_by_task(window_days: int = 30) -> List[Dict[str, Any]]:
                     AS recent_success,
                 SUM(CASE WHEN started_at >= NOW() - INTERVAL %s DAY
                               AND status IN ('failed','timeout') THEN 1 ELSE 0 END)
-                    AS recent_failed
+                    AS recent_failed,
+                SUM(CASE WHEN DATE(started_at)=CURDATE() AND status='success'
+                              THEN 1 ELSE 0 END)
+                    AS ran_today_success
             FROM task_run_log
             GROUP BY task_name
             """,
@@ -272,5 +275,6 @@ def summarize_by_task(window_days: int = 30) -> List[Dict[str, Any]]:
             "recent_total": int(a["recent_total"] or 0),
             "recent_success": int(a["recent_success"] or 0),
             "recent_failed": int(a["recent_failed"] or 0),
+            "ran_today_success": bool(a.get("ran_today_success")),
         })
     return out
