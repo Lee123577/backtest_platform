@@ -1,6 +1,6 @@
 # A 股量化回测平台
 
-基于 FastAPI + ECharts 的 A 股量化策略回测与模拟交易平台。覆盖**单股信号**、**组合选股**、**模拟盘**、**AI 热门板块**、**大盘云图**、**LLM 股票分析**六类场景。
+基于 FastAPI + ECharts 的 A 股量化策略回测与模拟交易平台。覆盖**单股信号**、**组合选股**、**模拟盘**、**AI 热门板块**、**AI 每日复盘**、**大盘云图**、**LLM 股票分析**七类场景。
 
 ![单股策略](docs/images/01-single-stock.png)
 
@@ -44,6 +44,11 @@
 - T 日收盘价买入 → T+1 收盘价卖出,等权滚动复利;资金曲线对比中证1000基准 + 扣费后收益(佣金双边+印花税,最低佣金 5 元如实计入)
 - 胜率多维统计:按天 / 按板块 / 按选股提示词版本聚合;盘中实时浮动盈亏
 - 停牌/退市/AI 编造代码等异常个股自动排除(settle_status 状态机),不阻塞整批结算
+
+**AI 每日复盘(DeepSeek)**
+- 每交易日 17:45(daily_update 之后)基于当日**真实落库数据**生成市场复盘:主要指数、涨跌/大涨大跌家数、成交额放缩量、AI 热门板块结算战绩
+- 与 AI 热门板块相反的约束方向:那边禁止模型编造行情,这边只允许模型使用喂给它的行情
+- 数据快照(context_json)与正文一起落库,可审计模型看到了什么
 
 **大盘云图**
 - ECharts treemap,按行业 / 板块聚类
@@ -154,6 +159,7 @@ python run.py
 | `/portfolio` | 组合回测页(SSE 进度流) |
 | `/paper_trading` | 模拟盘:持仓/收益曲线/成交流水/参数编辑 |
 | `/ai_hotsector` | AI 热门板块:每日预测/胜率统计/资金曲线/盘中浮盈 |
+| `/daily_review` | AI 每日复盘:当日数据概览 + DeepSeek 复盘正文 + 历史列表 |
 | `/cloudmap` | 大盘云图 treemap |
 | `/tasks` | 调度任务监控:历史运行/状态/手动触发 |
 | `/api/llm_assistant/analyze?symbol=600000` | LLM 股票分析(markdown 报告) |
@@ -373,6 +379,7 @@ scheduler.runner.run_due()  →  subprocess 跑各任务
 | `daily_update` | weekday 17:00 | — | 增量更新 K 线/财务/指数/北向资金 |
 | `daily_signal` | weekday 17:30 | `daily_update` | 模拟盘选股 |
 | `ai_hotsector_settle` | weekday 17:35 | `daily_update` | AI 热门板块回填收盘价+结算胜率/资金曲线 |
+| `daily_review_generate` | weekday 17:45 | `daily_update` | AI 每日市场复盘生成(DeepSeek) |
 | `backfill_geo` | daily 00:00 | — | 访问日志 IP 地理回填 |
 | `backfill_dividend_full` | monthly 1 号 02:00 | — | 全市场 ex_div 事件兜底回填 |
 | `backfill_market_cap_full` | monthly 1 号 03:00 | — | 历史 market_cap 增量回填(只补新上市/缺口) |
@@ -458,6 +465,10 @@ app/
     db.py                      ai_hotsector_* 表 DDL + CRUD + settle_status 状态机
     deepseek_client.py         DeepSeek chat JSON 客户端
     prompts.py                 板块/选股两段式提示词(带版本号)
+  daily_review/              AI 每日复盘(DeepSeek 基于当日真实数据生成)
+    runner.py                  build_context 聚合数据快照 + generate_once 生成落库
+    db.py                      daily_review 表 DDL + CRUD + 市场数据快照查询
+    prompts.py                 复盘提示词(带版本号,复用 ai_hotsector 的 DeepSeek 客户端)
   llm_assistant/             LLM 股票分析(MCP 客户端)
     mcp_client.py              httpx streamable-http JSON-RPC
     api.py                     /api/llm_assistant/analyze + /health
@@ -477,6 +488,7 @@ scripts/
   backfill_visit_log_geo.py  访问日志地理回填
   ai_hotsector_predict.py    AI 热门板块每日预测(cron 15:05)
   ai_hotsector_settle.py     AI 热门板块结算(cron 17:35)
+  daily_review_generate.py   AI 每日市场复盘生成(cron 17:45)
   run_scheduled_tasks.py     cron 入口(5 分钟唤醒)
   backtest.service           systemd unit 模板
 

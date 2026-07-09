@@ -107,6 +107,17 @@ TASKS: Dict[str, TaskDef] = {
         "depends_on": "daily_update",
         "description": "AI 热门板块回填收盘价+结算胜率/资金曲线(17:35,依赖daily_update)",
     },
+    # AI 每日复盘:17:45 用当日已落库的指数/涨跌家数/成交额/AI选股结算数据
+    # 调 DeepSeek 生成当日市场复盘。只依赖 daily_update(当日K线/指数必须已入库)，
+    # 不依赖 ai_hotsector_settle —— 那边失败时复盘照样生成,AI 策略一节如实写无数据。
+    # 超时预算:一次 DeepSeek 调用 90s + 子进程冷启动拉交易日历,给 6 分钟。
+    "daily_review_generate": {
+        "cmd": ["python", "scripts/daily_review_generate.py"],
+        "schedule": "weekday:17:45",
+        "timeout_sec": 6 * 60,
+        "depends_on": "daily_update",
+        "description": "AI 每日市场复盘生成(DeepSeek,17:45,依赖daily_update)",
+    },
 }
 
 

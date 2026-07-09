@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI 每日复盘</title>
+  <link rel="stylesheet" href="/static/css/style.css?v=20260709">
+  <link rel="stylesheet" href="/static/css/paper_trading.css?v=20260703">
+  <link rel="stylesheet" href="/static/css/daily_review.css?v=20260709">
+</head>
+<body>
+
+<header>
+  <h1>📈 A股量化回测平台</h1>
+  <nav class="header-nav">
+    <a class="nav-btn" href="/" style="text-decoration:none;display:inline-flex;align-items:center;">单股策略</a>
+    <a class="nav-btn" href="/?mode=portfolio" style="text-decoration:none;display:inline-flex;align-items:center;">选股策略</a>
+    <a class="nav-btn" href="/cloudmap" style="text-decoration:none;display:inline-flex;align-items:center;">大盘云图</a>
+    <a class="nav-btn" href="/paper_trading" style="text-decoration:none;display:inline-flex;align-items:center;">实盘观察</a>
+    <a class="nav-btn" href="/ai_hotsector" style="text-decoration:none;display:inline-flex;align-items:center;">AI热门板块</a>
+    <button class="nav-btn active">每日复盘</button>
+    <a class="nav-btn" href="/tasks" style="text-decoration:none;display:inline-flex;align-items:center;">定时任务</a>
+  </nav>
+</header>
+
+<main>
+
+  <!-- 1. 当日数据概览 -->
+  <div class="panel">
+    <div class="panel-title">
+      AI 每日复盘 <span id="drDate"></span>
+      <span class="tip-badge">仅供研究，不构成投资建议</span>
+    </div>
+    <div class="dr-rule-hint">每个交易日收盘数据入库后（约 17:45），DeepSeek 基于当日真实指数、涨跌家数、成交额与 AI 选股结算数据自动生成</div>
+    <div class="summary-grid" id="drSummaryGrid">
+      <div class="no-data">加载中…</div>
+    </div>
+  </div>
+
+  <!-- 2. 复盘正文 -->
+  <div class="panel">
+    <div class="panel-title" id="drTitle">加载中…</div>
+    <div class="md-body" id="drContent"></div>
+  </div>
+
+  <!-- 3. 历史复盘 -->
+  <div class="panel">
+    <div class="panel-title">历史复盘 <span>点击日期查看往期</span></div>
+    <div id="drHistoryWrap">
+      <div class="no-data">加载中…</div>
+    </div>
+  </div>
+
+</main>
+
+<footer class="site-footer">
+  💡 需要定制策略 / 接入实盘？只提供代码，服务器需自行购买 · 第一单免费（目前限时全免）·
+  <a href="mailto:lihaichuan393@gmail.com">lihaichuan393@gmail.com</a>
+</footer>
+
+<script src="/static/js/daily_review.js?v=20260709"></script>
+</body>
+</html>

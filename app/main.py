@@ -82,6 +82,10 @@ app.include_router(llm_router)
 from .ai_hotsector.api import router as ai_hotsector_router  # noqa: E402
 app.include_router(ai_hotsector_router)
 
+# AI 每日复盘(DeepSeek 收盘后基于当日真实数据生成市场复盘)
+from .daily_review.api import router as daily_review_router  # noqa: E402
+app.include_router(daily_review_router)
+
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
@@ -125,6 +129,11 @@ async def page_cloudmap():
 @app.get("/ai_hotsector", include_in_schema=False)
 async def page_ai_hotsector():
     return FileResponse(str(STATIC_DIR / "ai_hotsector.html"))
+
+
+@app.get("/daily_review", include_in_schema=False)
+async def page_daily_review():
+    return FileResponse(str(STATIC_DIR / "daily_review.html"))
 
 
 # ── Paper trading (实盘信号观察) ──────────────────────────────────────────────
