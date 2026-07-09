@@ -1,6 +1,6 @@
 # A 股量化回测平台
 
-基于 FastAPI + ECharts 的 A 股量化策略回测与模拟交易平台。覆盖**单股信号**、**组合选股**、**模拟盘**、**走查优化**、**大盘云图**、**LLM 股票分析**六类场景。
+基于 FastAPI + ECharts 的 A 股量化策略回测与模拟交易平台。覆盖**单股信号**、**组合选股**、**模拟盘**、**AI 热门板块**、**大盘云图**、**LLM 股票分析**六类场景。
 
 ![单股策略](docs/images/01-single-stock.png)
 
@@ -39,10 +39,11 @@
 - 止损基于累积 pct_change(避开分红除权误触发)
 - 整段调仓事务化:中途失败自动回滚,持仓与现金不会割裂
 
-**Walk-Forward 优化**
-- 按交易日整数切窗(非自然日,避免跨春节/国庆漂移)
-- 自动报告 IS/OOS 衰减率与参数稳定性
-- 参数组合数 > 100 自动告警过拟合风险
+**AI 热门板块(DeepSeek)**
+- 每交易日 15:05 两段式提示词:DeepSeek 选 3 个热门板块,每板块再选 3 只强势股
+- T 日收盘价买入 → T+1 收盘价卖出,等权滚动复利;资金曲线对比中证1000基准 + 扣费后收益(佣金双边+印花税,最低佣金 5 元如实计入)
+- 胜率多维统计:按天 / 按板块 / 按选股提示词版本聚合;盘中实时浮动盈亏
+- 停牌/退市/AI 编造代码等异常个股自动排除(settle_status 状态机),不阻塞整批结算
 
 **大盘云图**
 - ECharts treemap,按行业 / 板块聚类
@@ -95,6 +96,7 @@ MYSQL_DATABASE=back_test
 | `TRUSTED_PROXIES` | (空) | 可信反代 IP/CIDR,逗号分隔。空 = 一律忽略代理头 |
 | `PAPER_ADMIN_INITIAL_IPS` | (空) | 启动时往白名单写入的 IP(避免首次锁死) |
 | `MCP_CNSTOCK_URL` | `http://82.156.17.205/cnstock/mcp` | LLM 分析远程 MCP 地址 |
+| `DEEPSEEK_API_KEY` | (空) | AI 热门板块用的 DeepSeek API Key,不配则该功能不产出预测 |
 
 ### 初始化历史数据
 
@@ -151,6 +153,7 @@ python run.py
 | `/` | 单股回测页 |
 | `/portfolio` | 组合回测页(SSE 进度流) |
 | `/paper_trading` | 模拟盘:持仓/收益曲线/成交流水/参数编辑 |
+| `/ai_hotsector` | AI 热门板块:每日预测/胜率统计/资金曲线/盘中浮盈 |
 | `/cloudmap` | 大盘云图 treemap |
 | `/tasks` | 调度任务监控:历史运行/状态/手动触发 |
 | `/api/llm_assistant/analyze?symbol=600000` | LLM 股票分析(markdown 报告) |
@@ -366,10 +369,13 @@ scheduler.runner.run_due()  →  subprocess 跑各任务
 
 | 任务名 | 调度 | 依赖 | 说明 |
 |---|---|---|---|
-| `daily_update` | weekday 17:00 | — | 全量增量更新 |
+| `ai_hotsector_predict` | weekday 15:05 | — | AI 热门板块+强势股每日预测(DeepSeek) |
+| `daily_update` | weekday 17:00 | — | 增量更新 K 线/财务/指数/北向资金 |
 | `daily_signal` | weekday 17:30 | `daily_update` | 模拟盘选股 |
+| `ai_hotsector_settle` | weekday 17:35 | `daily_update` | AI 热门板块回填收盘价+结算胜率/资金曲线 |
 | `backfill_geo` | daily 00:00 | — | 访问日志 IP 地理回填 |
-| `backfill_dividend_full` | daily 02:00 | — | 月初 1 号跑全市场 ex_div 回填(脚本内自查日期) |
+| `backfill_dividend_full` | monthly 1 号 02:00 | — | 全市场 ex_div 事件兜底回填 |
+| `backfill_market_cap_full` | monthly 1 号 03:00 | — | 历史 market_cap 增量回填(只补新上市/缺口) |
 
 任务运行记录写入 `task_run_log`,前端 `/tasks` 可视化。**幂等保护**:同一任务当天已 `success` 则跳过;同名任务在 running 中也跳过(避免长任务被中途撞上)。
 
@@ -447,13 +453,19 @@ app/
     registry.py                任务清单
     db.py                      task_run_log CRUD
   cloudmap/                  大盘云图(ECharts treemap)
+  ai_hotsector/              AI 热门板块(DeepSeek 每日选板块+选股)
+    runner.py                  predict_once / settle_once 每日运行器
+    db.py                      ai_hotsector_* 表 DDL + CRUD + settle_status 状态机
+    deepseek_client.py         DeepSeek chat JSON 客户端
+    prompts.py                 板块/选股两段式提示词(带版本号)
   llm_assistant/             LLM 股票分析(MCP 客户端)
     mcp_client.py              httpx streamable-http JSON-RPC
     api.py                     /api/llm_assistant/analyze + /health
   data_status/               数据完整性状态查询
   live/                      实盘接口抽象(无默认实现)
   visit_log.py               HTTP 访问日志中间件(IP 地理 + UA 解析)
-  config.py                  Settings(MySQL 配置)
+  json_safe.py               Decimal/date/NaN → JSON 安全转换(共享工具)
+  config.py                  Settings(MySQL + DeepSeek 配置)
   main.py                    FastAPI 应用入口
 
 scripts/
@@ -463,6 +475,8 @@ scripts/
   backfill_dividend.py       Ex-div 事件单股回填(支持 --day-of-month / --holdings-only)
   backfill_kline.py          K 线指定区间补漏
   backfill_visit_log_geo.py  访问日志地理回填
+  ai_hotsector_predict.py    AI 热门板块每日预测(cron 15:05)
+  ai_hotsector_settle.py     AI 热门板块结算(cron 17:35)
   run_scheduled_tasks.py     cron 入口(5 分钟唤醒)
   backtest.service           systemd unit 模板
 

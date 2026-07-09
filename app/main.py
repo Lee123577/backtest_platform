@@ -8,6 +8,7 @@ import pandas as pd
 from fastapi import Depends, FastAPI, HTTPException, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel
 from starlette.requests import Request
 
@@ -59,6 +60,11 @@ app = FastAPI(title="A股量化回测平台", version="1.2.0")
 # 访问日志中间件 —— 异步写入 back_test.user_visit_log
 from .visit_log import VisitLogMiddleware  # noqa: E402
 app.add_middleware(VisitLogMiddleware)
+
+# GZip —— K线/回测等大 JSON 可压到 ~1/5,移动端收益最明显。
+# starlette 内置排除 text/event-stream,portfolio_backtest 的 SSE 不受影响;
+# level=6 而非默认 9:小内存生产机上压缩比接近但 CPU 省一半
+app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
 
 # 今日数据入库状态 API
 from .data_status.api import router as data_status_router  # noqa: E402
@@ -638,13 +644,22 @@ def api_stock_info(code: str):
 
 
 @app.get("/api/stock/{code}/kline")
-def api_kline(code: str, start_date: str, end_date: str, adjust: str = "qfq"):
+def api_kline(response: Response, code: str, start_date: str,
+              end_date: str, adjust: str = "qfq"):
     _validate_date_range(start_date, end_date)
     code = normalize_code(code)
     try:
         df = get_kline_data(code, start_date, end_date, adjust)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+    # 纯历史区间允许浏览器缓存 1 小时:同一股票反复调参回测时省掉重复请求。
+    # 不敢给更长 —— qfq 在除权日会整体重算,历史值并非严格不可变;
+    # 含当日的区间只给 60s,盘中数据可能更新
+    if _date.fromisoformat(end_date) < _date.today():
+        response.headers["Cache-Control"] = "public, max-age=3600"
+    else:
+        response.headers["Cache-Control"] = "public, max-age=60"
 
     records = _kline_records(df)
     return {"code": code, "total": len(records), "data": records}
