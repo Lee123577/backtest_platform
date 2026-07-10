@@ -15,7 +15,8 @@ import json
 from datetime import date as _Date
 from typing import Any, Dict, List
 
-REVIEW_PROMPT_VERSION = "v1"
+# v2: context 增加指数近60日位置(hi/lo/pos_60d)、5日均量、全市场涨跌幅榜 Top10
+REVIEW_PROMPT_VERSION = "v2"
 
 
 def review_messages(review_date: _Date, context: Dict[str, Any]) -> List[dict]:
@@ -34,11 +35,19 @@ def review_messages(review_date: _Date, context: Dict[str, Any]) -> List[dict]:
         f"背景：今天是 {review_date.isoformat()}（A 股交易日），已收盘。"
         "以下是当日真实市场数据（JSON）。\n"
         "字段说明：\n"
-        "- indices：主要指数，close=收盘点位，pct_change=当日涨跌幅(%)；\n"
+        "- indices：主要指数，close=收盘点位，pct_change=当日涨跌幅(%)，"
+        "hi_60d/lo_60d=近60个交易日收盘最高/最低点位，"
+        "pos_60d_pct=当日收盘在该区间的位置(0=区间最低,100=区间最高，"
+        "可据此写'逼近阶段新高/仍处低位'等定位判断)；\n"
         "- breadth：全市场宽度，up/down/flat=上涨/下跌/平盘家数，"
         "strong_up/strong_down=单日涨跌幅超过±9.8%的家数（近似涨跌停规模），"
         "avg_pct=全市场平均涨跌幅(%)，total_amount_yi=全市场成交额(亿元)，"
-        "prev_amount_yi=上一交易日成交额(亿元)；\n"
+        "prev_amount_yi=上一交易日成交额(亿元)，"
+        "avg5_amount_yi=前5个交易日平均成交额(亿元，量能趋势参考)；\n"
+        "- top_movers：当日全市场涨幅榜/跌幅榜前10个股(已剔除新股上市首日"
+        "等无涨跌幅限制的异常行)。可从中点名有代表性的领涨领跌个股并结合"
+        "已知的公司主业/所属产业做定性归纳，但不要逐一罗列全部名单，"
+        "也不要编造榜单之外的个股表现；\n"
         "- ai_hotsector：本平台的 AI 选股策略（每日选3板块×3股，T日收盘买入、"
         "T+1收盘卖出），today_sectors=今日新选板块，settled=昨日买入批次"
         "今日卖出的结算结果（win_count/total_count=上涨只数/总只数，"
@@ -46,8 +55,10 @@ def review_messages(review_date: _Date, context: Dict[str, Any]) -> List[dict]:
         f"{data_str}\n\n"
         "请基于以上数据写一篇当日 A 股市场复盘，markdown 格式，"
         "总字数 350~600 字，分以下四节（用 ## 二级标题）：\n"
-        "## 大盘综述 —— 主要指数表现、量能变化（对比上一交易日放量/缩量）\n"
-        "## 市场情绪 —— 涨跌家数、大涨大跌家数反映的赚钱效应与亏钱效应\n"
+        "## 大盘综述 —— 主要指数表现与阶段位置、量能变化"
+        "（对比上一交易日与近5日均量的放量/缩量）\n"
+        "## 市场情绪 —— 涨跌家数、大涨大跌家数反映的赚钱效应与亏钱效应，"
+        "可结合涨跌幅榜点名代表性个股\n"
         "## AI 策略表现 —— 点评 ai_hotsector 的结算战绩和今日新选板块；"
         "数据缺失就如实说明，不要硬编\n"
         "## 后市观察 —— 基于当日数据和已知产业/政策背景的定性观察，"

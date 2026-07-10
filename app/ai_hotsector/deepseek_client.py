@@ -28,9 +28,14 @@ class DeepSeekError(RuntimeError):
     """封装调用失败原因（无 Key / 网络 / HTTP 非 200 / JSON 解析失败）。"""
 
 
-async def chat_json(messages: List[dict], *, timeout: float = 60.0) -> Tuple[Dict[str, Any], str]:
+async def chat_json(
+    messages: List[dict], *, timeout: float = 60.0, temperature: float = 0.3
+) -> Tuple[Dict[str, Any], str]:
     """
     调 DeepSeek chat/completions，要求 JSON 输出。
+
+    temperature 默认 0.3(选股等结构化任务要保守);写作类任务(每日复盘)
+    可放宽到 0.6 左右。
 
     Returns: (解析后的 dict, 原始 content 文本) —— 原始文本用于落库审计(sectors_raw/stocks_raw)。
     任何失败都抛 DeepSeekError。
@@ -42,7 +47,7 @@ async def chat_json(messages: List[dict], *, timeout: float = 60.0) -> Tuple[Dic
         "model": DEFAULT_MODEL,
         "messages": messages,
         "response_format": {"type": "json_object"},
-        "temperature": 0.3,
+        "temperature": temperature,
     }
     headers = {
         "Authorization": f"Bearer {settings.DEEPSEEK_API_KEY}",

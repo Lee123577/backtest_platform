@@ -67,7 +67,11 @@
         html += "<h" + lvl + ">" + inline(h[2]) + "</h" + lvl + ">";
         continue;
       }
-      var li = line.match(/^\s*[-*]\s+(.*)$/) || line.match(/^\s*\d+[.、]\s+(.*)$/);
+      // 顿号编号("1、内容")中文习惯不带空格;点号编号必须带空格,
+      // 免得把 "1.5倍" 这类行首小数误判成列表
+      var li = line.match(/^\s*[-*]\s+(.*)$/) ||
+               line.match(/^\s*\d+、\s*(.*)$/) ||
+               line.match(/^\s*\d+\.\s+(.*)$/);
       if (li) {
         flushPara();
         if (!inList) { html += "<ul>"; inList = true; }
@@ -188,17 +192,43 @@
 
   function loadByDate(dateStr) {
     fetchJson("/api/daily_review/" + encodeURIComponent(dateStr))
-      .then(function (data) { renderReview(data.review); })
+      .then(function (data) {
+        renderReview(data.review);
+        // 可分享链接:/daily_review#2026-07-08 直达往期
+        // (renderReview 已更新 currentDate,hashchange 里会据此跳过重复加载)
+        if (location.hash.slice(1) !== dateStr) location.hash = dateStr;
+      })
       .catch(function (e) {
+        currentDate = null;
+        document.getElementById("drTitle").textContent = dateStr + " 加载失败";
+        document.getElementById("drDate").textContent = "";
         document.getElementById("drContent").innerHTML =
           '<div class="no-data">加载失败: ' + esc(e.message) + "</div>";
+        renderSummary(null);
+        highlightHistory();
       });
   }
 
+  function hashDate() {
+    var m = location.hash.match(/^#(\d{4}-\d{2}-\d{2})$/);
+    return m ? m[1] : null;
+  }
+
+  // 浏览器前进/后退在往期复盘之间切换
+  window.addEventListener("hashchange", function () {
+    var d = hashDate();
+    if (d && d !== currentDate) loadByDate(d);
+  });
+
   // ── 初始化 ────────────────────────────────────────────────────────────
-  fetchJson("/api/daily_review/latest")
-    .then(function (data) { renderReview(data.review); })
-    .catch(function () { renderReview(null); });
+  var initDate = hashDate();
+  if (initDate) {
+    loadByDate(initDate);
+  } else {
+    fetchJson("/api/daily_review/latest")
+      .then(function (data) { renderReview(data.review); })
+      .catch(function () { renderReview(null); });
+  }
 
   fetchJson("/api/daily_review/history?limit=30")
     .then(function (data) { renderHistory(data.history); })

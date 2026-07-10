@@ -50,6 +50,21 @@ class ReviewResult:
     error_msg: Optional[str] = None
 
 
+def _movers_out(movers: Dict[str, Any]) -> Dict[str, Any]:
+    """涨跌幅榜 DB 行 → context 条目(Decimal→float,保留 名称/代码/涨跌幅)。"""
+    def _rows(key: str) -> list:
+        return [
+            {
+                "name": r["name"],
+                "code": r["code"],
+                "pct_change": round(float(r["pct_change"]), 2),
+            }
+            for r in (movers.get(key) or [])
+            if r.get("pct_change") is not None
+        ]
+    return {"gainers": _rows("gainers"), "losers": _rows("losers")}
+
+
 def build_context(review_date: _Date) -> Dict[str, Any]:
     """从既有表聚合当日市场数据快照。数据不齐抛 DataNotReadyError。"""
     breadth = db.get_market_breadth(review_date) or {}
@@ -62,22 +77,37 @@ def build_context(review_date: _Date) -> Dict[str, Any]:
 
     indices = []
     for code, name in INDEX_LIST:
-        row = db.get_index_row(code, review_date)
-        if row and row.get("close") is not None:
-            pct = row.get("pct_change")
-            indices.append({
-                "code": code,
-                "name": name,
-                "close": round(float(row["close"]), 2),
-                "pct_change": round(float(pct), 2) if pct is not None else None,
-            })
+        rows = db.get_index_recent(code, review_date, days=60)
+        if not rows or rows[0].get("trade_date") != review_date \
+                or rows[0].get("close") is None:
+            continue  # 该指数当日未入库,跳过(全部缺失才算数据未就绪)
+        close = float(rows[0]["close"])
+        pct = rows[0].get("pct_change")
+        closes = [float(r["close"]) for r in rows if r.get("close") is not None]
+        hi, lo = max(closes), min(closes)
+        indices.append({
+            "code": code,
+            "name": name,
+            "close": round(close, 2),
+            "pct_change": round(float(pct), 2) if pct is not None else None,
+            "hi_60d": round(hi, 2),
+            "lo_60d": round(lo, 2),
+            # 当日收盘在近60日收盘区间的位置:0=区间最低,100=区间最高
+            "pos_60d_pct": (
+                round((close - lo) / (hi - lo) * 100, 1) if hi > lo else None
+            ),
+        })
     if not indices:
         raise DataNotReadyError(f"{review_date} index_daily 无当日指数数据")
 
     up = int(breadth.get("up") or 0)
     down = int(breadth.get("down") or 0)
     total_amount = float(breadth.get("total_amount") or 0)
-    prev_amount = db.get_prev_total_amount(review_date)
+    recent_amounts = db.get_recent_daily_amounts(review_date, days=5)
+    prev_amount = recent_amounts[0] if recent_amounts else None
+    avg5_amount = (
+        sum(recent_amounts) / len(recent_amounts) if recent_amounts else None
+    )
 
     settled_raw = db.get_hotsector_settled(review_date)
     settled = None
@@ -107,7 +137,11 @@ def build_context(review_date: _Date) -> Dict[str, Any]:
             "prev_amount_yi": (
                 round(prev_amount / 1e8, 1) if prev_amount else None
             ),
+            "avg5_amount_yi": (
+                round(avg5_amount / 1e8, 1) if avg5_amount else None
+            ),
         },
+        "top_movers": _movers_out(db.get_top_movers(review_date)),
         "ai_hotsector": {
             "today_sectors": db.get_hotsector_today_sectors(review_date),
             "settled": settled,
@@ -152,8 +186,9 @@ async def generate_once(
 
     # ── 2. DeepSeek 生成 ──────────────────────────────────────────────────
     try:
+        # 复盘是写作任务:temperature 比选股(0.3)放宽,文风更自然
         parsed, _raw = await chat_json(
-            review_messages(review_date, context), timeout=90.0
+            review_messages(review_date, context), timeout=90.0, temperature=0.6
         )
         title = str(parsed.get("title") or "").strip()[:120]  # 列 VARCHAR(120)
         content_md = str(parsed.get("content_md") or "").strip()

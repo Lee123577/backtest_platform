@@ -61,6 +61,8 @@ def upsert_review(
 ) -> None:
     """写一天的复盘；同一天重跑（手动 --force）会覆盖旧记录。"""
     conn = _get_pool()
+    if conn is None:
+        raise RuntimeError("数据库连接不可用，无法写入 daily_review")
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -124,18 +126,24 @@ def list_reviews(limit: int = 30) -> List[Dict[str, Any]]:
 
 # ── 市场数据快照查询（runner 拼 context 用）──────────────────────────────────
 
-def get_index_row(index_code: str, trade_date: _Date) -> Optional[Dict[str, Any]]:
-    """指定指数当日收盘点位 + 涨跌幅(%)。无数据返回 None。"""
+def get_index_recent(
+    index_code: str, trade_date: _Date, days: int = 60
+) -> List[Dict[str, Any]]:
+    """指定指数截至当日(含)的最近 N 个交易日行情,按日期倒序。
+    首行即当日(若当日已入库);整段用于算近 60 日高低点位置。"""
     conn = _get_pool()
     if conn is None:
-        return None
+        return []
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT close, pct_change FROM index_daily "
-            "WHERE index_code=%s AND trade_date=%s",
-            (index_code, trade_date),
+            """
+            SELECT trade_date, close, pct_change FROM index_daily
+            WHERE index_code=%s AND trade_date<=%s
+            ORDER BY trade_date DESC LIMIT %s
+            """,
+            (index_code, trade_date, max(1, min(days, 250))),
         )
-        return cur.fetchone()
+        return cur.fetchall()
 
 
 def get_market_breadth(trade_date: _Date) -> Optional[Dict[str, Any]]:
@@ -165,31 +173,51 @@ def get_market_breadth(trade_date: _Date) -> Optional[Dict[str, Any]]:
         return cur.fetchone()
 
 
-def get_prev_total_amount(trade_date: _Date) -> Optional[float]:
-    """上一交易日全市场成交额(元)，用于"放量/缩量"对比。
+def get_recent_daily_amounts(trade_date: _Date, days: int = 5) -> List[float]:
+    """当日之前最近 N 个有效交易日的全市场成交额(元),按日期倒序 ——
+    首项即上一交易日(放量/缩量对比),整段均值用于 5 日量能趋势。
     与 cloudmap 同口径：以"当日 K 线 ≥ 500 行"识别有效交易日。"""
     conn = _get_pool()
     if conn is None:
-        return None
+        return []
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT trade_date AS d FROM stock_kline
+            SELECT SUM(amount) AS amt FROM stock_kline
             WHERE trade_date < %s GROUP BY trade_date
             HAVING COUNT(*) >= 500
-            ORDER BY trade_date DESC LIMIT 1
+            ORDER BY trade_date DESC LIMIT %s
             """,
-            (trade_date,),
+            (trade_date, max(1, min(days, 20))),
         )
-        row = cur.fetchone()
-        if not row:
-            return None
-        cur.execute(
-            "SELECT SUM(amount) AS amt FROM stock_kline WHERE trade_date=%s",
-            (row["d"],),
-        )
-        amt = cur.fetchone()
-    return float(amt["amt"]) if amt and amt.get("amt") else None
+        rows = cur.fetchall()
+    return [float(r["amt"]) for r in rows if r.get("amt")]
+
+
+def get_top_movers(trade_date: _Date, limit: int = 10) -> Dict[str, List[Dict[str, Any]]]:
+    """当日全市场涨幅/跌幅前 N 个股(名称+涨跌幅)。
+    |pct_change|>31% 视为新股上市首日等无涨跌幅限制的异常行,剔除
+    (31 覆盖北交所 30% 涨跌停,不误伤任何连续竞价品种)。"""
+    conn = _get_pool()
+    if conn is None:
+        return {"gainers": [], "losers": []}
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    lim = max(1, min(limit, 30))
+    for key, order in (("gainers", "DESC"), ("losers", "ASC")):
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT k.code, i.name, k.pct_change FROM stock_kline k
+                JOIN stock_info i ON i.code = k.code
+                WHERE k.trade_date=%s
+                  AND k.pct_change IS NOT NULL
+                  AND k.pct_change BETWEEN -31 AND 31
+                ORDER BY k.pct_change {order} LIMIT %s
+                """,
+                (trade_date, lim),
+            )
+            out[key] = cur.fetchall()
+    return out
 
 
 def get_hotsector_today_sectors(trade_date: _Date) -> List[str]:

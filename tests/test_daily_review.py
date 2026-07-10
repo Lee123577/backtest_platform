@@ -28,10 +28,11 @@ class FakeDB:
     """镜像 runner 用到的 db API 子集,状态全在内存。"""
 
     def __init__(self):
-        self.reviews = {}       # review_date -> row dict
-        self.breadth = None     # get_market_breadth 的返回
-        self.index_rows = {}    # (code, date) -> {"close":..., "pct_change":...}
-        self.prev_amount = None
+        self.reviews = {}        # review_date -> row dict
+        self.breadth = None      # get_market_breadth 的返回
+        self.index_recent = {}   # code -> [行情行,日期倒序,首行=当日]
+        self.recent_amounts = []  # 前 N 个交易日成交额(元),倒序
+        self.movers = {"gainers": [], "losers": []}
         self.hs_sectors = []
         self.hs_settled = None
 
@@ -54,12 +55,14 @@ class FakeDB:
     def get_market_breadth(self, trade_date):
         return dict(self.breadth) if self.breadth else None
 
-    def get_index_row(self, code, trade_date):
-        row = self.index_rows.get((code, trade_date))
-        return dict(row) if row else None
+    def get_index_recent(self, code, trade_date, days=60):
+        return [dict(r) for r in self.index_recent.get(code, [])][:days]
 
-    def get_prev_total_amount(self, trade_date):
-        return self.prev_amount
+    def get_recent_daily_amounts(self, trade_date, days=5):
+        return list(self.recent_amounts)[:days]
+
+    def get_top_movers(self, trade_date, limit=10):
+        return {k: [dict(r) for r in v] for k, v in self.movers.items()}
 
     def get_hotsector_today_sectors(self, trade_date):
         return list(self.hs_sectors)
@@ -76,9 +79,20 @@ def make_ready_db():
         "strong_up": 45, "strong_down": 8,
         "avg_pct": 0.42, "total_amount": 1.23e12,
     }
-    fake.index_rows[("000001", TRADE_DATE)] = {"close": 3250.55, "pct_change": 0.85}
-    fake.index_rows[("399006", TRADE_DATE)] = {"close": 2100.10, "pct_change": -0.30}
-    fake.prev_amount = 1.10e12
+    fake.index_recent["000001"] = [
+        {"trade_date": TRADE_DATE, "close": 3250.55, "pct_change": 0.85},
+        {"trade_date": date(2026, 7, 7), "close": 3223.20, "pct_change": 0.10},
+        {"trade_date": date(2026, 7, 6), "close": 3100.00, "pct_change": -0.50},
+    ]
+    fake.index_recent["399006"] = [
+        {"trade_date": TRADE_DATE, "close": 2100.10, "pct_change": -0.30},
+        {"trade_date": date(2026, 7, 7), "close": 2106.40, "pct_change": 0.20},
+    ]
+    fake.recent_amounts = [1.10e12, 1.05e12, 1.00e12, 0.95e12, 0.90e12]
+    fake.movers = {
+        "gainers": [{"code": "600519", "name": "贵州茅台", "pct_change": 9.98}],
+        "losers": [{"code": "000002", "name": "万科A", "pct_change": -9.95}],
+    }
     fake.hs_sectors = ["人工智能", "半导体", "机器人"]
     fake.hs_settled = {
         "pick_date": TRADE_DATE, "sell_date": TRADE_DATE,
@@ -110,6 +124,9 @@ def test_review_messages_contains_context_numbers(fake_db):
     assert "上证指数" in user and "3250.55" in user
     assert '"up": 3200' in user
     assert "人工智能" in user
+    # v2 新增:涨跌幅榜个股与量能趋势进入提示词
+    assert "贵州茅台" in user and "万科A" in user
+    assert "avg5_amount_yi" in user and "pos_60d_pct" in user
     # 关键约束在位:JSON 输出格式 + 禁止编造
     assert '"title"' in user and '"content_md"' in user
     assert "编造" in msgs[0]["content"]
@@ -120,13 +137,21 @@ def test_review_messages_contains_context_numbers(fake_db):
 def test_build_context_values(fake_db):
     ctx = build_context(TRADE_DATE)
     assert ctx["trade_date"] == "2026-07-08"
-    assert ctx["indices"][0] == {
-        "code": "000001", "name": "上证指数", "close": 3250.55, "pct_change": 0.85,
-    }
+    ix = ctx["indices"][0]
+    assert ix["code"] == "000001" and ix["name"] == "上证指数"
+    assert ix["close"] == 3250.55 and ix["pct_change"] == 0.85
+    # 近60日位置:区间 [3100.00, 3250.55],当日收在区间最高 → 100
+    assert ix["hi_60d"] == 3250.55 and ix["lo_60d"] == 3100.00
+    assert ix["pos_60d_pct"] == 100.0
     b = ctx["breadth"]
     assert b["flat"] == 5400 - 3200 - 1900
     assert b["total_amount_yi"] == 12300.0     # 1.23e12 元 → 亿元
     assert b["prev_amount_yi"] == 11000.0
+    assert b["avg5_amount_yi"] == 10000.0      # (1.10+1.05+1.00+0.95+0.90)e12/5
+    tm = ctx["top_movers"]
+    assert tm["gainers"][0] == {"name": "贵州茅台", "code": "600519",
+                                "pct_change": 9.98}
+    assert tm["losers"][0]["name"] == "万科A"
     hs = ctx["ai_hotsector"]
     assert hs["today_sectors"] == ["人工智能", "半导体", "机器人"]
     assert hs["settled"]["day_return_pct"] == 1.23   # 0.0123 → %
@@ -139,7 +164,15 @@ def test_build_context_rejects_thin_kline(fake_db):
 
 
 def test_build_context_rejects_missing_index(fake_db):
-    fake_db.index_rows = {}
+    fake_db.index_recent = {}
+    with pytest.raises(DataNotReadyError):
+        build_context(TRADE_DATE)
+
+
+def test_build_context_rejects_stale_index(fake_db):
+    # 指数只有往日行情、当日行还没入库 → 同样视为数据未就绪
+    for rows in fake_db.index_recent.values():
+        rows.pop(0)
     with pytest.raises(DataNotReadyError):
         build_context(TRADE_DATE)
 
@@ -147,7 +180,7 @@ def test_build_context_rejects_missing_index(fake_db):
 # ── generate_once ────────────────────────────────────────────────────────────
 
 def _fake_chat_json(reply):
-    async def chat(messages, timeout=60.0):
+    async def chat(messages, timeout=60.0, **kw):
         return reply, json.dumps(reply, ensure_ascii=False)
     return chat
 
@@ -179,7 +212,7 @@ def test_generate_idempotent_skip_and_force(fake_db, trading_day, monkeypatch):
                           "旧正文", "{}", "generated")
     called = {"n": 0}
 
-    async def chat(messages, timeout=60.0):
+    async def chat(messages, timeout=60.0, **kw):
         called["n"] += 1
         return {"title": "新标题", "content_md": "## 新正文"}, "{}"
 
@@ -199,7 +232,7 @@ def test_generate_idempotent_skip_and_force(fake_db, trading_day, monkeypatch):
 
 
 def test_generate_failed_on_deepseek_error(fake_db, trading_day, monkeypatch):
-    async def chat(messages, timeout=60.0):
+    async def chat(messages, timeout=60.0, **kw):
         raise runner.DeepSeekError("HTTP 500")
 
     monkeypatch.setattr(runner, "chat_json", chat)
@@ -224,7 +257,7 @@ def test_generate_failed_on_empty_content(fake_db, trading_day, monkeypatch):
 def test_generate_failed_when_data_not_ready(fake_db, trading_day, monkeypatch):
     fake_db.breadth = {"total": 0}
 
-    async def chat(messages, timeout=60.0):  # 不应被调用
+    async def chat(messages, timeout=60.0, **kw):  # 不应被调用
         raise AssertionError("数据未就绪时不应调 DeepSeek")
 
     monkeypatch.setattr(runner, "chat_json", chat)
