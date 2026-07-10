@@ -220,6 +220,40 @@ def get_top_movers(trade_date: _Date, limit: int = 10) -> Dict[str, List[Dict[st
     return out
 
 
+def get_strong_up_history(trade_date: _Date, days: int = 10) -> Dict[str, Any]:
+    """近 N 个交易日内单日涨幅 ≥9.8% 的个股明细 —— 连板梯队(近似口径)计算用。
+
+    Returns: {"dates": [近N个交易日,倒序,首项应为当日],
+              "rows":  [{code, name, trade_date}, ...]}
+    交易日窗口用 index_daily(上证)取,行数少;个股明细一次查询拿全窗口。
+    """
+    empty: Dict[str, Any] = {"dates": [], "rows": []}
+    conn = _get_pool()
+    if conn is None:
+        return empty
+    n = max(2, min(days, 30))
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT trade_date FROM index_daily "
+            "WHERE index_code='000001' AND trade_date<=%s "
+            "ORDER BY trade_date DESC LIMIT %s",
+            (trade_date, n),
+        )
+        dates = [r["trade_date"] for r in cur.fetchall()]
+        if not dates:
+            return empty
+        cur.execute(
+            """
+            SELECT k.code, i.name, k.trade_date FROM stock_kline k
+            JOIN stock_info i ON i.code = k.code
+            WHERE k.trade_date BETWEEN %s AND %s AND k.pct_change >= 9.8
+            """,
+            (dates[-1], dates[0]),
+        )
+        rows = cur.fetchall()
+    return {"dates": dates, "rows": rows}
+
+
 def get_hotsector_today_sectors(trade_date: _Date) -> List[str]:
     """当日 AI 热门板块新选的 3 个板块名(按顺位)。
     ai_hotsector 表可能还没建(功能未启用) —— 查询失败按"无数据"处理，

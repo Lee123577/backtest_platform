@@ -33,6 +33,8 @@ class FakeDB:
         self.index_recent = {}   # code -> [行情行,日期倒序,首行=当日]
         self.recent_amounts = []  # 前 N 个交易日成交额(元),倒序
         self.movers = {"gainers": [], "losers": []}
+        self.strong_dates = []   # 近N个交易日,倒序
+        self.strong_rows = []    # 涨幅≥9.8% 的 {code,name,trade_date}
         self.hs_sectors = []
         self.hs_settled = None
 
@@ -64,6 +66,10 @@ class FakeDB:
     def get_top_movers(self, trade_date, limit=10):
         return {k: [dict(r) for r in v] for k, v in self.movers.items()}
 
+    def get_strong_up_history(self, trade_date, days=10):
+        return {"dates": list(self.strong_dates),
+                "rows": [dict(r) for r in self.strong_rows]}
+
     def get_hotsector_today_sectors(self, trade_date):
         return list(self.hs_sectors)
 
@@ -93,6 +99,15 @@ def make_ready_db():
         "gainers": [{"code": "600519", "name": "贵州茅台", "pct_change": 9.98}],
         "losers": [{"code": "000002", "name": "万科A", "pct_change": -9.95}],
     }
+    # 连板梯队:今日 2 家 ≥9.8%,其中 600111 昨天也 ≥9.8% → 2连板
+    fake.strong_dates = [TRADE_DATE, date(2026, 7, 7), date(2026, 7, 6)]
+    fake.strong_rows = [
+        {"code": "600111", "name": "北方稀土", "trade_date": TRADE_DATE},
+        {"code": "600111", "name": "北方稀土", "trade_date": date(2026, 7, 7)},
+        {"code": "002460", "name": "赣锋锂业", "trade_date": TRADE_DATE},
+        # 昨日涨停、今日没上榜的,不参与今日梯队
+        {"code": "300750", "name": "宁德时代", "trade_date": date(2026, 7, 7)},
+    ]
     fake.hs_sectors = ["人工智能", "半导体", "机器人"]
     fake.hs_settled = {
         "pick_date": TRADE_DATE, "sell_date": TRADE_DATE,
@@ -132,6 +147,22 @@ def test_review_messages_contains_context_numbers(fake_db):
     assert "编造" in msgs[0]["content"]
 
 
+def test_review_messages_sector_and_ladder(fake_db):
+    ctx = build_context(TRADE_DATE)
+    # 手工注入板块快照(build_context 只在"当天"才真拉外部接口)
+    ctx["sector_boards"] = {
+        "gainers": [{"name": "航天装备", "pct_change": 11.45, "up": 9, "down": 0,
+                     "leader": "星网宇达", "leader_pct": 9.98}],
+        "losers": [{"name": "橡胶助剂", "pct_change": -7.35, "up": 0, "down": 8,
+                    "leader": "彤程新材", "leader_pct": -1.2}],
+    }
+    user = review_messages(TRADE_DATE, ctx)[1]["content"]
+    assert "航天装备" in user and "星网宇达" in user
+    assert "板块聚焦" in user            # 五节结构里的新节
+    assert "北方稀土" in user            # 连板梯队个股进提示词
+    assert "≥9.8" in user                # 近似口径说明在位
+
+
 # ── build_context ────────────────────────────────────────────────────────────
 
 def test_build_context_values(fake_db):
@@ -152,6 +183,12 @@ def test_build_context_values(fake_db):
     assert tm["gainers"][0] == {"name": "贵州茅台", "code": "600519",
                                 "pct_change": 9.98}
     assert tm["losers"][0]["name"] == "万科A"
+    # 连板梯队:今日 2 家,其中 1 家 2连板(北方稀土)
+    lad = ctx["limit_up_ladder"]
+    assert lad == {"count": 2, "two_plus": 1, "max_streak": 2,
+                   "max_streak_stocks": ["北方稀土"]}
+    # 板块快照是实时接口:复盘日期不是"今天"时必须为 None(不喂错日数据)
+    assert ctx["sector_boards"] is None
     hs = ctx["ai_hotsector"]
     assert hs["today_sectors"] == ["人工智能", "半导体", "机器人"]
     assert hs["settled"]["day_return_pct"] == 1.23   # 0.0123 → %
@@ -167,6 +204,13 @@ def test_build_context_rejects_missing_index(fake_db):
     fake_db.index_recent = {}
     with pytest.raises(DataNotReadyError):
         build_context(TRADE_DATE)
+
+
+def test_ladder_none_when_window_stale(fake_db):
+    # 交易日窗口首项不是复盘日(上证当日行还没入库) → 梯队宁缺毋滥给 None
+    fake_db.strong_dates = [date(2026, 7, 7), date(2026, 7, 6)]
+    ctx = build_context(TRADE_DATE)
+    assert ctx["limit_up_ladder"] is None
 
 
 def test_build_context_rejects_stale_index(fake_db):

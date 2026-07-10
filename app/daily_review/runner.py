@@ -50,6 +50,98 @@ class ReviewResult:
     error_msg: Optional[str] = None
 
 
+def fetch_sector_boards(top_n: int = 5) -> Optional[Dict[str, Any]]:
+    """收盘后拉一次东财行业板块快照,取涨跌幅前/后 top_n(含领涨股)。
+
+    唯一的外部数据源,且只反映"现在"的行情 —— 调用方必须保证 review_date
+    是当天(补写历史日期时传不进正确快照,直接给 None)。
+    失败返回 None:复盘照样生成,"板块聚焦"一节由模型如实写明无数据。
+    """
+    import os
+    import socket
+    try:
+        import akshare as ak  # 延迟导入:web 进程/测试不加载
+        old_timeout = socket.getdefaulttimeout()
+        socket.setdefaulttimeout(30)  # akshare 不透传 timeout,防止挂死整个任务
+        # 线上环境代理会拦东财 push2(同 data/realtime.py 的 trust_env=False),
+        # akshare 用自己的 session 传不进去 → 调用期间临时摘代理,用完恢复,
+        # 不影响之后走代理的 DeepSeek 调用
+        proxy_keys = ("http_proxy", "https_proxy", "HTTP_PROXY",
+                      "HTTPS_PROXY", "all_proxy", "ALL_PROXY")
+        saved_proxies = {k: os.environ.pop(k) for k in proxy_keys
+                         if k in os.environ}
+        try:
+            df = ak.stock_board_industry_name_em()
+        finally:
+            socket.setdefaulttimeout(old_timeout)
+            os.environ.update(saved_proxies)
+        # 申万Ⅱ/Ⅲ级同名近重复(如 航天装备Ⅱ/Ⅲ) → 去掉级别后缀后去重
+        df = df.copy()
+        df["_base"] = df["板块名称"].astype(str).str.replace(
+            r"[ⅡⅢ]$", "", regex=True
+        )
+        df = df.drop_duplicates(subset=["_base"])
+        df = df.sort_values("涨跌幅", ascending=False)
+
+        def _rows(part) -> list:
+            out = []
+            for _, r in part.iterrows():
+                out.append({
+                    "name": str(r["_base"]),
+                    "pct_change": round(float(r["涨跌幅"]), 2),
+                    "up": int(r["上涨家数"]),
+                    "down": int(r["下跌家数"]),
+                    "leader": str(r["领涨股票"]),
+                    "leader_pct": round(float(r["领涨股票-涨跌幅"]), 2),
+                })
+            return out
+
+        return {
+            "gainers": _rows(df.head(top_n)),
+            "losers": _rows(df.tail(top_n).iloc[::-1]),  # 跌得最狠的排最前
+        }
+    except Exception as e:
+        logger.warning("行业板块快照获取失败(复盘继续,不含板块数据): %s", e)
+        return None
+
+
+def _limit_up_ladder(review_date: _Date) -> Optional[Dict[str, Any]]:
+    """连板梯队(近似口径:单日涨幅≥9.8% 连续天数)。
+
+    10%/20% 涨停都会落在 ≥9.8%,但"大涨未封板"也会被计入 ——
+    是情绪梯队的近似值,prompts 里已向模型说明口径。
+    """
+    data = db.get_strong_up_history(review_date, days=10)
+    dates = data.get("dates") or []
+    if not dates or dates[0] != review_date:
+        return None  # 当日指数还没入库,口径对不齐,宁缺毋滥
+    by_code: Dict[str, set] = {}
+    names: Dict[str, str] = {}
+    for r in data.get("rows") or []:
+        by_code.setdefault(r["code"], set()).add(r["trade_date"])
+        names[r["code"]] = r["name"]
+    today_codes = [c for c, ds in by_code.items() if dates[0] in ds]
+    if not today_codes:
+        return {"count": 0, "two_plus": 0, "max_streak": 0, "max_streak_stocks": []}
+    streaks: Dict[str, int] = {}
+    for c in today_codes:
+        s = 0
+        for d in dates:  # 倒序:从当日往前数连续命中天数
+            if d in by_code[c]:
+                s += 1
+            else:
+                break
+        streaks[c] = s
+    max_streak = max(streaks.values())
+    leaders = sorted(c for c, s in streaks.items() if s == max_streak)[:3]
+    return {
+        "count": len(today_codes),
+        "two_plus": sum(1 for s in streaks.values() if s >= 2),
+        "max_streak": max_streak,
+        "max_streak_stocks": [names[c] for c in leaders],
+    }
+
+
 def _movers_out(movers: Dict[str, Any]) -> Dict[str, Any]:
     """涨跌幅榜 DB 行 → context 条目(Decimal→float,保留 名称/代码/涨跌幅)。"""
     def _rows(key: str) -> list:
@@ -142,6 +234,12 @@ def build_context(review_date: _Date) -> Dict[str, Any]:
             ),
         },
         "top_movers": _movers_out(db.get_top_movers(review_date)),
+        # 板块快照是实时接口,只在复盘"当天"生成时才有正确的收盘值;
+        # --date 补写历史日期拿到的会是今天的行情 → 不喂,该节如实写无数据
+        "sector_boards": (
+            fetch_sector_boards() if review_date == _Date.today() else None
+        ),
+        "limit_up_ladder": _limit_up_ladder(review_date),
         "ai_hotsector": {
             "today_sectors": db.get_hotsector_today_sectors(review_date),
             "settled": settled,
