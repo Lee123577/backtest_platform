@@ -86,6 +86,10 @@ app.include_router(ai_hotsector_router)
 from .daily_review.api import router as daily_review_router  # noqa: E402
 app.include_router(daily_review_router)
 
+# 账号/登录(手机号验证码，付费墙前置)
+from .auth.api import router as auth_router  # noqa: E402
+app.include_router(auth_router)
+
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 

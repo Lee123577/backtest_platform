@@ -26,8 +26,12 @@ EnvironmentFile=-__ROOT__/.env
 
 # 生产模式：不带 --reload，节省一个监听进程；worker=1 是因为
 # 你是 2 核云主机，留 1 核给 backfill/scheduler；高并发再考虑加
+#
+# 只监听 127.0.0.1：外部流量必须经 nginx 反代(HTTPS + 传 X-Forwarded-*)，
+# 不让 IP:8000 明文直连绕开加密与 admin_ip 白名单。反代未就绪时先用
+# --host 0.0.0.0 临时联调，但公网部署务必收回本机。
 ExecStart=/usr/bin/env python3 -m uvicorn app.main:app \
-    --host 0.0.0.0 --port 8000 --workers 1
+    --host 127.0.0.1 --port 8000 --workers 1
 
 # 进程被 systemctl stop 时的优雅退出：先发 SIGTERM，15s 内不退就 SIGKILL
 KillMode=mixed

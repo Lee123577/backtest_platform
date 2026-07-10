@@ -1,0 +1,118 @@
+/* 登录弹窗 + 账号入口 —— 各页共用 */
+
+.sp-auth-btn {
+  cursor: pointer;
+  border: none;
+  background: none;
+  font: inherit;
+}
+
+/* 遮罩 */
+.sp-modal-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, .5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.sp-modal-mask[hidden] { display: none; }
+
+/* 弹窗 */
+.sp-modal {
+  width: 340px;
+  max-width: calc(100vw - 32px);
+  background: var(--panel, #1b1f27);
+  color: var(--txt, #e6e6e6);
+  border: 1px solid var(--border, #333);
+  border-radius: 12px;
+  padding: 24px 22px 20px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, .45);
+}
+.sp-modal h3 {
+  margin: 0 0 4px;
+  font-size: 18px;
+}
+.sp-modal .sp-sub {
+  margin: 0 0 18px;
+  font-size: 12px;
+  color: var(--txt2, #9aa0aa);
+}
+
+.sp-field {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.sp-field input {
+  flex: 1;
+  min-width: 0;
+  height: 40px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border, #333);
+  background: var(--bg, #12151b);
+  color: var(--txt, #e6e6e6);
+  font-size: 14px;
+}
+.sp-field input:focus {
+  outline: none;
+  border-color: #5b8def;
+}
+
+.sp-code-btn {
+  flex: none;
+  width: 112px;
+  height: 40px;
+  border-radius: 8px;
+  border: 1px solid #5b8def;
+  background: transparent;
+  color: #5b8def;
+  font-size: 13px;
+  cursor: pointer;
+}
+.sp-code-btn:disabled {
+  border-color: var(--border, #333);
+  color: var(--txt2, #9aa0aa);
+  cursor: default;
+}
+
+.sp-submit {
+  width: 100%;
+  height: 42px;
+  margin-top: 4px;
+  border: none;
+  border-radius: 8px;
+  background: #5b8def;
+  color: #fff;
+  font-size: 15px;
+  cursor: pointer;
+}
+.sp-submit:disabled { opacity: .6; cursor: default; }
+
+.sp-msg {
+  min-height: 18px;
+  margin: 8px 0 2px;
+  font-size: 12px;
+  color: #e0684d;
+}
+.sp-msg.ok { color: #2fa87d; }
+
+.sp-modal-close {
+  float: right;
+  margin: -6px -4px 0 0;
+  border: none;
+  background: none;
+  color: var(--txt2, #9aa0aa);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.sp-agreement {
+  margin-top: 12px;
+  font-size: 11px;
+  color: var(--txt2, #9aa0aa);
+  line-height: 1.6;
+}
