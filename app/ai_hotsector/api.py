@@ -29,6 +29,7 @@ def today():
     row = db.get_today()
     if row is None:
         return {"pick": None}
+    row.pop("model", None)  # 用的哪家模型属于内部实现,不对外展示
     return {"pick": _json_safe(row)}
 
 

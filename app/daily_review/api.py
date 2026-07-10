@@ -42,6 +42,7 @@ def _row_out(row: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     if row is None:
         return None
     out = dict(row)
+    out.pop("model", None)  # 用的哪家模型属于内部实现,不对外展示
     ctx_raw = out.pop("context_json", None)
     try:
         out["context"] = json.loads(ctx_raw) if ctx_raw else None

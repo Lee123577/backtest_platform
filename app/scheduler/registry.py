@@ -98,7 +98,7 @@ TASKS: Dict[str, TaskDef] = {
         "schedule": "weekday:15:05",
         "timeout_sec": 6 * 60,
         "depends_on": None,
-        "description": "AI 热门板块+强势股每日预测(DeepSeek,15:05 收盘后)",
+        "description": "AI 热门板块+强势股每日预测(15:05 收盘后)",
     },
     "ai_hotsector_settle": {
         "cmd": ["python", "scripts/ai_hotsector_settle.py"],
@@ -116,7 +116,7 @@ TASKS: Dict[str, TaskDef] = {
         "schedule": "weekday:17:45",
         "timeout_sec": 6 * 60,
         "depends_on": "daily_update",
-        "description": "AI 每日市场复盘生成(DeepSeek,17:45,依赖daily_update)",
+        "description": "AI 每日市场复盘生成(17:45,依赖daily_update)",
     },
 }
 
