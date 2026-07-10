@@ -50,59 +50,83 @@ class ReviewResult:
     error_msg: Optional[str] = None
 
 
+# push2 对云机房 IP 的封锁是"按子域"的且随时间轮换(实测同一时刻
+# 17/82 通、主域/33 拒连) —— 多备几个镜像轮询,大幅提高单次成功率
+_BOARD_HOSTS = (
+    "17.push2.eastmoney.com",
+    "82.push2.eastmoney.com",
+    "5.push2.eastmoney.com",
+    "48.push2.eastmoney.com",
+    "push2.eastmoney.com",
+)
+
+
 def fetch_sector_boards(top_n: int = 5) -> Optional[Dict[str, Any]]:
     """收盘后拉一次东财行业板块快照,取涨跌幅前/后 top_n(含领涨股)。
+
+    直连 push2 clist 接口(不走 akshare:它写死单一主机、无备用),
+    requests trust_env=False + 浏览器 UA —— 与 data/realtime.py 同一套
+    绕代理/防拦截模式;一次 pz=500 拿全 496 个板块,无需分页。
 
     唯一的外部数据源,且只反映"现在"的行情 —— 调用方必须保证 review_date
     是当天(补写历史日期时传不进正确快照,直接给 None)。
     失败返回 None:复盘照样生成,"板块聚焦"一节由模型如实写明无数据。
     """
-    import os
-    import socket
-    try:
-        import akshare as ak  # 延迟导入:web 进程/测试不加载
-        old_timeout = socket.getdefaulttimeout()
-        socket.setdefaulttimeout(30)  # akshare 不透传 timeout,防止挂死整个任务
-        # 线上环境代理会拦东财 push2(同 data/realtime.py 的 trust_env=False),
-        # akshare 用自己的 session 传不进去 → 调用期间临时摘代理,用完恢复,
-        # 不影响之后走代理的 DeepSeek 调用
-        proxy_keys = ("http_proxy", "https_proxy", "HTTP_PROXY",
-                      "HTTPS_PROXY", "all_proxy", "ALL_PROXY")
-        saved_proxies = {k: os.environ.pop(k) for k in proxy_keys
-                         if k in os.environ}
+    import requests
+
+    # f14=板块名称 f3=涨跌幅 f104/f105=上涨/下跌家数 f128/f136=领涨股票/其涨跌幅
+    params = {
+        "pn": 1, "pz": 500, "po": 1, "np": 1, "fltt": 2, "invt": 2,
+        "fid": "f3", "fs": "m:90 t:2 f:!50",
+        "fields": "f3,f12,f14,f104,f105,f128,f136",
+    }
+    sess = requests.Session()
+    sess.trust_env = False  # 线上环境代理会拦 push2(同 data/realtime.py)
+    sess.headers.update({
+        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                       "AppleWebKit/537.36 (KHTML, like Gecko) "
+                       "Chrome/126.0 Safari/537.36"),
+        "Referer": "https://quote.eastmoney.com/",
+    })
+    diff = None
+    for host in _BOARD_HOSTS:
         try:
-            df = ak.stock_board_industry_name_em()
-        finally:
-            socket.setdefaulttimeout(old_timeout)
-            os.environ.update(saved_proxies)
-        # 申万Ⅱ/Ⅲ级同名近重复(如 航天装备Ⅱ/Ⅲ) → 去掉级别后缀后去重
-        df = df.copy()
-        df["_base"] = df["板块名称"].astype(str).str.replace(
-            r"[ⅡⅢ]$", "", regex=True
-        )
-        df = df.drop_duplicates(subset=["_base"])
-        df = df.sort_values("涨跌幅", ascending=False)
-
-        def _rows(part) -> list:
-            out = []
-            for _, r in part.iterrows():
-                out.append({
-                    "name": str(r["_base"]),
-                    "pct_change": round(float(r["涨跌幅"]), 2),
-                    "up": int(r["上涨家数"]),
-                    "down": int(r["下跌家数"]),
-                    "leader": str(r["领涨股票"]),
-                    "leader_pct": round(float(r["领涨股票-涨跌幅"]), 2),
-                })
-            return out
-
-        return {
-            "gainers": _rows(df.head(top_n)),
-            "losers": _rows(df.tail(top_n).iloc[::-1]),  # 跌得最狠的排最前
-        }
-    except Exception as e:
-        logger.warning("行业板块快照获取失败(复盘继续,不含板块数据): %s", e)
+            resp = sess.get(f"https://{host}/api/qt/clist/get",
+                            params=params, timeout=15)
+            diff = (resp.json().get("data") or {}).get("diff")
+            if diff:
+                break
+        except Exception as e:
+            logger.info("板块快照 %s 失败,换下一个镜像: %s", host, e)
+    if not diff:
+        logger.warning("行业板块快照获取失败(复盘继续,不含板块数据):所有镜像均不可用")
         return None
+
+    boards: Dict[str, Dict[str, Any]] = {}
+    for r in diff:
+        try:
+            name = str(r["f14"])
+            # 申万Ⅱ/Ⅲ级同名近重复(如 航天装备Ⅱ/Ⅲ) → 去掉级别后缀后去重
+            base = name.rstrip("ⅡⅢ")
+            if base in boards:
+                continue
+            boards[base] = {
+                "name": base,
+                "pct_change": round(float(r["f3"]), 2),
+                "up": int(r["f104"]),
+                "down": int(r["f105"]),
+                "leader": str(r["f128"]),
+                "leader_pct": round(float(r["f136"]), 2),
+            }
+        except (KeyError, TypeError, ValueError):
+            continue  # 停牌等导致的 '-' 字段,整行跳过
+    if not boards:
+        return None
+    ranked = sorted(boards.values(), key=lambda b: b["pct_change"], reverse=True)
+    return {
+        "gainers": ranked[:top_n],
+        "losers": ranked[-top_n:][::-1],  # 跌得最狠的排最前
+    }
 
 
 def _limit_up_ladder(review_date: _Date) -> Optional[Dict[str, Any]]:
