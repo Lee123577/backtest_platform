@@ -89,12 +89,14 @@ def fetch_sector_boards(top_n: int = 5) -> Optional[Dict[str, Any]]:
         "Referer": "https://quote.eastmoney.com/",
     })
     diff = None
+    hit_host = None
     for host in _BOARD_HOSTS:
         try:
             resp = sess.get(f"https://{host}/api/qt/clist/get",
                             params=params, timeout=15)
             diff = (resp.json().get("data") or {}).get("diff")
             if diff:
+                hit_host = host
                 break
         except Exception as e:
             logger.info("板块快照 %s 失败,换下一个镜像: %s", host, e)
@@ -122,6 +124,7 @@ def fetch_sector_boards(top_n: int = 5) -> Optional[Dict[str, Any]]:
             continue  # 停牌等导致的 '-' 字段,整行跳过
     if not boards:
         return None
+    logger.info("行业板块快照 ok:%d 个板块(via %s)", len(boards), hit_host)
     ranked = sorted(boards.values(), key=lambda b: b["pct_change"], reverse=True)
     return {
         "gainers": ranked[:top_n],
