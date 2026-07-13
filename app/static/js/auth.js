@@ -44,17 +44,20 @@ window.SPAuth = (function () {
     mask.innerHTML =
       '<div class="sp-modal" role="dialog" aria-modal="true">' +
       '  <button class="sp-modal-close" aria-label="关闭">&times;</button>' +
-      '  <h3>登录 / 注册</h3>' +
-      '  <p class="sp-sub">手机号验证码登录，未注册将自动创建账号</p>' +
+      '  <div class="sp-modal-head">' +
+      '    <div class="sp-logo">📈</div>' +
+      '    <h3>登录 / 注册</h3>' +
+      '    <p class="sp-sub">手机号验证码登录，未注册将自动创建账号</p>' +
+      '  </div>' +
       '  <div class="sp-field">' +
-      '    <input id="spPhone" type="tel" maxlength="11" placeholder="手机号" autocomplete="tel">' +
+      '    <input id="spPhone" type="tel" maxlength="11" placeholder="请输入手机号" autocomplete="tel">' +
       '    <button class="sp-code-btn" id="spCodeBtn">获取验证码</button>' +
       '  </div>' +
       '  <div class="sp-field">' +
-      '    <input id="spCode" type="tel" maxlength="6" placeholder="6 位验证码" autocomplete="one-time-code">' +
+      '    <input id="spCode" type="tel" maxlength="6" placeholder="请输入 6 位验证码" autocomplete="one-time-code">' +
       '  </div>' +
       '  <div class="sp-msg" id="spMsg"></div>' +
-      '  <button class="sp-submit" id="spSubmit">登录</button>' +
+      '  <button class="sp-submit" id="spSubmit">登录 / 注册</button>' +
       '  <div class="sp-agreement">登录即表示同意本站服务条款。本站内容仅供研究，不构成投资建议。</div>' +
       '</div>';
     document.body.appendChild(mask);

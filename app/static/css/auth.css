@@ -1,4 +1,6 @@
-/* 登录弹窗 + 账号入口 —— 各页共用 */
+/* 登录弹窗 + 账号入口 —— 各页共用(浅色蓝调，与 shell 统一) */
+
+:root { --sp-brand: #2b6fe0; }
 
 .sp-auth-btn {
   cursor: pointer;
@@ -11,108 +13,142 @@
 .sp-modal-mask {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, .5);
+  background: rgba(17, 24, 39, .45);
+  backdrop-filter: blur(2px);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 1000;
+  animation: sp-fade .15s ease;
 }
 .sp-modal-mask[hidden] { display: none; }
+@keyframes sp-fade { from { opacity: 0; } to { opacity: 1; } }
 
 /* 弹窗 */
 .sp-modal {
-  width: 340px;
+  position: relative;
+  width: 360px;
   max-width: calc(100vw - 32px);
-  background: var(--panel, #1b1f27);
-  color: var(--txt, #e6e6e6);
-  border: 1px solid var(--border, #333);
-  border-radius: 12px;
-  padding: 24px 22px 20px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, .45);
+  background: #fff;
+  color: #1f2328;
+  border-radius: 16px;
+  padding: 28px 26px 22px;
+  box-shadow: 0 20px 60px rgba(17, 24, 39, .28);
+  animation: sp-pop .18s cubic-bezier(.2, .8, .3, 1.1);
 }
-.sp-modal h3 {
-  margin: 0 0 4px;
-  font-size: 18px;
-}
-.sp-modal .sp-sub {
-  margin: 0 0 18px;
-  font-size: 12px;
-  color: var(--txt2, #9aa0aa);
+@keyframes sp-pop {
+  from { opacity: 0; transform: translateY(12px) scale(.97); }
+  to   { opacity: 1; transform: none; }
 }
 
-.sp-field {
+/* 头部 */
+.sp-modal-head { text-align: center; margin-bottom: 20px; }
+.sp-logo {
+  width: 52px;
+  height: 52px;
+  margin: 0 auto 12px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #3b82f6, var(--sp-brand));
   display: flex;
-  gap: 8px;
-  margin-bottom: 12px;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
+  box-shadow: 0 6px 16px rgba(43, 111, 224, .35);
 }
+.sp-modal h3 { margin: 0 0 4px; font-size: 19px; font-weight: 700; color: #1f2328; }
+.sp-modal .sp-sub { margin: 0; font-size: 12px; color: #8a929c; }
+
+/* 输入 */
+.sp-field { display: flex; gap: 10px; margin-bottom: 12px; }
 .sp-field input {
   flex: 1;
   min-width: 0;
-  height: 40px;
-  padding: 0 12px;
-  border-radius: 8px;
-  border: 1px solid var(--border, #333);
-  background: var(--bg, #12151b);
-  color: var(--txt, #e6e6e6);
+  height: 44px;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: 1px solid #dfe3e8;
+  background: #f7f9fb;
+  color: #1f2328;
   font-size: 14px;
+  transition: border-color .15s, box-shadow .15s, background .15s;
 }
+.sp-field input::placeholder { color: #aab1ba; }
 .sp-field input:focus {
   outline: none;
-  border-color: #5b8def;
+  background: #fff;
+  border-color: var(--sp-brand);
+  box-shadow: 0 0 0 3px rgba(43, 111, 224, .15);
 }
 
 .sp-code-btn {
   flex: none;
-  width: 112px;
-  height: 40px;
-  border-radius: 8px;
-  border: 1px solid #5b8def;
-  background: transparent;
-  color: #5b8def;
+  width: 118px;
+  height: 44px;
+  border-radius: 10px;
+  border: 1px solid var(--sp-brand);
+  background: rgba(43, 111, 224, .06);
+  color: var(--sp-brand);
   font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
+  transition: background .15s;
 }
+.sp-code-btn:hover:not(:disabled) { background: rgba(43, 111, 224, .12); }
 .sp-code-btn:disabled {
-  border-color: var(--border, #333);
-  color: var(--txt2, #9aa0aa);
+  border-color: #e5e8ec;
+  background: #f2f4f6;
+  color: #aab1ba;
   cursor: default;
 }
 
 .sp-submit {
   width: 100%;
-  height: 42px;
-  margin-top: 4px;
+  height: 46px;
+  margin-top: 6px;
   border: none;
-  border-radius: 8px;
-  background: #5b8def;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #3b82f6, var(--sp-brand));
   color: #fff;
   font-size: 15px;
+  font-weight: 600;
   cursor: pointer;
+  box-shadow: 0 6px 16px rgba(43, 111, 224, .3);
+  transition: filter .15s, transform .05s;
 }
-.sp-submit:disabled { opacity: .6; cursor: default; }
+.sp-submit:hover:not(:disabled) { filter: brightness(1.05); }
+.sp-submit:active:not(:disabled) { transform: translateY(1px); }
+.sp-submit:disabled { opacity: .55; cursor: default; box-shadow: none; }
 
 .sp-msg {
   min-height: 18px;
-  margin: 8px 0 2px;
+  margin: 10px 0 2px;
   font-size: 12px;
-  color: #e0684d;
+  text-align: center;
+  color: #e5484d;
 }
-.sp-msg.ok { color: #2fa87d; }
+.sp-msg.ok { color: #1a7f37; }
 
 .sp-modal-close {
-  float: right;
-  margin: -6px -4px 0 0;
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 30px;
+  height: 30px;
   border: none;
   background: none;
-  color: var(--txt2, #9aa0aa);
-  font-size: 20px;
+  color: #aab1ba;
+  font-size: 22px;
   line-height: 1;
+  border-radius: 8px;
   cursor: pointer;
+  transition: background .15s, color .15s;
 }
+.sp-modal-close:hover { background: #f2f4f6; color: #57606a; }
 
 .sp-agreement {
-  margin-top: 12px;
+  margin-top: 14px;
   font-size: 11px;
-  color: var(--txt2, #9aa0aa);
+  color: #aab1ba;
   line-height: 1.6;
+  text-align: center;
 }
