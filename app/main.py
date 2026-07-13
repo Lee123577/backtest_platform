@@ -94,6 +94,10 @@ app.include_router(auth_router)
 from .subscription.api import router as subscription_router  # noqa: E402
 app.include_router(subscription_router)
 
+# 用户反馈 / 功能建议
+from .feedback.api import router as feedback_router  # noqa: E402
+app.include_router(feedback_router)
+
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
