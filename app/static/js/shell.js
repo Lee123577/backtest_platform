@@ -10,6 +10,9 @@
 
   // ── 导航配置(分组) ────────────────────────────────────────────────────
   var NAV = [
+    { title: "概览", items: [
+      { label: "仪表盘", href: "/dashboard", ico: "🏠" },
+    ]},
     { title: "行情研究", items: [
       { label: "每日复盘", href: "/daily_review", ico: "📈" },
       { label: "AI热门板块", href: "/ai_hotsector", ico: "🔥" },
@@ -49,7 +52,7 @@
   function buildSidebar() {
     var aside = document.createElement("aside");
     aside.className = "spx-sidebar";
-    var html = '<div class="spx-brand">' + esc(BRAND) + "</div>" +
+    var html = '<a class="spx-brand" href="/dashboard">' + esc(BRAND) + "</a>" +
       '<nav class="spx-nav">';
     NAV.forEach(function (g) {
       html += '<div class="spx-group-title">' + esc(g.title) + "</div>";
@@ -97,6 +100,7 @@
       ' ▾</button>' +
       '<div class="spx-menu" id="spxMenu" hidden>' +
       '<div class="spx-menu-sub">' + esc(maskPhone(user.phone)) + "</div>" +
+      '<a href="/dashboard">仪表盘</a>' +
       '<a href="/subscribe">我的订阅</a>' +
       '<a href="/watchlist">自选盯盘</a>' +
       '<button id="spxLogout">退出登录</button>' +

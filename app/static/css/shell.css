@@ -54,7 +54,9 @@ body.spx-shell .site-footer {
   font-size: 17px;
   font-weight: 700;
   letter-spacing: .5px;
+  text-decoration: none;
 }
+.spx-brand:hover { color: #fff; filter: brightness(1.05); }
 .spx-nav {
   flex: 1;
   overflow-y: auto;

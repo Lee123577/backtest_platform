@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>仪表盘</title>
+  <link rel="stylesheet" href="/static/css/style.css?v=20260709">
+  <link rel="stylesheet" href="/static/css/auth.css?v=20260714">
+  <link rel="stylesheet" href="/static/css/feedback.css?v=20260713">
+  <link rel="stylesheet" href="/static/css/shell.css?v=20260714">
+  <link rel="stylesheet" href="/static/css/dashboard.css?v=20260714">
+</head>
+<body>
+
+<header>
+  <h1>📈 A股量化回测平台</h1>
+  <nav class="header-nav">
+    <a class="nav-btn" href="/">单股策略</a>
+    <a class="nav-btn" href="/daily_review">每日复盘</a>
+  </nav>
+</header>
+
+<main>
+  <!-- 欢迎条 -->
+  <div class="dash-hero" id="dashHero">
+    <div class="dash-hero-text">
+      <div class="dash-hello" id="dashHello">欢迎</div>
+      <div class="dash-sub" id="dashHeroSub">加载中…</div>
+    </div>
+    <div id="dashHeroAction"></div>
+  </div>
+
+  <!-- 状态卡片 -->
+  <div class="dash-grid">
+    <div class="dash-card" id="cardMember">
+      <div class="dash-card-head"><span class="dash-ico">💎</span> 我的会员</div>
+      <div class="dash-card-body" id="memberBody"><div class="dash-loading">加载中…</div></div>
+    </div>
+
+    <div class="dash-card" id="cardReview">
+      <div class="dash-card-head"><span class="dash-ico">📈</span> 今日复盘</div>
+      <div class="dash-card-body" id="reviewBody"><div class="dash-loading">加载中…</div></div>
+    </div>
+
+    <div class="dash-card" id="cardAlerts">
+      <div class="dash-card-head"><span class="dash-ico">⭐</span> 自选盯盘</div>
+      <div class="dash-card-body" id="alertsBody"><div class="dash-loading">加载中…</div></div>
+    </div>
+  </div>
+
+  <!-- 公告 -->
+  <div class="panel dash-notice">
+    <div class="panel-title">公告</div>
+    <div class="dash-notice-body">
+      本站为 A 股量化研究工具，所有内容（每日复盘、AI 选股、信号提醒等）
+      <b>仅供研究参考，不构成任何投资建议</b>，据此操作风险自负。
+    </div>
+  </div>
+
+  <!-- 捷径 -->
+  <div class="panel">
+    <div class="panel-title">快捷入口</div>
+    <div class="dash-shortcuts" id="dashShortcuts"></div>
+  </div>
+</main>
+
+<footer class="site-footer">
+  💡 需要定制策略 / 接入实盘？只提供代码，服务器需自行购买 · 第一单免费（目前限时全免）·
+  <a href="mailto:lihaichuan393@gmail.com">lihaichuan393@gmail.com</a>
+</footer>
+
+<script src="/static/js/auth.js?v=20260714"></script>
+<script src="/static/js/feedback.js?v=20260713"></script>
+<script src="/static/js/dashboard.js?v=20260714"></script>
+<script src="/static/js/shell.js?v=20260714"></script>
+</body>
+</html>

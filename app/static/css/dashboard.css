@@ -1,0 +1,124 @@
+/* 仪表盘首页 */
+
+.dash-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 22px 26px;
+  border-radius: 14px;
+  background: linear-gradient(120deg, #2b6fe0, #4f8cf0);
+  color: #fff;
+  box-shadow: 0 8px 24px rgba(43, 111, 224, .25);
+}
+.dash-hello { font-size: 20px; font-weight: 700; }
+.dash-sub { font-size: 13px; opacity: .9; margin-top: 4px; }
+.dash-hero-btn {
+  border: none;
+  border-radius: 10px;
+  background: #fff;
+  color: #2b6fe0;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 10px 22px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.dash-hero-btn:hover { filter: brightness(.97); }
+
+/* 状态卡片 */
+.dash-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+}
+.dash-card {
+  background: var(--bg, #fff);
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 12px;
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.dash-card-head {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--txt, #24292f);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.dash-ico { font-size: 17px; }
+.dash-card-body { flex: 1; }
+.dash-loading { color: var(--txt2, #8a929c); font-size: 13px; }
+
+.dash-big { font-size: 24px; font-weight: 700; color: var(--txt, #24292f); line-height: 1.2; }
+.dash-big.ok { color: #1a7f37; }
+.dash-big.muted { color: var(--txt2, #8a929c); }
+.dash-note { font-size: 12px; color: var(--txt2, #8a929c); margin-top: 4px; }
+
+.dash-cta {
+  display: inline-block;
+  margin-top: 4px;
+  border: none;
+  border-radius: 8px;
+  background: #2b6fe0;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 8px 16px;
+  cursor: pointer;
+  text-decoration: none;
+}
+.dash-cta:hover { filter: brightness(1.05); }
+.dash-cta.ghost { background: rgba(43, 111, 224, .08); color: #2b6fe0; }
+
+.dash-link {
+  font-size: 13px;
+  color: #2b6fe0;
+  text-decoration: none;
+}
+.dash-link:hover { text-decoration: underline; }
+
+.dash-badge {
+  display: inline-block;
+  min-width: 22px;
+  padding: 1px 8px;
+  border-radius: 11px;
+  background: #e5484d;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+}
+
+/* 公告 */
+.dash-notice-body { font-size: 13px; color: var(--txt2, #57606a); line-height: 1.8; }
+.dash-notice-body b { color: var(--txt, #24292f); }
+
+/* 捷径 */
+.dash-shortcuts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+}
+.dash-shortcut {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 10px;
+  text-decoration: none;
+  color: var(--txt, #24292f);
+  transition: border-color .15s, transform .1s, box-shadow .15s;
+}
+.dash-shortcut:hover {
+  border-color: #2b6fe0;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(43, 111, 224, .12);
+}
+.dash-shortcut .sc-ico { font-size: 22px; flex: none; }
+.dash-shortcut .sc-label { font-size: 14px; font-weight: 500; }
+.dash-shortcut .sc-desc { font-size: 11px; color: var(--txt2, #8a929c); }

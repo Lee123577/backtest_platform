@@ -162,6 +162,11 @@ async def page_watchlist():
     return FileResponse(str(STATIC_DIR / "watchlist.html"))
 
 
+@app.get("/dashboard", include_in_schema=False)
+async def page_dashboard():
+    return FileResponse(str(STATIC_DIR / "dashboard.html"))
+
+
 # ── Paper trading (实盘信号观察) ──────────────────────────────────────────────
 
 from .json_safe import json_safe as _json_safe  # noqa: E402
