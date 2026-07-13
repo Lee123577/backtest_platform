@@ -464,12 +464,22 @@ def api_tasks_summary():
 
 
 @app.get("/api/tasks/runs")
-def api_tasks_runs(task: Optional[str] = None, limit: int = 100):
+def api_tasks_runs(
+    task: Optional[str] = None, status: Optional[str] = None,
+    limit: int = 30, offset: int = 0,
+):
     try:
         scheduler_db.ensure_table()
     except Exception:
-        return {"runs": []}
-    rows = scheduler_db.list_recent_runs(task=task, limit=limit)
+        return {"runs": [], "has_more": False}
+    page = max(1, min(limit, 100))
+    offset = max(0, offset)
+    # 多取 1 条判断是否还有下一页,避免额外 COUNT 查询
+    rows = scheduler_db.list_recent_runs(
+        task=task, status=status, limit=page + 1, offset=offset
+    )
+    has_more = len(rows) > page
+    rows = rows[:page]
     out = []
     for r in rows:
         out.append({
@@ -487,7 +497,7 @@ def api_tasks_runs(task: Optional[str] = None, limit: int = 100):
             "error_msg": r.get("error_msg") or "",
             "host": r.get("host"),
         })
-    return {"runs": out}
+    return {"runs": out, "has_more": has_more}
 
 
 @app.post("/api/tasks/{name}/run")

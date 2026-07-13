@@ -181,38 +181,41 @@ def has_running(task_name: str, within_minutes: int = 120) -> Optional[Dict[str,
 
 
 def list_recent_runs(
-    task: Optional[str] = None, limit: int = 100
+    task: Optional[str] = None, status: Optional[str] = None,
+    limit: int = 100, offset: int = 0,
 ) -> List[Dict[str, Any]]:
+    """分页拉取运行明细。task/status 为服务端过滤条件(为空则不限)，
+    offset/limit 做分页 —— 前端"加载更多"逐页追加，不再一次拉全量。"""
     conn = _get_pool()
     if conn is None:
         return []
     limit = max(1, min(limit, 500))
+    offset = max(0, offset)
+
+    where = []
+    params: list = []
+    if task:
+        where.append("task_name=%s")
+        params.append(task)
+    if status:
+        where.append("status=%s")
+        params.append(status)
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+    params.extend([limit, offset])
+
     with conn.cursor() as cur:
-        if task:
-            cur.execute(
-                """
-                SELECT id, task_name, scheduled_at, started_at, finished_at,
-                       duration_ms, status, exit_code, trigger_type,
-                       stdout_tail, stderr_tail, error_msg, host
-                FROM task_run_log
-                WHERE task_name=%s
-                ORDER BY started_at DESC
-                LIMIT %s
-                """,
-                (task, limit),
-            )
-        else:
-            cur.execute(
-                """
-                SELECT id, task_name, scheduled_at, started_at, finished_at,
-                       duration_ms, status, exit_code, trigger_type,
-                       stdout_tail, stderr_tail, error_msg, host
-                FROM task_run_log
-                ORDER BY started_at DESC
-                LIMIT %s
-                """,
-                (limit,),
-            )
+        cur.execute(
+            f"""
+            SELECT id, task_name, scheduled_at, started_at, finished_at,
+                   duration_ms, status, exit_code, trigger_type,
+                   stdout_tail, stderr_tail, error_msg, host
+            FROM task_run_log
+            {where_sql}
+            ORDER BY started_at DESC
+            LIMIT %s OFFSET %s
+            """,
+            tuple(params),
+        )
         return cur.fetchall()
 
 

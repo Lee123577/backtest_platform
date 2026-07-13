@@ -170,35 +170,49 @@ function populateTaskFilter(tasks) {
   if (current) sel.value = current;
 }
 
-async function loadRuns() {
+const RUNS_PAGE = 30;    // 每页条数
+let _runsOffset = 0;     // 已拉取的偏移
+let _runsHasMore = false;
+
+// 分页拉取：reset=true 换过滤条件从头拉；reset=false 是"加载更多"追加下一页。
+// task/status 均为服务端过滤,offset 分页 —— 不再一次性拉全量。
+async function loadRuns(reset = true) {
   const task = document.getElementById('taskFilter').value;
-  const url = `/api/tasks/runs?limit=100${task ? '&task=' + encodeURIComponent(task) : ''}`;
+  const status = document.getElementById('statusFilter')?.value || '';
+  if (reset) {
+    _allRuns = [];
+    _runsOffset = 0;
+    _runsHasMore = false;
+    document.getElementById('runsWrap').innerHTML = '<div class="no-data">加载中…</div>';
+  }
+  const params = new URLSearchParams({ limit: RUNS_PAGE, offset: _runsOffset });
+  if (task) params.set('task', task);
+  if (status) params.set('status', status);
   try {
-    const res = await fetch(url);
-    const { runs } = await res.json();
-    _allRuns = runs || [];
-    renderRunsFiltered();
+    const res = await fetch('/api/tasks/runs?' + params.toString());
+    const { runs, has_more } = await res.json();
+    _allRuns = _allRuns.concat(runs || []);
+    _runsOffset += (runs || []).length;
+    _runsHasMore = !!has_more;
+    renderRuns(_allRuns);
   } catch (e) {
-    document.getElementById('runsWrap').innerHTML =
-      `<div class="error-box">加载失败：${e.message || e}</div>`;
+    if (reset) {
+      document.getElementById('runsWrap').innerHTML =
+        `<div class="error-box">加载失败：${e.message || e}</div>`;
+    }
   }
 }
 
-// 按 statusFilter 客户端过滤；taskFilter 是后端过滤的，无需重过滤
-function renderRunsFiltered() {
-  const st = document.getElementById('statusFilter')?.value || '';
-  const list = st
-    ? _allRuns.filter(r => r.status === st)
-    : _allRuns;
-  renderRuns(list);
-}
+// 兼容旧调用点(状态过滤已移到服务端 → 重新从头分页拉取)
+function renderRunsFiltered() { loadRuns(true); }
 window.renderRunsFiltered = renderRunsFiltered;
 
 function renderRuns(runs) {
   const hint = document.getElementById('runsHint');
   if (hint) {
-    const total = _allRuns.length, shown = runs.length;
-    hint.textContent = total ? `（显示 ${shown}/${total} 条）` : '（最近 100 次）';
+    hint.textContent = _allRuns.length
+      ? `（已加载 ${_allRuns.length} 条${_runsHasMore ? '，可加载更多' : '，已全部'}）`
+      : '';
   }
   if (!runs.length) {
     document.getElementById('runsWrap').innerHTML = '<div class="no-data">无符合条件的记录</div>';
@@ -221,6 +235,11 @@ function renderRuns(runs) {
         </td>
       </tr>`;
   }).join('');
+  const moreBtn = _runsHasMore
+    ? `<div style="text-align:center;margin-top:12px;">
+         <button class="ds-refresh-btn" onclick="loadRuns(false)">加载更多</button>
+       </div>`
+    : '';
   document.getElementById('runsWrap').innerHTML = `
     <table class="pt-tbl">
       <thead><tr>
@@ -228,7 +247,7 @@ function renderRuns(runs) {
         <th>耗时</th><th>退出码</th><th>摘要（点击行看详情）</th>
       </tr></thead>
       <tbody>${rows}</tbody>
-    </table>`;
+    </table>${moreBtn}`;
 }
 
 function showDetail(id) {
