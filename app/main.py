@@ -98,6 +98,10 @@ app.include_router(subscription_router)
 from .feedback.api import router as feedback_router  # noqa: E402
 app.include_router(feedback_router)
 
+# 自选盯盘(收盘信号提醒,会员权益)
+from .watchlist.api import router as watchlist_router  # noqa: E402
+app.include_router(watchlist_router)
+
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
@@ -151,6 +155,11 @@ async def page_daily_review():
 @app.get("/subscribe", include_in_schema=False)
 async def page_subscribe():
     return FileResponse(str(STATIC_DIR / "subscribe.html"))
+
+
+@app.get("/watchlist", include_in_schema=False)
+async def page_watchlist():
+    return FileResponse(str(STATIC_DIR / "watchlist.html"))
 
 
 # ── Paper trading (实盘信号观察) ──────────────────────────────────────────────

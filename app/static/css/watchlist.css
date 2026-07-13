@@ -1,0 +1,86 @@
+/* 自选盯盘页 */
+
+.wl-rule-hint {
+  font-size: 12px;
+  color: var(--txt2, #9aa0aa);
+  margin: -4px 0 12px;
+}
+
+/* ── 信号提醒 ─────────────────────────────────────────────── */
+.wl-alert {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 6px;
+  border-bottom: 1px solid var(--border, #333);
+}
+.wl-alert.unread { background: rgba(91, 141, 239, .07); }
+.wl-alert-sig {
+  flex: none;
+  width: 40px;
+  text-align: center;
+  font-weight: 700;
+  border-radius: 6px;
+  padding: 3px 0;
+  font-size: 13px;
+}
+.wl-buy  { color: #e05252; border: 1px solid #e05252; }
+.wl-sell { color: #2fa87d; border: 1px solid #2fa87d; }
+.wl-alert-main { flex: 1; min-width: 0; }
+.wl-alert-name { font-size: 14px; }
+.wl-alert-meta { font-size: 12px; color: var(--txt2, #9aa0aa); }
+.wl-alert-date { flex: none; font-size: 12px; color: var(--txt2, #9aa0aa); font-variant-numeric: tabular-nums; }
+
+.wl-readbtn, .wl-savebtn, .wl-addbtn {
+  border: none;
+  border-radius: 8px;
+  background: #5b8def;
+  color: #fff;
+  cursor: pointer;
+}
+.wl-readbtn { font-size: 12px; padding: 4px 12px; float: right; }
+.wl-savebtn { font-size: 14px; padding: 9px 20px; }
+.wl-addbtn  { font-size: 14px; padding: 0 18px; height: 38px; }
+
+/* 付费墙 */
+.wl-paywall {
+  text-align: center;
+  padding: 28px 20px;
+  border: 1px dashed var(--border, #3a3f4b);
+  border-radius: 12px;
+  background: rgba(91, 141, 239, .05);
+}
+.wl-paywall p { font-size: 13px; color: var(--txt2, #9aa0aa); margin: 0 0 14px; }
+.wl-paywall-btn {
+  border: none; border-radius: 8px; background: #5b8def; color: #fff;
+  font-size: 14px; padding: 10px 24px; cursor: pointer;
+}
+
+/* ── 自选股 ───────────────────────────────────────────────── */
+.wl-add { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
+.wl-add input {
+  width: 240px; max-width: 60vw; height: 38px; padding: 0 12px;
+  border-radius: 8px; border: 1px solid var(--border, #333);
+  background: var(--bg, #12151b); color: var(--txt, #e6e6e6); font-size: 14px;
+}
+.wl-add input:focus { outline: none; border-color: #5b8def; }
+.wl-add-msg, .wl-save-msg { font-size: 12px; color: #e0684d; }
+.wl-add-msg.ok, .wl-save-msg.ok { color: #2fa87d; }
+
+.wl-chip {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 6px 10px; margin: 0 8px 8px 0;
+  border: 1px solid var(--border, #333); border-radius: 20px; font-size: 13px;
+}
+.wl-chip-x { cursor: pointer; color: var(--txt2, #9aa0aa); font-size: 15px; }
+.wl-chip-x:hover { color: #e0684d; }
+
+/* ── 盯盘策略 ─────────────────────────────────────────────── */
+.wl-strats { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+.wl-strat {
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+  border: 1px solid var(--border, #333); border-radius: 8px; cursor: pointer; font-size: 13px;
+}
+.wl-strat input { margin: 0; }
+.wl-strat.on { border-color: #5b8def; }
+.wl-save-row { margin-top: 14px; display: flex; align-items: center; gap: 12px; }

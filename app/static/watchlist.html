@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>自选盯盘</title>
+  <link rel="stylesheet" href="/static/css/style.css?v=20260709">
+  <link rel="stylesheet" href="/static/css/auth.css?v=20260710">
+  <link rel="stylesheet" href="/static/css/feedback.css?v=20260713">
+  <link rel="stylesheet" href="/static/css/watchlist.css?v=20260713">
+</head>
+<body>
+
+<header>
+  <h1>📈 A股量化回测平台</h1>
+  <nav class="header-nav">
+    <a class="nav-btn" href="/" style="text-decoration:none;display:inline-flex;align-items:center;">单股策略</a>
+    <a class="nav-btn" href="/daily_review" style="text-decoration:none;display:inline-flex;align-items:center;">每日复盘</a>
+    <a class="nav-btn" href="/ai_hotsector" style="text-decoration:none;display:inline-flex;align-items:center;">AI热门板块</a>
+    <button class="nav-btn active">自选盯盘</button>
+    <a class="nav-btn" href="/tasks" style="text-decoration:none;display:inline-flex;align-items:center;">定时任务</a>
+    <span id="spAuthSlot" style="display:inline-flex;align-items:center;"></span>
+  </nav>
+</header>
+
+<main>
+  <!-- 未登录挡板 -->
+  <div class="panel" id="wlLoginGate" style="display:none;">
+    <div class="no-data">
+      登录后即可添加自选股、设置盯盘策略。
+      <button class="nav-btn" id="wlLoginBtn" style="margin-left:8px;">登录</button>
+    </div>
+  </div>
+
+  <div id="wlBody" style="display:none;">
+    <!-- 1. 信号提醒 -->
+    <div class="panel">
+      <div class="panel-title">
+        信号提醒 <span class="tip-badge">仅供研究，不构成投资建议</span>
+        <button class="wl-readbtn" id="wlReadBtn" style="display:none;">全部已读</button>
+      </div>
+      <div class="wl-rule-hint">每个交易日收盘数据入库后（约 17:20），系统对你的自选股按所选策略扫描当日买/卖信号并在此提醒。</div>
+      <div id="wlAlerts"><div class="no-data">加载中…</div></div>
+    </div>
+
+    <!-- 2. 自选股 -->
+    <div class="panel">
+      <div class="panel-title">我的自选股 <span id="wlCount"></span></div>
+      <div class="wl-add">
+        <input id="wlCodeInput" maxlength="6" placeholder="输入 6 位股票代码，如 600519" />
+        <button class="wl-addbtn" id="wlAddBtn">添加</button>
+        <span class="wl-add-msg" id="wlAddMsg"></span>
+      </div>
+      <div id="wlStocks"><div class="no-data">加载中…</div></div>
+    </div>
+
+    <!-- 3. 盯盘策略 -->
+    <div class="panel">
+      <div class="panel-title">盯盘策略 <span>勾选后应用于全部自选股</span></div>
+      <div id="wlStrategies" class="wl-strats"><div class="no-data">加载中…</div></div>
+      <div class="wl-save-row">
+        <button class="wl-savebtn" id="wlSaveRules">保存盯盘策略</button>
+        <span class="wl-save-msg" id="wlSaveMsg"></span>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer class="site-footer">
+  💡 需要定制策略 / 接入实盘？只提供代码，服务器需自行购买 · 第一单免费（目前限时全免）·
+  <a href="mailto:lihaichuan393@gmail.com">lihaichuan393@gmail.com</a>
+</footer>
+
+<script src="/static/js/auth.js?v=20260710"></script>
+<script src="/static/js/feedback.js?v=20260713"></script>
+<script src="/static/js/watchlist.js?v=20260713"></script>
+</body>
+</html>

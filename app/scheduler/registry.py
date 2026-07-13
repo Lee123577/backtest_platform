@@ -118,6 +118,15 @@ TASKS: Dict[str, TaskDef] = {
         "depends_on": "daily_update",
         "description": "AI 每日市场复盘生成(17:45,依赖daily_update)",
     },
+    # 自选盯盘:17:20 对订阅用户的自选股×盯盘策略跑当日信号,命中落站内提醒。
+    # 只依赖 daily_update(当日K线已入库);纯本地计算,不联网。
+    "watchlist_alert_scan": {
+        "cmd": ["python", "scripts/scan_watchlist_alerts.py"],
+        "schedule": "weekday:17:20",
+        "timeout_sec": 10 * 60,
+        "depends_on": "daily_update",
+        "description": "自选盯盘收盘信号扫描(17:20,依赖daily_update)",
+    },
 }
 
 
