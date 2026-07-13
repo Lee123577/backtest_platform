@@ -18,9 +18,11 @@ from datetime import date as _Date
 from typing import Any, Dict, Optional
 
 import pymysql
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Request, Response
 
 from ..json_safe import json_safe as _json_safe
+from ..auth.deps import get_current_user
+from ..subscription import service as sub_service
 from . import db
 
 logger = logging.getLogger(__name__)
@@ -52,6 +54,18 @@ def _row_out(row: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         # 内部错误细节(DeepSeek 响应片段/DB 报错)不对匿名访客透出
         out["error_msg"] = "生成失败，详情见「定时任务」页运行日志"
     return _json_safe(out)
+
+
+def _locked_out(row: Dict[str, Any]) -> Dict[str, Any]:
+    """付费墙：历史篇对未订阅用户只回标题/日期当钩子，不回正文与数据快照。"""
+    return {
+        "review_date": _json_safe(row.get("review_date")),
+        "title": row.get("title"),
+        "status": row.get("status"),
+        "locked": True,
+        "content_md": None,
+        "context": None,
+    }
 
 
 # /latest 进程缓存(cloudmap 同款):复盘一天只变一次(17:45 生成),
@@ -92,24 +106,34 @@ def history(response: Response, limit: int = 30):
 
 
 @router.get("/{review_date}")
-def by_date(review_date: str, response: Response):
+def by_date(review_date: str, request: Request, response: Response):
     try:
         d = _Date.fromisoformat(review_date)
     except ValueError:
         raise HTTPException(400, "日期格式须为 YYYY-MM-DD")
     try:
         row = db.get_review(d)
+        latest = db.get_latest_review()
     except Exception as e:
         if not _missing_table(e):
             raise
         logger.info("daily_review 表未建,按无记录返回: %s", e)
-        row = None
+        row, latest = None, None
     if row is None:
         raise HTTPException(404, f"{review_date} 无复盘记录")
-    # 历史日期的复盘生成后基本不变,允许浏览器缓存 1 小时
-    # (不给更长:--force 重写旧复盘时希望 1 小时内能看到);当日给 60s
-    if d < _Date.today():
-        response.headers["Cache-Control"] = "public, max-age=3600"
-    else:
+
+    # 付费墙：最新一篇对所有人免费;历史篇仅订阅会员可见完整正文。
+    is_latest = latest is not None and latest.get("review_date") == d
+    if is_latest:
+        # 全站一致，可公共缓存
         response.headers["Cache-Control"] = "public, max-age=60"
+        return {"review": _row_out(row)}
+
+    # 历史篇：响应随登录/订阅态变化，禁止任何共享/浏览器缓存，
+    # 否则订阅后仍被缓存的"锁定"响应挡住(反之亦然)。
+    response.headers["Cache-Control"] = "private, no-store"
+    user = get_current_user(request)
+    subscribed = bool(user and sub_service.is_subscribed(int(user["id"])))
+    if not subscribed:
+        return {"review": _locked_out(row)}
     return {"review": _row_out(row)}

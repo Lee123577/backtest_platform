@@ -11,6 +11,8 @@
   "use strict";
 
   var currentDate = null; // 正在展示的 review_date
+  var subscribed = false; // 当前用户是否会员(付费墙用)
+  var latestDate = null;  // 最新一篇复盘日期(对所有人免费,不加锁)
 
   // ── 工具 ──────────────────────────────────────────────────────────────
   function esc(s) {
@@ -148,6 +150,21 @@
     }
     currentDate = String(review.review_date);
     dateEl.textContent = currentDate;
+    if (review.locked) {
+      // 付费墙:历史篇未订阅 —— 标题当钩子,正文换成订阅引导
+      titleEl.textContent = review.title || (currentDate + " A股复盘");
+      bodyEl.innerHTML =
+        '<div class="dr-paywall">' +
+        '<div class="dr-paywall-title">🔒 订阅解锁历史复盘</div>' +
+        '<p>历史复盘的完整正文与当日数据快照为会员内容，最新一篇可免费查看。</p>' +
+        '<button class="dr-paywall-btn" id="drSubBtn">开通会员 · 查看套餐</button>' +
+        "</div>";
+      var btn = document.getElementById("drSubBtn");
+      if (btn) btn.addEventListener("click", goSubscribe);
+      renderSummary(null);
+      highlightHistory();
+      return;
+    }
     if (review.status === "failed") {
       titleEl.textContent = currentDate + " 生成失败";
       bodyEl.innerHTML = '<div class="no-data">' +
@@ -158,6 +175,11 @@
     }
     renderSummary(review.context);
     highlightHistory();
+  }
+
+  // 去订阅页(未登录时订阅页自身会先引导登录)
+  function goSubscribe() {
+    window.location.href = "/subscribe";
   }
 
   // ── 历史列表 ──────────────────────────────────────────────────────────
@@ -174,12 +196,16 @@
       wrap.innerHTML = '<div class="no-data">暂无历史复盘</div>';
       return;
     }
+    // 历史按日期倒序 → 第一条即最新一篇(对所有人免费)
+    latestDate = String(rows[0].review_date);
     wrap.innerHTML = rows.map(function (r) {
       var d = String(r.review_date);
+      var locked = !subscribed && d !== latestDate && r.status !== "failed";
       return '<div class="dr-history-item" data-date="' + esc(d) + '">' +
         '<span class="dr-history-date">' + esc(d) + "</span>" +
         '<span class="dr-history-title">' + esc(r.title || "") + "</span>" +
         (r.status === "failed" ? '<span class="dr-history-failed">生成失败</span>' : "") +
+        (locked ? '<span class="dr-history-lock">🔒</span>' : "") +
         "</div>";
     }).join("");
     wrap.querySelectorAll(".dr-history-item").forEach(function (el) {
@@ -220,17 +246,25 @@
     if (d && d !== currentDate) loadByDate(d);
   });
 
-  // ── 初始化 ────────────────────────────────────────────────────────────
-  var initDate = hashDate();
-  if (initDate) {
-    loadByDate(initDate);
-  } else {
-    fetchJson("/api/daily_review/latest")
-      .then(function (data) { renderReview(data.review); })
-      .catch(function () { renderReview(null); });
+  function refreshSub() {
+    return fetchJson("/api/subscription/status")
+      .then(function (s) { subscribed = !!s.subscribed; })
+      .catch(function () { subscribed = false; });
   }
 
-  fetchJson("/api/daily_review/history?limit=30")
-    .then(function (data) { renderHistory(data.history); })
-    .catch(function () { renderHistory([]); });
+  // ── 初始化 ────────────────────────────────────────────────────────────
+  // 先定订阅态，再渲染历史(锁标记依赖 subscribed)与正文
+  refreshSub().then(function () {
+    var initDate = hashDate();
+    if (initDate) {
+      loadByDate(initDate);
+    } else {
+      fetchJson("/api/daily_review/latest")
+        .then(function (data) { renderReview(data.review); })
+        .catch(function () { renderReview(null); });
+    }
+    fetchJson("/api/daily_review/history?limit=30")
+      .then(function (data) { renderHistory(data.history); })
+      .catch(function () { renderHistory([]); });
+  });
 })();

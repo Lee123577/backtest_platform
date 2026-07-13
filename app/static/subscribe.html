@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>开通会员</title>
+  <link rel="stylesheet" href="/static/css/style.css?v=20260709">
+  <link rel="stylesheet" href="/static/css/auth.css?v=20260710">
+  <link rel="stylesheet" href="/static/css/subscribe.css?v=20260710">
+</head>
+<body>
+
+<header>
+  <h1>📈 A股量化回测平台</h1>
+  <nav class="header-nav">
+    <a class="nav-btn" href="/" style="text-decoration:none;display:inline-flex;align-items:center;">单股策略</a>
+    <a class="nav-btn" href="/daily_review" style="text-decoration:none;display:inline-flex;align-items:center;">每日复盘</a>
+    <a class="nav-btn" href="/ai_hotsector" style="text-decoration:none;display:inline-flex;align-items:center;">AI热门板块</a>
+    <span id="spAuthSlot" style="display:inline-flex;align-items:center;"></span>
+  </nav>
+</header>
+
+<main>
+  <div class="panel">
+    <div class="panel-title">开通会员 <span class="tip-badge">仅供研究，不构成投资建议</span></div>
+    <div class="sub-status" id="subStatus">加载中…</div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">选择套餐</div>
+    <div class="plan-grid" id="planGrid"></div>
+    <div class="sub-msg" id="subMsg"></div>
+    <div class="sub-hint">
+      会员解锁：历史每日复盘完整正文与数据快照、AI 热门板块历史战绩与选股理由。
+      最新一篇复盘 / 当日热门板块始终免费。
+    </div>
+  </div>
+</main>
+
+<footer class="site-footer">
+  💡 需要定制策略 / 接入实盘？只提供代码，服务器需自行购买 · 第一单免费（目前限时全免）·
+  <a href="mailto:lihaichuan393@gmail.com">lihaichuan393@gmail.com</a>
+</footer>
+
+<script src="/static/js/auth.js?v=20260710"></script>
+<script src="/static/js/subscribe.js?v=20260710"></script>
+</body>
+</html>

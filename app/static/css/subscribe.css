@@ -1,0 +1,37 @@
+/* 订阅页 —— 会员状态 + 套餐卡片 */
+
+.sub-status {
+  font-size: 14px;
+  color: var(--txt, #e6e6e6);
+  line-height: 1.8;
+}
+.sub-status .sub-active { color: #2fa87d; font-weight: 600; }
+.sub-status .sub-inactive { color: var(--txt2, #9aa0aa); }
+
+.plan-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 14px;
+  margin: 6px 0 4px;
+}
+.plan-card {
+  border: 1px solid var(--border, #3a3f4b);
+  border-radius: 12px;
+  padding: 18px 16px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color .15s, transform .1s;
+}
+.plan-card:hover { border-color: #5b8def; transform: translateY(-2px); }
+.plan-label { font-size: 15px; font-weight: 600; margin-bottom: 8px; }
+.plan-price { font-size: 26px; color: #5b8def; font-weight: 700; }
+.plan-price small { font-size: 13px; color: var(--txt2, #9aa0aa); font-weight: 400; }
+.plan-days { font-size: 12px; color: var(--txt2, #9aa0aa); margin-top: 6px; }
+
+.sub-msg { min-height: 20px; font-size: 13px; margin: 12px 0 0; color: #5b8def; }
+.sub-hint {
+  margin-top: 14px;
+  font-size: 12px;
+  color: var(--txt2, #9aa0aa);
+  line-height: 1.7;
+}

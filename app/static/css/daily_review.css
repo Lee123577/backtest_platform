@@ -63,3 +63,24 @@
   white-space: nowrap;
 }
 .dr-history-failed { color: #e0a252; font-size: 12px; flex: none; }
+.dr-history-lock { font-size: 12px; flex: none; margin-left: auto; opacity: .7; }
+
+/* ── 付费墙(历史篇未订阅) ───────────────────────────────────────── */
+.dr-paywall {
+  text-align: center;
+  padding: 32px 20px;
+  border: 1px dashed var(--border, #3a3f4b);
+  border-radius: 12px;
+  background: rgba(91, 141, 239, .05);
+}
+.dr-paywall-title { font-size: 16px; font-weight: 600; margin-bottom: 8px; }
+.dr-paywall p { font-size: 13px; color: var(--txt2, #9aa0aa); margin: 0 0 16px; }
+.dr-paywall-btn {
+  border: none;
+  border-radius: 8px;
+  background: #5b8def;
+  color: #fff;
+  font-size: 14px;
+  padding: 10px 24px;
+  cursor: pointer;
+}

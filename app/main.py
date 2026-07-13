@@ -90,6 +90,10 @@ app.include_router(daily_review_router)
 from .auth.api import router as auth_router  # noqa: E402
 app.include_router(auth_router)
 
+# 订阅/订单(内容付费墙)
+from .subscription.api import router as subscription_router  # noqa: E402
+app.include_router(subscription_router)
+
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
@@ -138,6 +142,11 @@ async def page_ai_hotsector():
 @app.get("/daily_review", include_in_schema=False)
 async def page_daily_review():
     return FileResponse(str(STATIC_DIR / "daily_review.html"))
+
+
+@app.get("/subscribe", include_in_schema=False)
+async def page_subscribe():
+    return FileResponse(str(STATIC_DIR / "subscribe.html"))
 
 
 # ── Paper trading (实盘信号观察) ──────────────────────────────────────────────
