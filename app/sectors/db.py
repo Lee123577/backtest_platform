@@ -88,7 +88,12 @@ def index_pct(index_code: str, trade_date: _Date) -> Optional[float]:
 
 
 def st_avg_pct(trade_date: _Date) -> Optional[Dict[str, Any]]:
-    """ST 板块当日平均涨跌幅 + 只数。来自本地 stock_info.is_st,完全可靠。"""
+    """ST 板块当日平均涨跌幅 + 只数(本地数据)。
+
+    按**股票名**识别而不是 stock_info.is_st —— 该字段建表就有但从没被回填过
+    (实测全表 SUM(is_st)=0),用它会永远算出空;而 ST/*ST 本来就是交易所加在
+    名称前缀上的风险警示标识,名字匹配才是可靠口径(实测 248 只)。
+    """
     conn = _get_pool()
     if conn is None:
         return None
@@ -97,9 +102,10 @@ def st_avg_pct(trade_date: _Date) -> Optional[Dict[str, Any]]:
             """
             SELECT AVG(k.pct_change) AS avg_pct, COUNT(*) AS n
             FROM stock_kline k JOIN stock_info i ON i.code = k.code
-            WHERE k.trade_date=%s AND i.is_st=1 AND k.pct_change IS NOT NULL
+            WHERE k.trade_date=%s AND k.pct_change IS NOT NULL
+              AND i.name LIKE %s
             """,
-            (trade_date,),
+            (trade_date, "%ST%"),
         )
         row = cur.fetchone()
     if not row or row.get("avg_pct") is None:
