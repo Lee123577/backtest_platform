@@ -2,13 +2,12 @@
 板块排行榜业务逻辑
 ====================
 
-snapshot() —— 每交易日收盘后跑一次：抓东财行业+概念板块 → 映射到 6 大分组
-              → 落库。东财对同 IP 限流，所以只在这里抓，页面永不直连。
+snapshot() —— 每交易日收盘后跑一次：抓新浪行业+概念板块 → 映射到 6 大分组
+              → 落库。页面只读快照表，永不直连行情站。
 
-ranking()  —— 看板读的排行榜。分两类数据，可靠性不同，接口里如实分开标注：
-  · 6 大分组 / 题材概念 —— 来自东财快照(外部源，抓失败当天就没有)
-  · 权重蓝筹 / 中小成长 / ST —— 来自本地 index_daily / stock_info，完全可靠
-  · 红利 —— 用东财"红利/高股息"概念板块近似(本地无股息率数据)
+ranking()  —— 看板读的排行榜。数据可靠性分两类，接口里用 source 如实标注：
+  · 6 大分组 / 行业 / 题材概念 / 红利 —— 新浪快照(外部源，抓失败当天就没有)
+  · 权重蓝筹 / 中小成长 / ST —— 本地 index_daily / stock_kline，完全可靠
 """
 from __future__ import annotations
 
@@ -34,14 +33,14 @@ def _f(v) -> Optional[float]:
 
 
 def _prepare(raw_rows: List[Dict[str, Any]], with_group: bool) -> List[Dict[str, Any]]:
-    """东财原始行 → 落库行。按去级别后缀的板块名去重(申万Ⅱ/Ⅲ级同名只留一个,
-    否则分组均值会把同一个板块算两遍)。"""
+    """fetcher 行 → 落库行。按板块名去重(同名只留一个,否则分组均值会把
+    同一个板块算两遍)。"""
     seen = set()
     out: List[Dict[str, Any]] = []
     for r in raw_rows:
-        name = groups.normalize_board_name(r.get("f14"))
-        pct = _f(r.get("f3"))
-        code = str(r.get("f12") or "").strip()
+        name = groups.normalize_board_name(r.get("name"))
+        pct = _f(r.get("pct_change"))
+        code = str(r.get("code") or "").strip()
         if not name or not code or pct is None or name in seen:
             continue
         seen.add(name)
@@ -50,8 +49,8 @@ def _prepare(raw_rows: List[Dict[str, Any]], with_group: bool) -> List[Dict[str,
             "name": name,
             "grp": groups.classify(name) if with_group else None,
             "pct_change": pct,
-            "leader": (str(r.get("f128")).strip() or None) if r.get("f128") else None,
-            "leader_pct": _f(r.get("f136")),
+            "leader": r.get("leader"),
+            "leader_pct": _f(r.get("leader_pct")),
         })
     return out
 
@@ -108,7 +107,7 @@ def ranking(trade_date: Optional[_Date] = None, top_n: int = 10) -> Dict[str, An
                 "industry_bottom": [], "concept_top": [], "special": [],
                 "board_data_ok": False}
 
-    # ── 6 大分组(东财快照) ────────────────────────────────────────────────
+    # ── 6 大分组(新浪快照) ────────────────────────────────────────────────
     grp_rows = db.group_stats(trade_date)
     group_list = []
     for g in grp_rows:
@@ -145,7 +144,8 @@ def ranking(trade_date: Optional[_Date] = None, top_n: int = 10) -> Dict[str, An
         "name": "ST板块", "pct_change": st["avg_pct"] if st else None,
         "members": [], "note": f"{st['n']} 只" if st else None, "source": "local",
     })
-    # 红利:本地无股息率,用东财"红利/高股息"概念板块近似
+    # 红利:本地无股息率数据,用新浪"红利/高股息"概念板块近似(口径是新浪的,
+    # 不是我们自己算的);没有对应概念板块时如实给 null,不硬凑。
     dividend = [b for b in db.list_boards(trade_date, "concept")
                 if groups.is_dividend(b["board_name"])]
     special.append({
@@ -154,8 +154,8 @@ def ranking(trade_date: Optional[_Date] = None, top_n: int = 10) -> Dict[str, An
                        if dividend else None),
         "members": [{"name": b["board_name"],
                      "pct_change": round(float(b["pct_change"]), 2)} for b in dividend],
-        "note": "东财红利/高股息概念板块近似" if dividend else "无对应概念板块",
-        "source": "eastmoney",
+        "note": "新浪红利/高股息概念板块近似" if dividend else "无对应概念板块",
+        "source": "sina",
     })
 
     return {
@@ -165,7 +165,7 @@ def ranking(trade_date: Optional[_Date] = None, top_n: int = 10) -> Dict[str, An
         "industry_bottom": industry_bottom,
         "concept_top": concept_top,
         "special": special,
-        # 东财快照当天抓没抓到 —— 前端据此显示"板块数据缺失",不装作是 0%
+        # 当天快照抓没抓到 —— 前端据此显示"板块数据缺失",不装作是 0%
         "board_data_ok": bool(group_list or industry_top),
         "unmapped": db.unmapped_count(trade_date),
     }

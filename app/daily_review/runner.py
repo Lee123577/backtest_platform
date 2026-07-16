@@ -51,41 +51,38 @@ class ReviewResult:
 
 
 def fetch_sector_boards(top_n: int = 5) -> Optional[Dict[str, Any]]:
-    """收盘后拉一次东财行业板块快照,取涨跌幅前/后 top_n(含领涨股)。
+    """收盘后拉一次行业板块快照,取涨跌幅前/后 top_n(含领涨股)。
 
-    抓取复用 app/sectors/fetcher.py(多镜像轮询 + **翻页取全量**)。
-    历史教训:接口每页最多回 100 条而行业板块共约 496 个,早先只取第一页
-    (按涨跌幅降序)导致 losers 取到的是第 96~100 名"涨得少的",而非真正领跌。
-    现在拿到全量再排序,gainers/losers 都是真的。
+    数据源见 app/sectors/fetcher.py(新浪)。历史教训两条:
+      1. 原先用东财 push2 —— 它对云机房 IP 是封锁,这一节在生产上从上线起
+         就没成功过,每天都是"板块数据缺失"。现已随 sectors 模块改走新浪。
+      2. 原先只取接口第一页(降序 100 条/共 496),导致 losers 拿到的是第
+         96~100 名"涨得少的"而非真正领跌。新浪一次返回全量,不再有此问题。
 
-    唯一的外部数据源,且只反映"现在"的行情 —— 调用方必须保证 review_date
-    是当天(补写历史日期时传不进正确快照,直接给 None)。
-    失败返回 None:复盘照样生成,"板块聚焦"一节由模型如实写明无数据。
+    只反映"现在"的行情 —— 调用方必须保证 review_date 是当天(补写历史日期
+    时传不进正确快照,直接给 None)。失败返回 None:复盘照样生成,
+    "板块聚焦"一节由模型如实写明无数据。
     """
     from ..sectors.fetcher import fetch_industry
     from ..sectors.groups import normalize_board_name
 
-    raw = fetch_industry()
-    if not raw:
+    rows = fetch_industry()
+    if not rows:
         logger.warning("行业板块快照获取失败(复盘继续,不含板块数据)")
         return None
 
     boards: Dict[str, Dict[str, Any]] = {}
-    for r in raw:
-        try:
-            base = normalize_board_name(r["f14"])
-            if not base or base in boards:
-                continue
-            boards[base] = {
-                "name": base,
-                "pct_change": round(float(r["f3"]), 2),
-                "up": int(r["f104"]),
-                "down": int(r["f105"]),
-                "leader": str(r["f128"]),
-                "leader_pct": round(float(r["f136"]), 2),
-            }
-        except (KeyError, TypeError, ValueError):
-            continue  # 停牌等导致的 '-' 字段,整行跳过
+    for r in rows:
+        name = normalize_board_name(r.get("name"))
+        if not name or name in boards or r.get("pct_change") is None:
+            continue
+        boards[name] = {
+            "name": name,
+            "pct_change": r["pct_change"],
+            "stock_count": r.get("stock_count"),
+            "leader": r.get("leader"),
+            "leader_pct": r.get("leader_pct"),
+        }
     if not boards:
         return None
     logger.info("行业板块快照 ok:%d 个板块", len(boards))

@@ -4,7 +4,7 @@
 
 GET /api/sectors/ranking?date=YYYY-MM-DD  — 当日板块涨幅排行榜(默认最新交易日)
 
-数据来自每日快照表,不在此实时抓东财(它对同 IP 限流,且抓一次要翻十来页)。
+数据来自每日快照表,不在此实时抓行情站。
 快照由 scripts/sector_snapshot.py 定时生成(见 scheduler registry)。
 """
 from __future__ import annotations

@@ -18,7 +18,9 @@ from typing import Any, Dict, List
 # v2: context 增加指数近60日位置(hi/lo/pos_60d)、5日均量、全市场涨跌幅榜 Top10
 # v3: 增加行业板块快照(领涨领跌板块+领涨股)、连板梯队(近似口径);
 #     正文从四节扩到五节(新增"板块聚焦"),字数 400~700
-REVIEW_PROMPT_VERSION = "v3"
+# v4: 板块数据源东财→新浪(东财封锁云机房 IP,"板块聚焦"一节在生产上从上线起
+#     就没成功过);字段口径 up/down → stock_count
+REVIEW_PROMPT_VERSION = "v4"
 
 
 def review_messages(review_date: _Date, context: Dict[str, Any]) -> List[dict]:
@@ -51,7 +53,7 @@ def review_messages(review_date: _Date, context: Dict[str, Any]) -> List[dict]:
         "已知的公司主业/所属产业做定性归纳，但不要逐一罗列全部名单，"
         "也不要编造榜单之外的个股表现；\n"
         "- sector_boards：行业板块收盘快照，gainers/losers=涨幅前5/跌幅前5"
-        "板块(pct_change=板块涨跌幅%，up/down=板块内涨跌家数，"
+        "板块(pct_change=板块涨跌幅%，stock_count=板块成分股数，"
         "leader=领涨股及其涨跌幅)。为 null 表示当日板块数据缺失；\n"
         "- limit_up_ladder：涨停梯队近似统计(口径：单日涨幅≥9.8%，"
         "含大涨未封板，非严格涨停口径，表述时用'涨停及准涨停'类措辞)。"

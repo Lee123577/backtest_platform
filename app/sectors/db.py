@@ -3,9 +3,8 @@
 ==================
 
 1 张表：
-  sector_snapshot — 每交易日一份东财板块快照(行业 + 概念),含涨跌幅与
-                    映射到的 6 大分组。看板只读这张表，不在页面加载时
-                    去抓东财 —— 东财对同 IP 限流，且抓一次要翻十来页。
+  sector_snapshot — 每交易日一份板块快照(行业 + 概念),含涨跌幅与映射到的
+                    6 大分组。看板只读这张表,不在页面加载时抓行情站。
 
 本地可靠数据(指数/ST)不进这张表，接口里直接从 index_daily / stock_kline 现算。
 """
@@ -24,8 +23,8 @@ DDL_STATEMENTS = [
     CREATE TABLE IF NOT EXISTS sector_snapshot (
         trade_date  DATE         NOT NULL,
         board_type  ENUM('industry','concept') NOT NULL,
-        board_code  VARCHAR(16)  NOT NULL COMMENT '东财板块代码(f12)',
-        board_name  VARCHAR(40)  NOT NULL COMMENT '已去申万Ⅱ/Ⅲ级后缀',
+        board_code  VARCHAR(16)  NOT NULL COMMENT '行情源的板块代码',
+        board_name  VARCHAR(40)  NOT NULL COMMENT '板块名(已去级别后缀)',
         grp         VARCHAR(16)  COMMENT '映射到的6大分组;归不了类为 NULL',
         pct_change  DECIMAL(8,3),
         leader      VARCHAR(20)  COMMENT '领涨股',
@@ -34,7 +33,7 @@ DDL_STATEMENTS = [
         PRIMARY KEY (trade_date, board_type, board_code),
         KEY idx_date_grp (trade_date, grp),
         KEY idx_date_type_pct (trade_date, board_type, pct_change)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='每日板块涨跌快照(东财)'
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='每日板块涨跌快照(新浪)'
     """,
 ]
 
