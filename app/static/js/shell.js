@@ -28,7 +28,8 @@
     { title: "会员", items: [
       { label: "购买订阅", href: "/subscribe", ico: "💎" },
     ]},
-    { title: "系统", items: [
+    // 运维页:仅管理员 IP 可见(默认 hidden,确认身份后才显示,避免闪现)
+    { title: "系统", adminOnly: true, items: [
       { label: "定时任务", href: "/tasks", ico: "⏱️" },
     ]},
   ];
@@ -56,12 +57,16 @@
     var html = '<a class="spx-brand" href="/dashboard">' + esc(BRAND) + "</a>" +
       '<nav class="spx-nav">';
     NAV.forEach(function (g) {
-      html += '<div class="spx-group-title">' + esc(g.title) + "</div>";
+      // adminOnly 组默认 hidden,身份确认后才 reveal(见 revealAdminNav)
+      html += '<div class="spx-group"' +
+        (g.adminOnly ? ' data-admin-only="1" hidden' : "") + ">" +
+        '<div class="spx-group-title">' + esc(g.title) + "</div>";
       g.items.forEach(function (it) {
         html += '<a class="spx-link' + (isActive(it.href) ? " active" : "") +
           '" href="' + esc(it.href) + '">' +
           '<span class="spx-ico">' + it.ico + "</span><span>" + esc(it.label) + "</span></a>";
       });
+      html += "</div>";
     });
     html += "</nav>";
     aside.innerHTML = html;
@@ -125,6 +130,21 @@
       .catch(function () { renderAccount(null); });
   }
 
+  // ── 管理员菜单 ────────────────────────────────────────────────────────
+  // 运维页(定时任务)只给管理员 IP 看:普通用户/访客看了没意义,还会暴露
+  // 内部任务名与执行日志。白名单为空时(全新部署)放行 —— 否则没人看得到
+  // 入口,也就无法走 admin_ip 的首次自举。
+  function revealAdminNav() {
+    fetch("/api/admin/ip/me")
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (!j.is_admin && !j.whitelist_empty) return;
+        document.querySelectorAll('.spx-group[data-admin-only]')
+          .forEach(function (el) { el.hidden = false; });
+      })
+      .catch(function () { /* 拿不到就保持隐藏 */ });
+  }
+
   // ── 组装 ──────────────────────────────────────────────────────────────
   function mount() {
     if (document.body.classList.contains("spx-shell")) return;
@@ -152,6 +172,7 @@
     });
 
     refreshAccount();
+    revealAdminNav();
   }
 
   if (document.readyState === "loading") {

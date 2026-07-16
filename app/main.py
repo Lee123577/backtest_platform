@@ -486,7 +486,10 @@ def api_tasks_summary():
 def api_tasks_runs(
     task: Optional[str] = None, status: Optional[str] = None,
     limit: int = 30, offset: int = 0,
+    _admin: str = Depends(paper_admin_ip.require_admin_ip),
 ):
+    """运行明细仅管理员可读:内含 stdout/stderr 尾巴与报错细节，不对外。
+    (/api/tasks/summary 保持公开 —— 实盘观察页要用它显示扫描状态徽章)"""
     try:
         scheduler_db.ensure_table()
     except Exception:

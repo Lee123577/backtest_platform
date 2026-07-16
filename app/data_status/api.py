@@ -21,13 +21,20 @@ from __future__ import annotations
 import logging
 from datetime import date as _Date, datetime as _DT, timedelta
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from ..data.calendar import is_trading_day
 from ..data.data_loader import _get_pool
+from ..paper_trading import admin_ip as paper_admin_ip
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/data_status", tags=["data_status"])
+
+# 运维数据(入库详情/站点访问统计)仅管理员 IP 可读 —— 整个 router 统一加依赖，
+# 只有 /tasks 页在用，不影响其他页面。
+router = APIRouter(
+    prefix="/api/data_status", tags=["data_status"],
+    dependencies=[Depends(paper_admin_ip.require_admin_ip)],
+)
 
 # A 股 15:00 收盘。之前 target = 前一交易日（看 T-1 入库情况），
 # 之后 target = 当日（如果是交易日，看 T 入库情况）。

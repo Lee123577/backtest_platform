@@ -498,9 +498,29 @@ async function triggerDailyRefresh() {
 
 // ── 启动 ────────────────────────────────────────────────────────────────────
 
+// 非管理员直接访问 /tasks:整页挡掉，不拉任何数据、不起轮询。
+// 运维页会暴露内部任务名与执行日志(stdout/stderr/报错细节)，不对外。
+function renderNoPermission() {
+  const main = document.querySelector('main');
+  if (!main) return;
+  main.innerHTML = `
+    <div class="panel">
+      <div class="panel-title">无访问权限</div>
+      <div class="no-data" style="padding:32px 0;text-align:center;line-height:1.9;">
+        「定时任务」是运维页面，仅限管理员访问。<br>
+        <span style="font-size:12px;color:#8a929c;">你的 IP：${escapeHtml(_adminInfo.ip || '—')}</span>
+      </div>
+    </div>`;
+}
+
 async function load() {
   // 权限先拉，避免按钮一闪一锁
   await loadAdminStatus();
+  // 白名单为空时放行(全新部署的自举场景，见 admin_ip 模块说明)
+  if (!_adminInfo.is_admin && !_adminInfo.whitelist_empty) {
+    renderNoPermission();
+    return;
+  }
   loadSummary();
   loadRuns();
   loadDataStatus();
