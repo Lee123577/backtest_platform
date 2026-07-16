@@ -167,6 +167,11 @@ async def page_dashboard():
     return FileResponse(str(STATIC_DIR / "dashboard.html"))
 
 
+@app.get("/my_board", include_in_schema=False)
+async def page_my_board():
+    return FileResponse(str(STATIC_DIR / "my_board.html"))
+
+
 # ── Paper trading (实盘信号观察) ──────────────────────────────────────────────
 
 from .json_safe import json_safe as _json_safe  # noqa: E402
@@ -713,6 +718,29 @@ def api_kline(response: Response, code: str, start_date: str,
 
     records = _kline_records(df)
     return {"code": code, "total": len(records), "data": records}
+
+
+@app.get("/api/index/{index_code}/kline")
+def api_index_kline(response: Response, index_code: str,
+                    start_date: str, end_date: str):
+    """指数日线(index_daily 表)。
+
+    注意不能拿 /api/stock/{code}/kline 取指数：000001 在个股表里是平安银行，
+    在指数表里才是上证综指，两张表同码不同物。
+    """
+    _validate_date_range(start_date, end_date)
+    index_code = (index_code or "").strip()
+    df = get_index_history(index_code, start_date, end_date)
+    if df is None or df.empty:
+        raise HTTPException(404, f"指数 {index_code} 无数据")
+
+    if _date.fromisoformat(end_date) < _date.today():
+        response.headers["Cache-Control"] = "public, max-age=3600"
+    else:
+        response.headers["Cache-Control"] = "public, max-age=60"
+
+    records = _kline_records(df)
+    return {"index_code": index_code, "total": len(records), "data": records}
 
 
 class StrategyConfig(BaseModel):

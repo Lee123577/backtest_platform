@@ -1,0 +1,68 @@
+/* 我的数据看板 */
+
+.mb-hint {
+  font-size: 12px;
+  color: var(--txt2, #8a929c);
+  margin-bottom: 4px;
+}
+
+.mb-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  gap: 16px;
+}
+@media (max-width: 760px) {
+  .mb-grid { grid-template-columns: 1fr; }
+}
+
+.mb-card {
+  background: var(--bg, #fff);
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 12px;
+  padding: 18px 20px 12px;
+}
+
+.mb-card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.mb-name { font-size: 16px; font-weight: 700; color: var(--txt, #24292f); }
+.mb-code { font-size: 12px; color: var(--txt2, #8a929c); font-variant-numeric: tabular-nums; }
+.mb-tag {
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 4px;
+  background: var(--bg2, #f6f8fa);
+  color: var(--txt2, #8a929c);
+}
+
+.mb-quote {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin: 10px 0 2px;
+}
+.mb-close {
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+.mb-chg { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.mb-up   { color: var(--up, #cf222e); }
+.mb-down { color: var(--down, #1a7f37); }
+.mb-flat { color: var(--txt2, #8a929c); }
+
+.mb-meta { font-size: 12px; color: var(--txt2, #8a929c); margin-bottom: 8px; }
+
+.mb-chart { width: 100%; height: 220px; }
+
+.mb-loading, .mb-error {
+  font-size: 13px;
+  color: var(--txt2, #8a929c);
+  padding: 30px 0;
+  text-align: center;
+}
+.mb-error { color: #e5484d; }
