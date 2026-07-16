@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="/static/css/auth.css?v=20260714">
   <link rel="stylesheet" href="/static/css/feedback.css?v=20260713">
   <link rel="stylesheet" href="/static/css/shell.css?v=20260714">
-  <link rel="stylesheet" href="/static/css/my_board.css?v=20260714">
+  <link rel="stylesheet" href="/static/css/my_board.css?v=20260717">
 </head>
 <body>
 
@@ -23,6 +23,21 @@
 <main>
   <div class="mb-hint">我关注的标的 · 近半年走势（数据来自本站行情库，仅供研究，不构成投资建议）</div>
   <div class="mb-grid" id="mbGrid"></div>
+
+  <!-- 板块涨幅排行榜 -->
+  <div class="panel">
+    <div class="panel-title">
+      板块涨幅排行榜 <span id="rkDate"></span>
+      <span class="tip-badge">仅供研究，不构成投资建议</span>
+    </div>
+    <div class="rk-tabs" id="rkTabs">
+      <button class="rk-tab active" data-tab="groups">六大板块</button>
+      <button class="rk-tab" data-tab="industry">行业板块</button>
+      <button class="rk-tab" data-tab="concept">题材概念</button>
+      <button class="rk-tab" data-tab="special">特殊概念</button>
+    </div>
+    <div id="rkBody"><div class="no-data">加载中…</div></div>
+  </div>
 </main>
 
 <footer class="site-footer">
@@ -33,7 +48,7 @@
 <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
 <script src="/static/js/auth.js?v=20260714"></script>
 <script src="/static/js/feedback.js?v=20260713"></script>
-<script src="/static/js/my_board.js?v=20260714"></script>
+<script src="/static/js/my_board.js?v=20260717"></script>
 <script src="/static/js/shell.js?v=20260714"></script>
 </body>
 </html>

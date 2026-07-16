@@ -118,6 +118,15 @@ TASKS: Dict[str, TaskDef] = {
         "depends_on": "daily_update",
         "description": "AI 每日市场复盘生成(17:45,依赖daily_update)",
     },
+    # 板块快照:15:10(收盘后)抓东财行业/概念板块涨跌落库,供看板排行榜读取。
+    # 不依赖 daily_update —— 板块涨跌来自东财实时接口,与本地 K 线入库无关。
+    # 东财对同 IP 限流,失败当天就没有板块数据(排行榜会如实显示缺失),不阻塞其他任务。
+    "sector_snapshot": {
+        "cmd": ["python", "scripts/sector_snapshot.py"],
+        "schedule": "weekday:15:10",
+        "timeout_sec": 5 * 60,
+        "description": "板块涨跌快照(东财行业/概念,15:10 收盘后)",
+    },
     # 自选盯盘:17:20 对订阅用户的自选股×盯盘策略跑当日信号,命中落站内提醒。
     # 只依赖 daily_update(当日K线已入库);纯本地计算,不联网。
     "watchlist_alert_scan": {

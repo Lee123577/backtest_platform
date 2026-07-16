@@ -50,67 +50,31 @@ class ReviewResult:
     error_msg: Optional[str] = None
 
 
-# push2 对云机房 IP 的封锁是"按子域"的且随时间轮换(实测同一时刻
-# 17/82 通、主域/33 拒连) —— 多备几个镜像轮询,大幅提高单次成功率
-_BOARD_HOSTS = (
-    "17.push2.eastmoney.com",
-    "82.push2.eastmoney.com",
-    "5.push2.eastmoney.com",
-    "48.push2.eastmoney.com",
-    "push2.eastmoney.com",
-)
-
-
 def fetch_sector_boards(top_n: int = 5) -> Optional[Dict[str, Any]]:
     """收盘后拉一次东财行业板块快照,取涨跌幅前/后 top_n(含领涨股)。
 
-    直连 push2 clist 接口(不走 akshare:它写死单一主机、无备用),
-    requests trust_env=False + 浏览器 UA —— 与 data/realtime.py 同一套
-    绕代理/防拦截模式;一次 pz=500 拿全 496 个板块,无需分页。
+    抓取复用 app/sectors/fetcher.py(多镜像轮询 + **翻页取全量**)。
+    历史教训:接口每页最多回 100 条而行业板块共约 496 个,早先只取第一页
+    (按涨跌幅降序)导致 losers 取到的是第 96~100 名"涨得少的",而非真正领跌。
+    现在拿到全量再排序,gainers/losers 都是真的。
 
     唯一的外部数据源,且只反映"现在"的行情 —— 调用方必须保证 review_date
     是当天(补写历史日期时传不进正确快照,直接给 None)。
     失败返回 None:复盘照样生成,"板块聚焦"一节由模型如实写明无数据。
     """
-    import requests
+    from ..sectors.fetcher import fetch_industry
+    from ..sectors.groups import normalize_board_name
 
-    # f14=板块名称 f3=涨跌幅 f104/f105=上涨/下跌家数 f128/f136=领涨股票/其涨跌幅
-    params = {
-        "pn": 1, "pz": 500, "po": 1, "np": 1, "fltt": 2, "invt": 2,
-        "fid": "f3", "fs": "m:90 t:2 f:!50",
-        "fields": "f3,f12,f14,f104,f105,f128,f136",
-    }
-    sess = requests.Session()
-    sess.trust_env = False  # 线上环境代理会拦 push2(同 data/realtime.py)
-    sess.headers.update({
-        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                       "AppleWebKit/537.36 (KHTML, like Gecko) "
-                       "Chrome/126.0 Safari/537.36"),
-        "Referer": "https://quote.eastmoney.com/",
-    })
-    diff = None
-    hit_host = None
-    for host in _BOARD_HOSTS:
-        try:
-            resp = sess.get(f"https://{host}/api/qt/clist/get",
-                            params=params, timeout=15)
-            diff = (resp.json().get("data") or {}).get("diff")
-            if diff:
-                hit_host = host
-                break
-        except Exception as e:
-            logger.info("板块快照 %s 失败,换下一个镜像: %s", host, e)
-    if not diff:
-        logger.warning("行业板块快照获取失败(复盘继续,不含板块数据):所有镜像均不可用")
+    raw = fetch_industry()
+    if not raw:
+        logger.warning("行业板块快照获取失败(复盘继续,不含板块数据)")
         return None
 
     boards: Dict[str, Dict[str, Any]] = {}
-    for r in diff:
+    for r in raw:
         try:
-            name = str(r["f14"])
-            # 申万Ⅱ/Ⅲ级同名近重复(如 航天装备Ⅱ/Ⅲ) → 去掉级别后缀后去重
-            base = name.rstrip("ⅡⅢ")
-            if base in boards:
+            base = normalize_board_name(r["f14"])
+            if not base or base in boards:
                 continue
             boards[base] = {
                 "name": base,
@@ -124,7 +88,7 @@ def fetch_sector_boards(top_n: int = 5) -> Optional[Dict[str, Any]]:
             continue  # 停牌等导致的 '-' 字段,整行跳过
     if not boards:
         return None
-    logger.info("行业板块快照 ok:%d 个板块(via %s)", len(boards), hit_host)
+    logger.info("行业板块快照 ok:%d 个板块", len(boards))
     ranked = sorted(boards.values(), key=lambda b: b["pct_change"], reverse=True)
     return {
         "gainers": ranked[:top_n],

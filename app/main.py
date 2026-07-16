@@ -102,6 +102,10 @@ app.include_router(feedback_router)
 from .watchlist.api import router as watchlist_router  # noqa: E402
 app.include_router(watchlist_router)
 
+# 板块涨幅排行榜(读每日快照表)
+from .sectors.api import router as sectors_router  # noqa: E402
+app.include_router(sectors_router)
+
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
