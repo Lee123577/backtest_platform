@@ -1,5 +1,12 @@
 /* 我的数据看板 */
 
+:root {
+  /* 复用站点全局强调色(style.css --accent),避免这里另起一个色号导致
+     跟其他页面的蓝色对不上。 */
+  --mb-accent: var(--accent, #0969da);
+  --mb-accent-rgb: 9, 105, 218;
+}
+
 .mb-hint-row {
   display: flex;
   align-items: center;
@@ -24,21 +31,21 @@
   cursor: pointer;
   transition: border-color 120ms ease-out, color 120ms ease-out;
 }
-.mb-reset-btn:hover { border-color: #2b6fe0; color: #2b6fe0; }
+.mb-reset-btn:hover { border-color: var(--mb-accent); color: var(--mb-accent); }
 
 .mb-add-wrap { position: relative; flex: none; }
 .mb-add-btn {
   font-size: 12px;
   font-weight: 600;
-  color: #2b6fe0;
-  background: rgba(43, 111, 224, .08);
-  border: 1px solid rgba(43, 111, 224, .25);
+  color: var(--mb-accent);
+  background: rgba(var(--mb-accent-rgb), .08);
+  border: 1px solid rgba(var(--mb-accent-rgb), .25);
   border-radius: 6px;
   padding: 4px 12px;
   cursor: pointer;
   transition: background-color 120ms ease-out;
 }
-.mb-add-btn:hover { background: rgba(43, 111, 224, .16); }
+.mb-add-btn:hover { background: rgba(var(--mb-accent-rgb), .16); }
 .mb-add-pop {
   position: absolute;
   right: 0;
@@ -106,22 +113,22 @@
   background: var(--bg, #fff);
   border: 1px solid var(--border, #d0d7de);
   border-radius: 14px;
-  padding: 16px 20px 14px;
-  box-shadow: 0 1px 2px rgba(27, 31, 36, .04);
+  padding: 16px 20px;
+  box-shadow: 0 1px 3px rgba(27, 31, 36, .06), 0 1px 2px rgba(27, 31, 36, .04);
   transition: box-shadow 160ms ease-out, border-color 160ms ease-out;
 }
 .mb-grid.mb-canvas-mode .mb-card:hover {
-  box-shadow: 0 8px 22px rgba(27, 31, 36, .10);
+  box-shadow: 0 6px 16px rgba(27, 31, 36, .08), 0 2px 6px rgba(27, 31, 36, .05);
   border-color: #c4cdd6;
 }
 .mb-grid.mb-canvas-mode .mb-card.dragging {
   box-shadow: 0 14px 32px rgba(27, 31, 36, .20);
-  border-color: #2b6fe0;
+  border-color: var(--mb-accent);
   transform: scale(1.01);
 }
 .mb-grid.mb-canvas-mode .mb-card.resizing {
   box-shadow: 0 14px 32px rgba(27, 31, 36, .20);
-  border-color: #2b6fe0;
+  border-color: var(--mb-accent);
 }
 
 .mb-card-head {
@@ -145,22 +152,24 @@
   background: var(--bg2, #f6f8fa);
   color: var(--txt2, #8a929c);
 }
-.mb-tag--index { background: rgba(43, 111, 224, .10); color: #2b6fe0; }
+.mb-tag--index { background: rgba(var(--mb-accent-rgb), .10); color: var(--mb-accent); }
 .mb-tag--stock { background: var(--bg2, #f6f8fa); color: var(--txt2, #8a929c); }
 
 .mb-switch-btn {
   flex: none;
   font-size: 12px;
   font-weight: 600;
-  color: #2b6fe0;
-  background: rgba(43, 111, 224, .08);
+  color: var(--mb-accent);
+  background: rgba(var(--mb-accent-rgb), .08);
   border: none;
   border-radius: 6px;
   padding: 4px 10px;
   cursor: pointer;
   transition: background-color 120ms ease-out;
 }
-.mb-switch-btn:hover { background: rgba(43, 111, 224, .16); }
+.mb-switch-btn:hover { background: rgba(var(--mb-accent-rgb), .16); }
+/* 空槽位已经有卡片正中的"+ 选择股票或指数"入口,头部这个按钮就不用重复出现了 */
+.mb-card--empty .mb-switch-btn { display: none; }
 
 .mb-card-close {
   flex: none;
@@ -189,7 +198,7 @@
   touch-action: none;
   transition: background-color 120ms ease-out, color 120ms ease-out;
 }
-.mb-drag-handle:hover { background: var(--bg2, #f6f8fa); color: #2b6fe0; }
+.mb-drag-handle:hover { background: var(--bg2, #f6f8fa); color: var(--mb-accent); }
 .mb-card.dragging .mb-drag-handle { cursor: grabbing; }
 
 /* 卡片右下角调整大小的把手,仅画布模式下显示 */
@@ -223,7 +232,7 @@
 /* 拖动时的对齐吸附参考线 */
 .mb-guide {
   position: absolute;
-  background: #2b6fe0;
+  background: var(--mb-accent);
   pointer-events: none;
   z-index: 5;
 }
@@ -280,15 +289,15 @@
 .mb-empty-btn {
   font-size: 13px;
   font-weight: 600;
-  color: #2b6fe0;
-  background: rgba(43, 111, 224, .08);
-  border: 1px dashed rgba(43, 111, 224, .35);
+  color: var(--mb-accent);
+  background: rgba(var(--mb-accent-rgb), .08);
+  border: 1px dashed rgba(var(--mb-accent-rgb), .35);
   border-radius: 8px;
   padding: 8px 16px;
   cursor: pointer;
   transition: background-color 120ms ease-out;
 }
-.mb-empty-btn:hover { background: rgba(43, 111, 224, .16); }
+.mb-empty-btn:hover { background: rgba(var(--mb-accent-rgb), .16); }
 
 /* ── 搜索切换弹层 ──────────────────────────────────────────────────── */
 
@@ -316,8 +325,8 @@
   transition: border-color 120ms ease-out, box-shadow 120ms ease-out;
 }
 .mb-search-input:focus {
-  border-color: #2b6fe0;
-  box-shadow: 0 0 0 3px rgba(43, 111, 224, .12);
+  border-color: var(--mb-accent);
+  box-shadow: 0 0 0 3px rgba(var(--mb-accent-rgb), .12);
 }
 .mb-search-results { max-height: 220px; overflow-y: auto; margin-top: 6px; }
 .mb-search-hint {
@@ -378,9 +387,11 @@
   border-radius: 6px; font-size: 12px; font-weight: 700;
   background: var(--bg2, #f6f8fa); color: var(--txt2, #8a929c);
 }
-.rk-no.top1 { background: #e5484d; color: #fff; }
-.rk-no.top2 { background: #f08c00; color: #fff; }
-.rk-no.top3 { background: #eaa800; color: #fff; }
+/* 金/银/铜色,故意跟上面 rk-up(涨,红)/rk-down(跌,绿)区分开,
+   避免"第一名"徽章跟涨跌颜色语义混在一起。 */
+.rk-no.top1 { background: #c9971f; color: #fff; }
+.rk-no.top2 { background: #92a0ac; color: #fff; }
+.rk-no.top3 { background: #ad7846; color: #fff; }
 .rk-name { flex: 1; min-width: 0; font-size: 14px; }
 .rk-sub { font-size: 11px; color: var(--txt2, #8a929c); margin-top: 2px; }
 .rk-pct { flex: none; font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }

@@ -86,6 +86,8 @@
 
   function renderSlotTitle(slot) {
     $("mbTitle_" + slot.id).innerHTML = titleHtml(slotState[slot.id]);
+    var cardEl = $("mbCard_" + slot.id);
+    if (cardEl) cardEl.classList.toggle("mb-card--empty", !slotState[slot.id]);
   }
 
   function renderSlotBody(slot) {
