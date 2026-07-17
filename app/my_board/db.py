@@ -76,3 +76,39 @@ def save_layout(user_id: int, layout: Dict[str, Any]) -> None:
             """,
             (user_id, payload),
         )
+
+
+# ── 股票/指数搜索(切换卡片用) ────────────────────────────────────────────
+
+# 指数没有一张可搜的全量表,index_daily 里能查到日线的常用指数就这几个
+# (与 main.py 的 _BENCHMARK_NAMES 同源,基准下拉用的也是这份)。
+KNOWN_INDICES = [
+    ("000300", "沪深300"), ("000905", "中证500"), ("000852", "中证1000"),
+    ("000016", "上证50"), ("000001", "上证指数"), ("399006", "创业板指"),
+    ("399303", "国证2000"),
+]
+
+
+def search_stocks(q: str, limit: int = 10) -> list:
+    """个股(stock_info,按代码/名称模糊匹配)+ 指数(固定名单)合并搜索。"""
+    q = (q or "").strip()
+    if not q:
+        return []
+
+    out = []
+    for code, name in KNOWN_INDICES:
+        if q in code or q in name:
+            out.append({"code": code, "name": name, "type": "index"})
+
+    conn = _get_pool()
+    if conn is not None:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT code, name FROM stock_info "
+                "WHERE code LIKE %s OR name LIKE %s ORDER BY code LIMIT %s",
+                (f"%{q}%", f"%{q}%", max(1, min(limit, 20))),
+            )
+            for r in cur.fetchall():
+                out.append({"code": r["code"], "name": r["name"], "type": "stock"})
+
+    return out[:limit]

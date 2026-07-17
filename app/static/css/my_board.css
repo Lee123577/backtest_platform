@@ -22,6 +22,7 @@
   border-radius: 6px;
   padding: 4px 12px;
   cursor: pointer;
+  transition: border-color 120ms ease-out, color 120ms ease-out;
 }
 .mb-reset-btn:hover { border-color: #2b6fe0; color: #2b6fe0; }
 
@@ -32,12 +33,12 @@
   position: relative;
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
-  gap: 16px;
+  gap: 18px;
 }
 .mb-grid.mb-canvas-mode .mb-card {
   position: absolute;
   width: 420px;
-  transition: left 120ms ease-out, top 120ms ease-out;
+  transition: left 120ms ease-out, top 120ms ease-out, box-shadow 160ms ease-out, transform 160ms ease-out;
 }
 .mb-grid.mb-canvas-mode .mb-card.dragging { transition: none; }
 
@@ -45,46 +46,78 @@
   .mb-grid { display: grid; grid-template-columns: 1fr; gap: 16px; }
   .mb-grid.mb-canvas-mode { height: auto !important; }
   .mb-grid.mb-canvas-mode .mb-card { position: static !important; width: auto !important; }
-  .mb-drag-handle, .mb-reset-btn { display: none; }
+  .mb-drag-handle, .mb-reset-btn, .mb-switch-btn { display: none; }
 }
 
 .mb-card {
+  position: relative;
   background: var(--bg, #fff);
   border: 1px solid var(--border, #d0d7de);
-  border-radius: 12px;
-  padding: 18px 20px 12px;
+  border-radius: 14px;
+  padding: 16px 20px 14px;
+  box-shadow: 0 1px 2px rgba(27, 31, 36, .04);
+  transition: box-shadow 160ms ease-out, border-color 160ms ease-out;
+}
+.mb-grid.mb-canvas-mode .mb-card:hover {
+  box-shadow: 0 8px 22px rgba(27, 31, 36, .10);
+  border-color: #c4cdd6;
 }
 .mb-grid.mb-canvas-mode .mb-card.dragging {
-  box-shadow: 0 10px 28px rgba(27, 31, 36, .18);
+  box-shadow: 0 14px 32px rgba(27, 31, 36, .20);
   border-color: #2b6fe0;
+  transform: scale(1.01);
 }
 
 .mb-card-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+  padding-bottom: 10px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border, #eaeef2);
 }
-.mb-name { font-size: 16px; font-weight: 700; color: var(--txt, #24292f); }
+.mb-card-title { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.mb-name { font-size: 16px; font-weight: 700; color: var(--txt, #24292f); letter-spacing: -.01em; }
+.mb-name--empty { color: var(--txt2, #8a929c); font-weight: 600; }
 .mb-code { font-size: 12px; color: var(--txt2, #8a929c); font-variant-numeric: tabular-nums; }
 .mb-tag {
   font-size: 11px;
+  font-weight: 600;
   padding: 1px 8px;
   border-radius: 4px;
   background: var(--bg2, #f6f8fa);
   color: var(--txt2, #8a929c);
 }
+.mb-tag--index { background: rgba(43, 111, 224, .10); color: #2b6fe0; }
+.mb-tag--stock { background: var(--bg2, #f6f8fa); color: var(--txt2, #8a929c); }
+
+.mb-switch-btn {
+  flex: none;
+  font-size: 12px;
+  font-weight: 600;
+  color: #2b6fe0;
+  background: rgba(43, 111, 224, .08);
+  border: none;
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: background-color 120ms ease-out;
+}
+.mb-switch-btn:hover { background: rgba(43, 111, 224, .16); }
+
 .mb-drag-handle {
   margin-left: auto;
   flex: none;
   font-size: 15px;
   line-height: 1;
-  padding: 3px 6px;
-  border-radius: 4px;
+  padding: 4px 7px;
+  border-radius: 6px;
   color: var(--txt2, #8a929c);
   cursor: grab;
   user-select: none;
   touch-action: none;
+  transition: background-color 120ms ease-out, color 120ms ease-out;
 }
 .mb-drag-handle:hover { background: var(--bg2, #f6f8fa); color: #2b6fe0; }
 .mb-card.dragging .mb-drag-handle { cursor: grabbing; }
@@ -99,26 +132,38 @@
 .mb-guide.v { width: 1px; top: 0; bottom: 0; }
 .mb-guide.h { height: 1px; left: 0; right: 0; }
 
+/* ── 行情卡片:报价 / 图表 ──────────────────────────────────────────── */
+
 .mb-quote {
   display: flex;
   align-items: baseline;
-  gap: 12px;
-  margin: 10px 0 2px;
+  gap: 10px;
+  margin: 12px 0 4px;
 }
 .mb-close {
   font-size: 30px;
   font-weight: 700;
   line-height: 1.1;
   font-variant-numeric: tabular-nums;
+  color: var(--txt, #24292f);
 }
-.mb-chg { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.mb-chg-chip {
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  padding: 2px 8px;
+  border-radius: 6px;
+}
+.mb-chg-chip.mb-up   { color: var(--up, #cf222e); background: rgba(207, 34, 46, .10); }
+.mb-chg-chip.mb-down { color: var(--down, #1a7f37); background: rgba(26, 127, 55, .10); }
+.mb-chg-chip.mb-flat { color: var(--txt2, #8a929c); background: var(--bg2, #f6f8fa); }
 .mb-up   { color: var(--up, #cf222e); }
 .mb-down { color: var(--down, #1a7f37); }
 .mb-flat { color: var(--txt2, #8a929c); }
 
 .mb-meta { font-size: 12px; color: var(--txt2, #8a929c); margin-bottom: 8px; }
 
-.mb-chart { width: 100%; height: 220px; }
+.mb-chart { width: 100%; height: 234px; }
 
 .mb-loading, .mb-error {
   font-size: 13px;
@@ -127,6 +172,81 @@
   text-align: center;
 }
 .mb-error { color: #e5484d; }
+
+/* 未选择股票的空槽位 */
+.mb-empty-slot {
+  padding: 40px 0;
+  text-align: center;
+}
+.mb-empty-slot p { margin: 0 0 12px; font-size: 13px; color: var(--txt2, #8a929c); }
+.mb-empty-btn {
+  font-size: 13px;
+  font-weight: 600;
+  color: #2b6fe0;
+  background: rgba(43, 111, 224, .08);
+  border: 1px dashed rgba(43, 111, 224, .35);
+  border-radius: 8px;
+  padding: 8px 16px;
+  cursor: pointer;
+  transition: background-color 120ms ease-out;
+}
+.mb-empty-btn:hover { background: rgba(43, 111, 224, .16); }
+
+/* ── 搜索切换弹层 ──────────────────────────────────────────────────── */
+
+.mb-search-pop {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  top: 52px;
+  z-index: 20;
+  background: var(--bg, #fff);
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(27, 31, 36, .16);
+  padding: 10px;
+}
+.mb-search-pop[hidden] { display: none; }
+.mb-search-input {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 13px;
+  padding: 7px 10px;
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 6px;
+  outline: none;
+  transition: border-color 120ms ease-out, box-shadow 120ms ease-out;
+}
+.mb-search-input:focus {
+  border-color: #2b6fe0;
+  box-shadow: 0 0 0 3px rgba(43, 111, 224, .12);
+}
+.mb-search-results { max-height: 220px; overflow-y: auto; margin-top: 6px; }
+.mb-search-hint {
+  font-size: 12px;
+  color: var(--txt2, #8a929c);
+  padding: 10px 4px;
+  text-align: center;
+}
+.mb-search-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  padding: 8px;
+  cursor: pointer;
+  font: inherit;
+}
+.mb-search-item:hover { background: var(--bg2, #f6f8fa); }
+.mb-search-item-name { font-size: 13px; font-weight: 600; color: var(--txt, #24292f); }
+.mb-search-item-code {
+  font-size: 12px; color: var(--txt2, #8a929c);
+  font-variant-numeric: tabular-nums; margin-right: auto;
+}
 
 /* ── 板块涨幅排行榜(4 张分类小卡片) ────────────────────────────── */
 .mb-rank-date { font-size: 11px; color: var(--txt2, #8a929c); font-variant-numeric: tabular-nums; }
@@ -148,9 +268,12 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 10px 6px;
+  padding: 9px 6px;
   border-bottom: 1px solid var(--border, #eaeef2);
+  border-radius: 6px;
+  transition: background-color 120ms ease-out;
 }
+.rk-row:hover { background: var(--bg2, #f6f8fa); }
 .rk-row:last-child { border-bottom: none; }
 .rk-no {
   flex: none; width: 22px; height: 22px; line-height: 22px; text-align: center;
@@ -174,4 +297,8 @@
 .rk-src {
   font-size: 10px; padding: 1px 6px; border-radius: 8px; margin-left: 6px;
   background: var(--bg2, #f0f2f5); color: var(--txt2, #8a929c);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mb-card, .mb-grid.mb-canvas-mode .mb-card, .rk-row { transition: none; }
 }
