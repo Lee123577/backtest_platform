@@ -31,14 +31,169 @@
   }
 
   function cardHtml(it, i) {
-    return '<div class="mb-card" id="mbCard' + i + '">' +
+    return '<div class="mb-card" id="mbCard' + i + '" data-code="' + esc(it.code) + '">' +
       '<div class="mb-card-head">' +
       '<span class="mb-name">' + esc(it.name) + "</span>" +
       '<span class="mb-code">' + esc(it.code) + "</span>" +
       '<span class="mb-tag">' + esc(it.tag) + "</span>" +
+      '<span class="mb-drag-handle" title="拖动排列位置,便于横向/纵向比对">⠿</span>' +
       "</div>" +
       '<div id="mbBody' + i + '"><div class="mb-loading">加载中…</div></div>' +
       "</div>";
+  }
+
+  /**
+   * 自由拖拽画布 —— 卡片改绝对定位,拖动手柄松手后固定位置(存 localStorage)。
+   * 靠近其它卡片边缘会自动吸附,方便横向/纵向对齐比对。窄屏不启用,退回堆叠布局。
+   */
+  var CANVAS_BREAKPOINT = 760;
+  var LAYOUT_KEY = "mb_canvas_layout_v1";
+  var CARD_W = 420;
+  var GAP = 16;
+  var SNAP = 8;
+  var ROW_H = 400;
+
+  function loadLayout() {
+    try { return JSON.parse(localStorage.getItem(LAYOUT_KEY) || "{}"); }
+    catch (e) { return {}; }
+  }
+  function saveLayout(layout) {
+    try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout)); } catch (e) { /* 存储不可用就不持久化 */ }
+  }
+
+  function resizeCanvasHeight(grid, cards) {
+    var maxBottom = 0;
+    cards.forEach(function (card) {
+      var bottom = card.offsetTop + card.offsetHeight;
+      if (bottom > maxBottom) maxBottom = bottom;
+    });
+    grid.style.height = (maxBottom + 4) + "px";
+  }
+
+  function bindDrag(grid, card, handle, allCards, layout) {
+    var startX, startY, origLeft, origTop, dragging = false;
+    var guides = [];
+
+    function clearGuides() {
+      guides.forEach(function (g) { g.remove(); });
+      guides = [];
+    }
+    function showGuide(type, pos) {
+      var g = document.createElement("div");
+      g.className = "mb-guide " + type;
+      if (type === "v") g.style.left = pos + "px"; else g.style.top = pos + "px";
+      grid.appendChild(g);
+      guides.push(g);
+    }
+
+    function onDown(e) {
+      dragging = true;
+      startX = e.clientX; startY = e.clientY;
+      origLeft = parseFloat(card.style.left) || 0;
+      origTop = parseFloat(card.style.top) || 0;
+      card.classList.add("dragging");
+      card.style.zIndex = 100;
+      try { handle.setPointerCapture(e.pointerId); } catch (err) { /* 不支持就退化成普通拖动 */ }
+      e.preventDefault();
+    }
+
+    function onMove(e) {
+      if (!dragging) return;
+      var left = origLeft + (e.clientX - startX);
+      var top = origTop + (e.clientY - startY);
+      var w = card.offsetWidth, h = card.offsetHeight;
+
+      clearGuides();
+      var snappedX = false, snappedY = false;
+      allCards.forEach(function (other) {
+        if (other === card) return;
+        var ol = parseFloat(other.style.left) || 0;
+        var ot = parseFloat(other.style.top) || 0;
+        var ow = other.offsetWidth, oh = other.offsetHeight;
+        if (!snappedX) {
+          if (Math.abs(left - ol) < SNAP) { left = ol; snappedX = true; showGuide("v", ol); }
+          else if (Math.abs(left - (ol + ow + GAP)) < SNAP) { left = ol + ow + GAP; snappedX = true; showGuide("v", left); }
+          else if (Math.abs((left + w + GAP) - ol) < SNAP) { left = ol - GAP - w; snappedX = true; showGuide("v", ol); }
+        }
+        if (!snappedY) {
+          if (Math.abs(top - ot) < SNAP) { top = ot; snappedY = true; showGuide("h", ot); }
+          else if (Math.abs(top - (ot + oh + GAP)) < SNAP) { top = ot + oh + GAP; snappedY = true; showGuide("h", top); }
+        }
+      });
+
+      card.style.left = Math.max(0, left) + "px";
+      card.style.top = Math.max(0, top) + "px";
+      resizeCanvasHeight(grid, allCards);
+    }
+
+    function onUp(e) {
+      if (!dragging) return;
+      dragging = false;
+      card.classList.remove("dragging");
+      clearGuides();
+      var code = card.getAttribute("data-code");
+      layout[code] = { left: parseFloat(card.style.left) || 0, top: parseFloat(card.style.top) || 0 };
+      saveLayout(layout);
+      try { handle.releasePointerCapture(e.pointerId); } catch (err) { /* 忽略 */ }
+    }
+
+    handle.addEventListener("pointerdown", onDown);
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onUp);
+    handle.addEventListener("pointercancel", onUp);
+  }
+
+  function defaultPos(i, perRow) {
+    return { left: (i % perRow) * (CARD_W + GAP), top: Math.floor(i / perRow) * ROW_H };
+  }
+
+  function initCanvas(grid) {
+    if (window.innerWidth <= CANVAS_BREAKPOINT) return null;   // 窄屏走堆叠布局,不启用画布
+    grid.classList.add("mb-canvas-mode");
+
+    var cards = Array.prototype.slice.call(grid.querySelectorAll(".mb-card"));
+    if (!cards.length) return null;
+    var layout = loadLayout();
+    var perRow = Math.max(1, Math.floor((grid.clientWidth + GAP) / (CARD_W + GAP)));
+
+    cards.forEach(function (card, i) {
+      var saved = layout[card.getAttribute("data-code")];
+      var pos = saved || defaultPos(i, perRow);
+      card.style.left = pos.left + "px";
+      card.style.top = pos.top + "px";
+      card.style.zIndex = 10 + i;
+    });
+    resizeCanvasHeight(grid, cards);
+
+    cards.forEach(function (card) {
+      var handle = card.querySelector(".mb-drag-handle");
+      if (handle) bindDrag(grid, card, handle, cards, layout);
+    });
+
+    window.addEventListener("resize", function () {
+      var maxLeft = Math.max(0, grid.clientWidth - CARD_W);
+      cards.forEach(function (card) {
+        var left = Math.min(Math.max(0, parseFloat(card.style.left) || 0), maxLeft);
+        card.style.left = left + "px";
+      });
+      resizeCanvasHeight(grid, cards);
+    });
+
+    var resetBtn = document.getElementById("mbResetLayout");
+    if (resetBtn) {
+      resetBtn.addEventListener("click", function () {
+        layout = {};
+        saveLayout(layout);
+        cards.forEach(function (card, i) {
+          var pos = defaultPos(i, perRow);
+          card.style.left = pos.left + "px";
+          card.style.top = pos.top + "px";
+        });
+        resizeCanvasHeight(grid, cards);
+      });
+    }
+
+    return { grid: grid, cards: cards };
   }
 
   function render(i, it, rows) {
@@ -118,6 +273,10 @@
   function load() {
     var grid = document.getElementById("mbGrid");
     grid.innerHTML = ITEMS.map(cardHtml).join("");
+    var canvas = initCanvas(grid);
+    function refreshCanvas() {
+      if (canvas) resizeCanvasHeight(canvas.grid, canvas.cards);
+    }
 
     var end = new Date();
     var start = new Date(end.getTime() - DAYS_BACK * 86400000);
@@ -131,10 +290,11 @@
           if (!r.ok) throw new Error("HTTP " + r.status);
           return r.json();
         })
-        .then(function (j) { render(i, it, j.data || []); })
+        .then(function (j) { render(i, it, j.data || []); refreshCanvas(); })
         .catch(function (e) {
           document.getElementById("mbBody" + i).innerHTML =
             '<div class="mb-error">加载失败：' + esc(e.message) + "</div>";
+          refreshCanvas();
         });
     });
   }
