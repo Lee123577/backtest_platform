@@ -1,0 +1,121 @@
+/* Hallmark · tokens · theme: Cobalt · genre: modern-minimal
+ * 便携设计令牌。页面 CSS 只准引用这里的命名 token,禁止内联色值/字体名。
+ *
+ * 字体自托管在 /static/fonts/ —— Cobalt 原方案走 fonts.googleapis.com,
+ * 但本站面向国内用户,Google 字体站基本加载不出来,那样 Cobalt 的字体识别度
+ * 会整个丢失。只取 latin 子集(7 个文件 246KB),中文自动回落系统栈。
+ */
+
+/* ── 自托管字体(仅 latin;中文走 fallback 系统栈) ───────────────────── */
+@font-face {
+  font-family: 'Space Grotesk'; font-style: normal; font-weight: 500;
+  font-display: swap; src: url('/static/fonts/space-grotesk-500.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Space Grotesk'; font-style: normal; font-weight: 600;
+  font-display: swap; src: url('/static/fonts/space-grotesk-600.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter'; font-style: normal; font-weight: 400;
+  font-display: swap; src: url('/static/fonts/inter-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter'; font-style: normal; font-weight: 500;
+  font-display: swap; src: url('/static/fonts/inter-500.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter'; font-style: normal; font-weight: 600;
+  font-display: swap; src: url('/static/fonts/inter-600.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono'; font-style: normal; font-weight: 400;
+  font-display: swap; src: url('/static/fonts/jetbrains-mono-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono'; font-style: normal; font-weight: 500;
+  font-display: swap; src: url('/static/fonts/jetbrains-mono-500.woff2') format('woff2');
+}
+
+:root {
+  /* ── Cobalt 调色板(OKLCH) ─────────────────────────────────────────
+   * paper: 冷调工程白,不是 #fff;ink: 冷炭灰,不是 #000 —— Cobalt 硬规则
+   */
+  --color-paper:      oklch(98.5% 0.004 250);
+  --color-paper-2:    oklch(96.8% 0.006 252);
+  --color-ink:        oklch(24% 0.02 258);
+  --color-ink-2:      oklch(34% 0.018 257);
+  --color-ink-3:      oklch(53% 0.014 256);   /* 5.05:1 on paper —— 56% 只有 4.46,不够 */
+  --color-rule:       oklch(90% 0.008 252);
+  --color-rule-2:     oklch(84% 0.01 254);
+
+  /* 唯一的钴蓝信号 —— 只做 UI 信号(active/focus/链接),任一视口 <5%
+   * L/C 是按对比度实测定的,别随手回调:
+   *   58% 0.20 → 纸上只有 4.19:1、反白只有 4.25:1,小字全部不合格;
+   *   且 C=0.20 在 L≤54% 已经出 sRGB 色域,浏览器会自己压回来,算出来的对比度不作数。
+   *   53% 0.184 是"仍在色域内 + 两侧都过 4.5"的那个点:纸上 5.16、反白 5.24。
+   */
+  --color-accent:     oklch(53% 0.184 256);
+  --color-accent-ink: oklch(99% 0.002 250);
+  --color-accent-dim: oklch(53% 0.184 256 / 0.10);
+  --color-focus:      oklch(53% 0.184 256);
+  /* 暗带里的钴蓝要提亮:原色在 graphite 上只有 3.19:1 */
+  --color-accent-on-dark: oklch(72% 0.146 256);
+
+  /* 唯一的暗色带(承载排行榜读数) */
+  --color-graphite:   oklch(22% 0.016 260);
+  --color-graphite-2: oklch(27% 0.016 260);
+  --color-graphite-ink: oklch(92% 0.006 252);
+  --color-graphite-ink-2: oklch(70% 0.012 254);
+  --color-graphite-rule: oklch(33% 0.016 260);
+
+  /* ── 行情数据语义色:A股红涨绿跌 ────────────────────────────────────
+   * 这不是"第二个 accent",是数据读数的语义 —— 与钴蓝信号分属两个轴,
+   * 不可互换。红=涨、绿=跌 是国内硬约定,不能按国际惯例反过来。
+   */
+  --color-up:         oklch(55% 0.19 25);
+  --color-down:       oklch(52% 0.13 155);
+  --color-flat:       oklch(56% 0.014 256);
+  --color-up-dim:     oklch(55% 0.19 25 / 0.10);
+  --color-down-dim:   oklch(52% 0.13 155 / 0.10);
+  /* 暗带内的红绿要提亮,否则在 graphite 上对比度不足 */
+  --color-up-on-dark:   oklch(70% 0.17 25);
+  --color-down-on-dark: oklch(72% 0.15 155);
+
+  /* ── 字体 ──────────────────────────────────────────────────────────
+   * 拉丁走自托管 Cobalt 字体,中文回落系统栈 —— 数字/代码是主角,
+   * 中文正文用系统字体反而更清晰(中文 web font 动辄数 MB)
+   */
+  --font-cjk:     'PingFang SC', 'Microsoft YaHei', 'Hiragino Sans GB', sans-serif;
+  --font-display: 'Space Grotesk', -apple-system, BlinkMacSystemFont, var(--font-cjk);
+  --font-body:    'Inter', -apple-system, BlinkMacSystemFont, var(--font-cjk);
+  --font-mono:    'JetBrains Mono', ui-monospace, SFMono-Regular, Consolas, monospace;
+
+  /* ── 4pt 间距刻度 ─────────────────────────────────────────────────── */
+  --space-3xs: 0.25rem; --space-2xs: 0.5rem;  --space-xs: 0.75rem;
+  --space-sm:  1rem;    --space-md:  1.5rem;  --space-lg: 2rem;
+  --space-xl:  3rem;    --space-2xl: 4.5rem;  --space-3xl: 7rem;
+
+  /* ── 字号 ─────────────────────────────────────────────────────────── */
+  --text-xs:   0.6875rem;
+  --text-sm:   0.8125rem;
+  --text-base: 0.9375rem;
+  --text-md:   1.0625rem;
+  --text-lg:   1.375rem;
+  --text-xl:   1.75rem;
+  --text-2xl:  2.25rem;
+  /* Stat hero 的巨型数字 */
+  --text-figure: clamp(3.25rem, 7vw + 1rem, 5.5rem);
+
+  /* ── 动效:三个具名缓动,禁用浏览器默认 ease / 禁止回弹 ─────────────── */
+  --ease-out:    cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in:     cubic-bezier(0.7, 0, 0.84, 0);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-short:  180ms;
+  --dur-mid:    420ms;
+  --dur-long:   600ms;
+
+  /* ── 尺规画出来的紧凑圆角(Cobalt:不是 Coral 的软胶囊,也不是野兽派 0) ── */
+  --radius-control: 6px;
+  --radius-card:    10px;
+  --rule-hair: 1px;
+}

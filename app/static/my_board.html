@@ -8,9 +8,10 @@
   <link rel="stylesheet" href="/static/css/auth.css?v=20260714">
   <link rel="stylesheet" href="/static/css/feedback.css?v=20260713">
   <link rel="stylesheet" href="/static/css/shell.css?v=20260714">
-  <link rel="stylesheet" href="/static/css/my_board.css?v=20260717">
+  <link rel="stylesheet" href="/static/css/tokens.css?v=20260717b">
+  <link rel="stylesheet" href="/static/css/my_board.css?v=20260717b">
 </head>
-<body>
+<body class="mb-page">
 
 <header>
   <h1>📈 A股量化回测平台</h1>
@@ -20,24 +21,61 @@
   </nav>
 </header>
 
-<main>
-  <div class="mb-hint">我关注的标的 · 近半年走势（数据来自本站行情库，仅供研究，不构成投资建议）</div>
-  <div class="mb-grid" id="mbGrid"></div>
+<main class="mb">
 
-  <!-- 板块涨幅排行榜 -->
-  <div class="panel">
-    <div class="panel-title">
-      板块涨幅排行榜 <span id="rkDate"></span>
-      <span class="tip-badge">仅供研究，不构成投资建议</span>
+  <!-- Stat hero:大盘读数领头,右侧是它自己的走势 -->
+  <section class="mb-hero reveal" id="mbHero">
+    <div class="mb-hero-lead">
+      <p class="mb-eyebrow">SHANGHAI COMPOSITE · 000001</p>
+      <div class="mb-figure-row">
+        <span class="mb-figure tnum" id="heroFigure">—</span>
+        <span class="mb-figure-chg tnum" id="heroChg"></span>
+      </div>
+      <h2 class="mb-hero-title" id="heroTitle">上证综指今日收在这里。</h2>
+      <p class="mb-hero-meta" id="heroMeta">读取行情库…</p>
     </div>
-    <div class="rk-tabs" id="rkTabs">
-      <button class="rk-tab active" data-tab="groups">六大板块</button>
-      <button class="rk-tab" data-tab="industry">行业板块</button>
-      <button class="rk-tab" data-tab="concept">题材概念</button>
-      <button class="rk-tab" data-tab="special">特殊概念</button>
+    <div class="mb-hero-demo">
+      <div class="mb-chart mb-chart--hero" id="heroChart"
+           role="img" aria-label="上证综指近半年收盘价走势"></div>
+      <p class="mb-chart-cap" id="heroCap"></p>
     </div>
-    <div id="rkBody"><div class="no-data">加载中…</div></div>
+  </section>
+
+  <!-- 关注标的 -->
+  <section class="mb-sec reveal">
+    <div class="mb-sec-head">
+      <h2 class="mb-sec-title">关注标的</h2>
+      <p class="mb-sec-note">近半年日收盘,取自本站行情库。</p>
+    </div>
+    <div class="mb-grid" id="mbGrid"></div>
+  </section>
+
+  <!-- 唯一的暗色带:板块排行榜(负边距出血到内容区两侧) -->
+  <section class="mb-band" id="mbBand">
+  <div class="mb-band-inner">
+    <div class="mb-band-head">
+      <p class="mb-eyebrow mb-eyebrow--dark">SECTOR RANKING</p>
+      <h2 class="mb-band-title">今天钱去了哪儿。</h2>
+      <p class="mb-band-sub">
+        收盘后一次性抓取当日板块涨跌,按下面四种口径排序 ·
+        <span class="mb-band-date tnum" id="rkDate"></span>
+      </p>
+    </div>
+    <div class="rk-tabs" id="rkTabs" role="tablist" aria-label="排行榜口径">
+      <button class="rk-tab is-on" data-tab="groups" role="tab" aria-selected="true">六大板块</button>
+      <button class="rk-tab" data-tab="industry" role="tab" aria-selected="false">行业板块</button>
+      <button class="rk-tab" data-tab="concept" role="tab" aria-selected="false">题材概念</button>
+      <button class="rk-tab" data-tab="special" role="tab" aria-selected="false">特殊概念</button>
+    </div>
+    <div id="rkBody"><div class="rk-empty">读取中…</div></div>
   </div>
+  </section>
+
+  <p class="mb-foot-note">
+    行情与板块数据来自公开行情源,每交易日 15:10 抓取一次;抓取失败时如实显示缺失,不拿旧数据充数。
+    本页只呈现历史数据,不构成投资建议。
+  </p>
+
 </main>
 
 <footer class="site-footer">
@@ -48,7 +86,7 @@
 <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
 <script src="/static/js/auth.js?v=20260714"></script>
 <script src="/static/js/feedback.js?v=20260713"></script>
-<script src="/static/js/my_board.js?v=20260717"></script>
+<script src="/static/js/my_board.js?v=20260717b"></script>
 <script src="/static/js/shell.js?v=20260714"></script>
 </body>
 </html>

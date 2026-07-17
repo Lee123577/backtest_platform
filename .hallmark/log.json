@@ -1,0 +1,42 @@
+{
+  "builds": [
+    {
+      "date": "2026-07-17",
+      "verb": "redesign",
+      "target": "/my_board (我的数据看板)",
+      "files": [
+        "app/static/my_board.html",
+        "app/static/css/my_board.css",
+        "app/static/js/my_board.js",
+        "app/static/css/tokens.css",
+        "app/static/fonts/*.woff2"
+      ],
+      "genre": "modern-minimal",
+      "macrostructure": "Stat-Led",
+      "theme": "Cobalt",
+      "enrichment": "standard",
+      "nav": "N/A — 全站侧边栏由 shell.js 拥有,不在单页改造范围",
+      "footer": "N/A — 沿用共用 site-footer",
+      "mood": "technical",
+      "knobs": {
+        "hero": "figure-left + sparkline-right,非居中",
+        "dark_band": "排行榜(而非 quickstart/code)承载唯一暗带",
+        "figure_source": "上证综指真实收盘,来自 /api/index/000001/kline"
+      },
+      "deviations": [
+        "红涨绿跌为 A股 数据语义,与唯一钴蓝 UI 信号分属两个轴",
+        "Cobalt 'code is the hero' → '读数是 hero':无 API 可展示,伪造请求/响应卡片会触发 gate 47",
+        "gate 38 让位于 Cobalt 签名 7:mono 是该主题必需的第三面,承担 eyebrow/meta/读数",
+        "⌘K 命令面板属导航层,归 shell.js,未实现"
+      ],
+      "pre_emit_critique": { "P": 5, "H": 5, "E": 4, "S": 5, "R": 4, "V": 5 },
+      "slop_test": "pass — 58 gates swept; 40/41 contrast fixed by re-solving accent + ink-3 (see notes)",
+      "notes": [
+        "初版 accent oklch(58% 0.20 256) 纸上仅 4.19:1、反白仅 4.25:1,且 C=0.20 在 L<=54% 出 sRGB 色域(浏览器会 gamut-map,算出的对比度不作数)。改 oklch(53% 0.184 256):纸上 5.16、反白 5.24、在色域内。",
+        "graphite 暗带需要单独的 --color-accent-on-dark oklch(72% 0.146 256)(原色在暗带只有 3.19:1)。",
+        "--color-ink-3 56% → 53%(4.46 → 5.05)。",
+        "本次无法截图(环境的 screenshot 一直超时),视觉验证靠 computed style + DOM 断言完成。"
+      ]
+    }
+  ]
+}
