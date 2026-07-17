@@ -32,7 +32,8 @@
   var $ = function (id) { return document.getElementById(id); };
   function esc(s) {
     return String(s == null ? "" : s)
-      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   }
   function fmtDate(d) {
     return d.getFullYear() + "-" +
@@ -48,6 +49,7 @@
 
   var slotState = {};    // slot.id -> {code, type, name} | null(未选择)
   var slotCharts = {};   // slot.id -> echarts 实例(切换时先 dispose 再重建)
+  var slotResizeHandlers = {};  // slot.id -> 当前绑定的 resize 回调,重建前先解绑,避免累积泄漏
 
   function titleHtml(cur) {
     if (!cur) return '<span class="mb-name mb-name--empty">未选择</span>';
@@ -114,6 +116,10 @@
     if (!window.echarts) return;
     var el = $("mbChart_" + slotId);
     if (slotCharts[slotId]) { slotCharts[slotId].dispose(); }
+    if (slotResizeHandlers[slotId]) {
+      window.removeEventListener("resize", slotResizeHandlers[slotId]);
+      delete slotResizeHandlers[slotId];
+    }
     var chart = echarts.init(el);
     slotCharts[slotId] = chart;
     var up = chg == null || chg >= 0;
@@ -170,7 +176,9 @@
         },
       }],
     });
-    window.addEventListener("resize", function () { chart.resize(); });
+    var onResize = function () { chart.resize(); };
+    slotResizeHandlers[slotId] = onResize;
+    window.addEventListener("resize", onResize);
   }
 
   function loadSlot(slot) {
@@ -402,16 +410,40 @@
       .catch(function () { return {}; });
   }
 
+  function doSaveLayout() {
+    return fetch("/api/my_board/layout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ layout: currentLayout }),
+    }).catch(function () { /* 静默失败,不打扰用户 */ });
+  }
+
   function queueSaveLayout() {
     clearTimeout(saveTimer);
     saveTimer = setTimeout(function () {
-      fetch("/api/my_board/layout", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ layout: currentLayout }),
-      }).catch(function () { /* 静默失败,不打扰用户 */ });
+      saveTimer = null;
+      doSaveLayout();
     }, SAVE_DEBOUNCE);
   }
+
+  // 防抖计时器还没触发时用户就关闭/切走页面,会丢最后一次拖动/切换 ——
+  // 页面隐藏前用 sendBeacon 补发一次(不受页面卸载影响,比 fetch 更可靠)。
+  function flushSaveLayout() {
+    if (saveTimer == null) return;
+    clearTimeout(saveTimer);
+    saveTimer = null;
+    var payload = JSON.stringify({ layout: currentLayout });
+    if (navigator.sendBeacon) {
+      navigator.sendBeacon("/api/my_board/layout", new Blob([payload], { type: "application/json" }));
+    } else {
+      doSaveLayout();
+    }
+  }
+
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "hidden") flushSaveLayout();
+  });
+  window.addEventListener("pagehide", flushSaveLayout);
 
   function saveSlotSelection(slot) {
     var entry = currentLayout[slot.id] || {};
@@ -491,7 +523,8 @@
         }
       });
 
-      card.style.left = Math.max(0, left) + "px";
+      var maxLeft = Math.max(0, grid.clientWidth - w);
+      card.style.left = Math.max(0, Math.min(left, maxLeft)) + "px";
       card.style.top = Math.max(0, top) + "px";
       resizeCanvasHeight(grid, allCards);
     }
@@ -559,6 +592,8 @@
     if (!btn) return;
     btn.addEventListener("click", function () {
       btn.disabled = true;
+      clearTimeout(saveTimer);   // 丢弃还没发出的旧防抖保存,避免它在重置之后又把布局改回去
+      saveTimer = null;
       fetch("/api/my_board/layout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
