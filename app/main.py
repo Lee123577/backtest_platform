@@ -106,6 +106,10 @@ app.include_router(watchlist_router)
 from .sectors.api import router as sectors_router  # noqa: E402
 app.include_router(sectors_router)
 
+# 数据看板卡片拖拽布局(登录用户各自一份,访客共享默认布局)
+from .my_board.api import router as my_board_router  # noqa: E402
+app.include_router(my_board_router)
+
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 

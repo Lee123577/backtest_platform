@@ -128,19 +128,21 @@
 }
 .mb-error { color: #e5484d; }
 
-/* ── 板块涨幅排行榜 ─────────────────────────────────────────── */
-.rk-tabs { display: flex; gap: 8px; margin: -2px 0 14px; flex-wrap: wrap; }
-.rk-tab {
-  border: 1px solid var(--border, #d0d7de);
-  background: var(--bg, #fff);
-  color: var(--txt2, #57606a);
-  border-radius: 16px;
-  padding: 5px 14px;
-  font-size: 13px;
-  cursor: pointer;
+/* ── 板块涨幅排行榜(4 张分类小卡片) ────────────────────────────── */
+.mb-rank-date { font-size: 11px; color: var(--txt2, #8a929c); font-variant-numeric: tabular-nums; }
+.mb-rank-body {
+  max-height: 340px;
+  overflow-y: auto;
+  margin-top: 4px;
 }
-.rk-tab.active { background: #2b6fe0; border-color: #2b6fe0; color: #fff; font-weight: 600; }
-.rk-tab:not(.active):hover { border-color: #2b6fe0; color: #2b6fe0; }
+
+.rk-group-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--txt, #24292f);
+  margin: 12px 0 4px;
+}
+.rk-group-label:first-child { margin-top: 0; }
 
 .rk-row {
   display: flex;
