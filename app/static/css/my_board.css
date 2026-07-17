@@ -38,15 +38,25 @@
 .mb-grid.mb-canvas-mode .mb-card {
   position: absolute;
   width: 420px;
+  min-width: 300px;
+  min-height: 200px;
+  display: flex;
+  flex-direction: column;
   transition: left 120ms ease-out, top 120ms ease-out, box-shadow 160ms ease-out, transform 160ms ease-out;
 }
-.mb-grid.mb-canvas-mode .mb-card.dragging { transition: none; }
+.mb-grid.mb-canvas-mode .mb-card.dragging,
+.mb-grid.mb-canvas-mode .mb-card.resizing { transition: none; }
+.mb-grid.mb-canvas-mode .mb-card-body { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.mb-grid.mb-canvas-mode .mb-chart { flex: 1; min-height: 100px; }
+.mb-grid.mb-canvas-mode .mb-rank-body { flex: 1; min-height: 0; max-height: none; }
 
 @media (max-width: 760px) {
   .mb-grid { display: grid; grid-template-columns: 1fr; gap: 16px; }
   .mb-grid.mb-canvas-mode { height: auto !important; }
-  .mb-grid.mb-canvas-mode .mb-card { position: static !important; width: auto !important; }
-  .mb-drag-handle, .mb-reset-btn, .mb-switch-btn { display: none; }
+  .mb-grid.mb-canvas-mode .mb-card {
+    position: static !important; width: auto !important; height: auto !important;
+  }
+  .mb-drag-handle, .mb-reset-btn, .mb-switch-btn, .mb-resize-handle { display: none; }
 }
 
 .mb-card {
@@ -66,6 +76,10 @@
   box-shadow: 0 14px 32px rgba(27, 31, 36, .20);
   border-color: #2b6fe0;
   transform: scale(1.01);
+}
+.mb-grid.mb-canvas-mode .mb-card.resizing {
+  box-shadow: 0 14px 32px rgba(27, 31, 36, .20);
+  border-color: #2b6fe0;
 }
 
 .mb-card-head {
@@ -121,6 +135,34 @@
 }
 .mb-drag-handle:hover { background: var(--bg2, #f6f8fa); color: #2b6fe0; }
 .mb-card.dragging .mb-drag-handle { cursor: grabbing; }
+
+/* 卡片右下角调整大小的把手,仅画布模式下显示 */
+.mb-resize-handle {
+  display: none;
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 18px;
+  height: 18px;
+  cursor: nwse-resize;
+  touch-action: none;
+  z-index: 6;
+}
+.mb-grid.mb-canvas-mode .mb-resize-handle { display: block; }
+.mb-resize-handle::before {
+  content: "";
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid var(--txt2, #8a929c);
+  border-bottom: 2px solid var(--txt2, #8a929c);
+  opacity: .4;
+  transition: opacity 120ms ease-out;
+}
+.mb-card:hover .mb-resize-handle::before,
+.mb-card.resizing .mb-resize-handle::before { opacity: .9; }
 
 /* 拖动时的对齐吸附参考线 */
 .mb-guide {

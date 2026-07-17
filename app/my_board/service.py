@@ -14,6 +14,7 @@ from . import db
 
 MAX_CARDS = 50
 COORD_MIN, COORD_MAX = -5000, 20000
+SIZE_MIN, SIZE_MAX = 200, 1200
 _CODE_RE = re.compile(r"^[0-9A-Za-z]{1,10}$")
 
 
@@ -50,6 +51,18 @@ def save_layout(user: Optional[Dict[str, Any]], layout: Dict[str, Any]) -> None:
         if not (COORD_MIN <= left <= COORD_MAX and COORD_MIN <= top <= COORD_MAX):
             raise LayoutError("坐标超出范围")
         entry: Dict[str, Any] = {"left": left, "top": top}
+
+        for dim in ("width", "height"):
+            val = pos.get(dim)
+            if val is None:
+                continue
+            try:
+                val = float(val)
+            except (TypeError, ValueError):
+                raise LayoutError(f"{dim} 不是数字")
+            if not (SIZE_MIN <= val <= SIZE_MAX):
+                raise LayoutError(f"{dim} 超出范围")
+            entry[dim] = val
 
         code, typ = pos.get("code"), pos.get("type")
         if code is not None or typ is not None:

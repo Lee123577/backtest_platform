@@ -71,6 +71,7 @@
       '" placeholder="搜代码或名称,如 600519 / 茅台" autocomplete="off">' +
       '<div class="mb-search-results" id="mbSearchResults_' + slot.id + '"></div>' +
       "</div>" +
+      '<span class="mb-resize-handle" title="拖动右下角调整卡片大小"></span>' +
       "</div>";
   }
 
@@ -290,6 +291,7 @@
       '<span class="mb-drag-handle" title="拖动排列位置,便于横向/纵向比对">⠿</span>' +
       "</div>" +
       '<div class="mb-rank-body" id="mbRankBody_' + tab.id + '"><div class="mb-loading">加载中…</div></div>' +
+      '<span class="mb-resize-handle" title="拖动右下角调整卡片大小"></span>' +
       "</div>";
   }
 
@@ -398,6 +400,8 @@
   var SNAP = 8;
   var ROW_H = 420;
   var SAVE_DEBOUNCE = 500;
+  var MIN_CARD_W = 300, MIN_CARD_H = 200;
+  var MAX_CARD_W = 900, MAX_CARD_H = 900;
 
   var canvasState = null;
   var currentLayout = {};   // 从后端拉到的布局,拖拽/切换股票都往这同一份对象里写
@@ -549,6 +553,48 @@
     handle.addEventListener("pointercancel", onUp);
   }
 
+  function bindResize(grid, card, handle, allCards, cardId) {
+    var startX, startY, origW, origH, resizing = false;
+
+    function onDown(e) {
+      resizing = true;
+      startX = e.clientX; startY = e.clientY;
+      origW = card.offsetWidth; origH = card.offsetHeight;
+      card.classList.add("resizing");
+      card.style.zIndex = 100;
+      try { handle.setPointerCapture(e.pointerId); } catch (err) { /* 不支持就退化成普通拖动 */ }
+      e.preventDefault();
+      e.stopPropagation();
+    }
+
+    function onMove(e) {
+      if (!resizing) return;
+      var w = Math.min(MAX_CARD_W, Math.max(MIN_CARD_W, origW + (e.clientX - startX)));
+      var h = Math.min(MAX_CARD_H, Math.max(MIN_CARD_H, origH + (e.clientY - startY)));
+      card.style.width = w + "px";
+      card.style.height = h + "px";
+      if (slotCharts[cardId]) slotCharts[cardId].resize();
+      resizeCanvasHeight(grid, allCards);
+    }
+
+    function onUp(e) {
+      if (!resizing) return;
+      resizing = false;
+      card.classList.remove("resizing");
+      var entry = currentLayout[cardId] || {};
+      entry.width = card.offsetWidth;
+      entry.height = card.offsetHeight;
+      currentLayout[cardId] = entry;
+      queueSaveLayout();
+      try { handle.releasePointerCapture(e.pointerId); } catch (err) { /* 忽略 */ }
+    }
+
+    handle.addEventListener("pointerdown", onDown);
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onUp);
+    handle.addEventListener("pointercancel", onUp);
+  }
+
   function defaultPos(i, perRow) {
     return { left: (i % perRow) * (CARD_W + GAP), top: Math.floor(i / perRow) * ROW_H };
   }
@@ -567,17 +613,22 @@
       card.style.left = pos.left + "px";
       card.style.top = pos.top + "px";
       card.style.zIndex = 10 + i;
+      if (saved && saved.width) card.style.width = saved.width + "px";
+      if (saved && saved.height) card.style.height = saved.height + "px";
     });
     resizeCanvasHeight(grid, cards);
 
     cards.forEach(function (card) {
+      var cardId = card.getAttribute("data-card-id");
       var handle = card.querySelector(".mb-drag-handle");
       if (handle) bindDrag(grid, card, handle, cards);
+      var resizeHandle = card.querySelector(".mb-resize-handle");
+      if (resizeHandle) bindResize(grid, card, resizeHandle, cards, cardId);
     });
 
     window.addEventListener("resize", function () {
-      var maxLeft = Math.max(0, grid.clientWidth - CARD_W);
       cards.forEach(function (card) {
+        var maxLeft = Math.max(0, grid.clientWidth - card.offsetWidth);
         var left = Math.min(Math.max(0, parseFloat(card.style.left) || 0), maxLeft);
         card.style.left = left + "px";
       });
