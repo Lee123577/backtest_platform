@@ -1,9 +1,16 @@
 """
 数据看板布局 —— 登录用户各自一份,访客共享 user_id=0 的默认布局。
 
-布局项除了位置(left/top),行情卡片(slot1/slot2/slot3)还可以带 code/type,
-记录用户把这张卡片切换成了哪只股票/指数 —— 卡片是"槽位",股票只是槽位里
-当前展示的内容,槽位 id 本身不随切换而变(否则拖拽位置就跟着丢了)。
+存储的布局是一份 {"cards": [...], "positions": {...}} 文档:
+- cards:    当前画布上有哪些卡片、什么类型(stock/rank),决定了增删卡片后
+            下次打开时展示哪些卡片、以及它们的先后顺序。
+- positions:每张卡片的坐标/尺寸,行情卡片(kind=stock)还可以带 code/type,
+            记录用户把这张卡片切换成了哪只股票/指数 —— 卡片是"槽位",
+            股票只是槽位里当前展示的内容,槽位 id 不随切换/增删其它卡片而变。
+
+兼容旧数据:更早版本存的是"卡片 id -> 坐标"的扁平映射(没有 cards/positions
+两个字段),前端加载时会把这种旧文档整体当作 positions、cards 置空从而回退
+到默认卡片集合,所以这里也按同样的规则原样存/验(不强制升级旧数据)。
 """
 from __future__ import annotations
 
@@ -16,6 +23,8 @@ MAX_CARDS = 50
 COORD_MIN, COORD_MAX = -5000, 20000
 SIZE_MIN, SIZE_MAX = 200, 1200
 _CODE_RE = re.compile(r"^[0-9A-Za-z]{1,10}$")
+_CARD_ID_RE = re.compile(r"^[0-9A-Za-z_]{1,40}$")
+_KINDS = ("stock", "rank")
 
 
 class LayoutError(Exception):
@@ -31,15 +40,15 @@ def get_layout(user: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return db.load_layout(_key_for(user))
 
 
-def save_layout(user: Optional[Dict[str, Any]], layout: Dict[str, Any]) -> None:
-    if not isinstance(layout, dict):
-        raise LayoutError("布局格式不对")
-    if len(layout) > MAX_CARDS:
+def _clean_positions(positions: Any) -> Dict[str, Any]:
+    if not isinstance(positions, dict):
+        raise LayoutError("坐标格式不对")
+    if len(positions) > MAX_CARDS:
         raise LayoutError("卡片太多")
 
     clean: Dict[str, Any] = {}
-    for card_id, pos in layout.items():
-        if not isinstance(card_id, str) or not card_id or len(card_id) > 40:
+    for card_id, pos in positions.items():
+        if not isinstance(card_id, str) or not _CARD_ID_RE.match(card_id):
             raise LayoutError("卡片 id 不合法")
         if not isinstance(pos, dict):
             raise LayoutError("坐标格式不对")
@@ -76,6 +85,44 @@ def save_layout(user: Optional[Dict[str, Any]], layout: Dict[str, Any]) -> None:
                 entry["name"] = pos["name"]
 
         clean[card_id] = entry
+    return clean
+
+
+def _clean_cards(cards: Any) -> List[Dict[str, str]]:
+    if not isinstance(cards, list):
+        raise LayoutError("卡片列表格式不对")
+    if len(cards) > MAX_CARDS:
+        raise LayoutError("卡片太多")
+
+    clean: List[Dict[str, str]] = []
+    seen = set()
+    for item in cards:
+        if not isinstance(item, dict):
+            raise LayoutError("卡片格式不对")
+        card_id, kind = item.get("id"), item.get("kind")
+        if not isinstance(card_id, str) or not _CARD_ID_RE.match(card_id):
+            raise LayoutError("卡片 id 不合法")
+        if kind not in _KINDS:
+            raise LayoutError("卡片类型不合法")
+        if card_id in seen:
+            continue
+        seen.add(card_id)
+        clean.append({"id": card_id, "kind": kind})
+    return clean
+
+
+def save_layout(user: Optional[Dict[str, Any]], layout: Dict[str, Any]) -> None:
+    if not isinstance(layout, dict):
+        raise LayoutError("布局格式不对")
+
+    clean: Dict[str, Any] = {}
+    if "cards" in layout:
+        clean["cards"] = _clean_cards(layout.get("cards"))
+    if "positions" in layout:
+        clean["positions"] = _clean_positions(layout.get("positions"))
+    elif not clean:
+        # 兼容旧版数据结构:整份就是"卡片 id -> 坐标"的扁平映射
+        clean = _clean_positions(layout)
 
     db.ensure_tables()
     db.save_layout(_key_for(user), clean)

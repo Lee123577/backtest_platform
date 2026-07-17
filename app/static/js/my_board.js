@@ -1,33 +1,33 @@
 /**
  * 我的数据看板
  * ============
- * 3 张行情卡片(可切换股票/指数)+ 板块涨幅排行榜(4 个类目),统一放在
- * 一块可自由拖拽的画布上,方便横向/纵向摆放比对。
+ * 行情卡片(可切换股票/指数)+ 板块涨幅排行榜(4 个类目),卡片可以自由
+ * 新增/删除,统一放在一块可自由拖拽/缩放的画布上,方便横向/纵向摆放比对。
  *
- * 行情卡片是"槽位"(slot1/slot2/slot3),槽位里当前展示哪只股票/指数
- * 可以随时切换 —— 槽位 id 不随切换而变,拖拽位置不会因为换股票就丢。
+ * 卡片是"槽位"(id 是稳定的字符串,新增时随机生成),槽位里当前展示哪只
+ * 股票/指数可以随时切换 —— 槽位 id 不随切换而变,拖拽/缩放不会因为换股票就丢。
  * 每张图表下方有可拖动的时间范围滑块(ECharts dataZoom)。
  *
  * 布局持久化:登录用户各自一份(存后端 user_board_layout,按账号区分);
  * 未登录统一用访客共享的默认布局 —— 未登录时保存的也是这份默认布局,
- * 下次(不论谁、登不登录)打开都能看到最近一次保存的样子。
+ * 下次(不论谁、登不登录)打开都能看到最近一次保存的样子(含新增/删除的卡片)。
  */
 (function () {
   "use strict";
 
-  var SLOTS = [
-    { id: "slot1", type: "stock", code: "603993", name: "洛阳钼业" },
-    { id: "slot2", type: "index", code: "000001", name: "上证综合指数" },
-    { id: "slot3", type: null, code: null, name: null },
+  // 首次访问(或重置布局后)展示的默认卡片集合;新增卡片没有默认股票,
+  // 需要用户自己搜索选择。
+  var DEFAULT_CARDS = [
+    { id: "slot1", kind: "stock", code: "603993", type: "stock", name: "洛阳钼业" },
+    { id: "slot2", kind: "stock", code: "000001", type: "index", name: "上证综合指数" },
+    { id: "slot3", kind: "stock", code: null, type: null, name: null },
+    { id: "rk_groups", kind: "rank" },
+    { id: "rk_industry", kind: "rank" },
+    { id: "rk_concept", kind: "rank" },
+    { id: "rk_special", kind: "rank" },
   ];
   var DAYS_BACK = 180;   // 拉近半年(自然日),图表下方滑块可再拖出子区间
-
-  var RANK_TABS = [
-    { id: "rk_groups", name: "六大板块排行" },
-    { id: "rk_industry", name: "行业板块排行" },
-    { id: "rk_concept", name: "题材概念排行" },
-    { id: "rk_special", name: "特殊概念排行" },
-  ];
+  var MAX_BOARD_CARDS = 50;
 
   var $ = function (id) { return document.getElementById(id); };
   function esc(s) {
@@ -45,11 +45,14 @@
   }
   function tagLabel(type) { return type === "index" ? "指数" : "个股"; }
 
+  // 当前画布上的卡片(持久化的核心:哪些卡片存在、什么类型、什么顺序)
+  var boardCards = [];   // [{id, kind: "stock"|"rank"}]
+
   /* ── 行情卡片(可切换) ──────────────────────────────────────────────── */
 
-  var slotState = {};    // slot.id -> {code, type, name} | null(未选择)
-  var slotCharts = {};   // slot.id -> echarts 实例(切换时先 dispose 再重建)
-  var slotResizeHandlers = {};  // slot.id -> 当前绑定的 resize 回调,重建前先解绑,避免累积泄漏
+  var slotState = {};    // cardId -> {code, type, name} | null(未选择),仅 stock 卡片有
+  var slotCharts = {};   // cardId -> echarts 实例(切换时先 dispose 再重建)
+  var slotResizeHandlers = {};  // cardId -> 当前绑定的 resize 回调,重建前先解绑,避免累积泄漏
 
   function titleHtml(cur) {
     if (!cur) return '<span class="mb-name mb-name--empty">未选择</span>';
@@ -58,18 +61,19 @@
       '<span class="mb-tag mb-tag--' + cur.type + '">' + tagLabel(cur.type) + "</span>";
   }
 
-  function stockCardHtml(slot) {
-    return '<div class="mb-card mb-stock-card" id="mbCard_' + slot.id + '" data-card-id="' + slot.id + '">' +
+  function stockCardHtml(card) {
+    return '<div class="mb-card mb-stock-card" id="mbCard_' + card.id + '" data-card-id="' + card.id + '">' +
       '<div class="mb-card-head">' +
-      '<div class="mb-card-title" id="mbTitle_' + slot.id + '"></div>' +
-      '<button type="button" class="mb-switch-btn" id="mbSwitch_' + slot.id + '" title="切换股票/指数">切换</button>' +
+      '<div class="mb-card-title" id="mbTitle_' + card.id + '"></div>' +
+      '<button type="button" class="mb-switch-btn" id="mbSwitch_' + card.id + '" title="切换股票/指数">切换</button>' +
       '<span class="mb-drag-handle" title="拖动排列位置,便于横向/纵向比对">⠿</span>' +
+      '<button type="button" class="mb-card-close" data-remove-card="' + esc(card.id) + '" title="删除这张卡片">✕</button>' +
       "</div>" +
-      '<div class="mb-card-body" id="mbBody_' + slot.id + '"></div>' +
-      '<div class="mb-search-pop" id="mbPop_' + slot.id + '" hidden>' +
-      '<input type="text" class="mb-search-input" id="mbSearchInput_' + slot.id +
+      '<div class="mb-card-body" id="mbBody_' + card.id + '"></div>' +
+      '<div class="mb-search-pop" id="mbPop_' + card.id + '" hidden>' +
+      '<input type="text" class="mb-search-input" id="mbSearchInput_' + card.id +
       '" placeholder="搜代码或名称,如 600519 / 茅台" autocomplete="off">' +
-      '<div class="mb-search-results" id="mbSearchResults_' + slot.id + '"></div>' +
+      '<div class="mb-search-results" id="mbSearchResults_' + card.id + '"></div>' +
       "</div>" +
       '<span class="mb-resize-handle" title="拖动右下角调整卡片大小"></span>' +
       "</div>";
@@ -210,13 +214,15 @@
   var searchTimer = null;
 
   function closeAllPops(exceptId) {
-    SLOTS.forEach(function (s) {
-      if (s.id !== exceptId) { var p = $("mbPop_" + s.id); if (p) p.hidden = true; }
+    boardCards.forEach(function (c) {
+      if (c.kind !== "stock") return;
+      if (c.id !== exceptId) { var p = $("mbPop_" + c.id); if (p) p.hidden = true; }
     });
   }
 
   function openPop(slot) {
     closeAllPops(slot.id);
+    closeAddMenu();
     var pop = $("mbPop_" + slot.id);
     pop.hidden = false;
     var input = $("mbSearchInput_" + slot.id);
@@ -279,21 +285,9 @@
     });
   }
 
-  document.addEventListener("click", function () { closeAllPops(null); });
+  document.addEventListener("click", function () { closeAllPops(null); closeAddMenu(); });
 
-  /* ── 板块涨幅排行榜(4 张分类小卡片) ────────────────────────────────── */
-
-  function rankCardHtml(tab) {
-    return '<div class="mb-card mb-rank-card" id="mbCard_' + tab.id + '" data-card-id="' + tab.id + '">' +
-      '<div class="mb-card-head">' +
-      '<span class="mb-name">' + esc(tab.name) + "</span>" +
-      '<span class="mb-rank-date" id="mbRankDate_' + tab.id + '"></span>' +
-      '<span class="mb-drag-handle" title="拖动排列位置,便于横向/纵向比对">⠿</span>' +
-      "</div>" +
-      '<div class="mb-rank-body" id="mbRankBody_' + tab.id + '"><div class="mb-loading">加载中…</div></div>' +
-      '<span class="mb-resize-handle" title="拖动右下角调整卡片大小"></span>' +
-      "</div>";
-  }
+  /* ── 板块涨幅排行榜(可增删的分类小卡片) ──────────────────────────────── */
 
   function pctHtml(v) {
     if (v == null) return '<span class="rk-pct rk-flat">—</span>';
@@ -366,33 +360,55 @@
       "均来自本站行情库；红利板块本地无股息率数据，用东财红利/高股息概念板块近似。</div>";
   }
 
-  var RANK_RENDER = {
-    rk_groups: groupsHtml, rk_industry: industryHtml,
-    rk_concept: conceptHtml, rk_special: specialHtml,
+  // 排行榜卡片的固定类目全集(名称 + 渲染函数),这份表决定了"添加卡片"
+  // 菜单里能选哪些排行榜类目 —— 与行情卡片不同,排行榜类目是有限、写死的。
+  var RANK_INFO = {
+    rk_groups: { name: "六大板块排行", render: groupsHtml },
+    rk_industry: { name: "行业板块排行", render: industryHtml },
+    rk_concept: { name: "题材概念排行", render: conceptHtml },
+    rk_special: { name: "特殊概念排行", render: specialHtml },
   };
+  var lastRankingData = null;   // 缓存最近一次排行榜响应,重新添加排行卡片时不用再等一次网络请求
+
+  function rankCardHtml(card) {
+    var name = (RANK_INFO[card.id] && RANK_INFO[card.id].name) || card.id;
+    return '<div class="mb-card mb-rank-card" id="mbCard_' + card.id + '" data-card-id="' + card.id + '">' +
+      '<div class="mb-card-head">' +
+      '<span class="mb-name">' + esc(name) + "</span>" +
+      '<span class="mb-rank-date" id="mbRankDate_' + card.id + '"></span>' +
+      '<span class="mb-drag-handle" title="拖动排列位置,便于横向/纵向比对">⠿</span>' +
+      '<button type="button" class="mb-card-close" data-remove-card="' + esc(card.id) + '" title="删除这张卡片">✕</button>' +
+      "</div>" +
+      '<div class="mb-rank-body" id="mbRankBody_' + card.id + '"><div class="mb-loading">加载中…</div></div>' +
+      '<span class="mb-resize-handle" title="拖动右下角调整卡片大小"></span>' +
+      "</div>";
+  }
 
   function loadRanking() {
+    var rankCards = boardCards.filter(function (c) { return c.kind === "rank"; });
+    if (!rankCards.length) return;
     fetch("/api/sectors/ranking?top_n=10")
       .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
       .then(function (j) {
-        RANK_TABS.forEach(function (tab) {
-          var dateEl = $("mbRankDate_" + tab.id);
+        lastRankingData = j;
+        rankCards.forEach(function (c) {
+          var dateEl = $("mbRankDate_" + c.id);
           if (dateEl) dateEl.textContent = j.trade_date || "";
-          var bodyEl = $("mbRankBody_" + tab.id);
-          if (bodyEl) bodyEl.innerHTML = RANK_RENDER[tab.id](j);
+          var bodyEl = $("mbRankBody_" + c.id);
+          if (bodyEl && RANK_INFO[c.id]) bodyEl.innerHTML = RANK_INFO[c.id].render(j);
         });
         refreshCanvas();
       })
       .catch(function () {
-        RANK_TABS.forEach(function (tab) {
-          var bodyEl = $("mbRankBody_" + tab.id);
+        rankCards.forEach(function (c) {
+          var bodyEl = $("mbRankBody_" + c.id);
           if (bodyEl) bodyEl.innerHTML = '<div class="no-data">板块数据加载失败，请稍后重试</div>';
         });
         refreshCanvas();
       });
   }
 
-  /* ── 自由拖拽画布(布局存后端,登录按账号、未登录用访客共享默认布局) ──── */
+  /* ── 自由拖拽/缩放画布(布局存后端,登录按账号、未登录用访客共享默认布局) ── */
 
   var CANVAS_BREAKPOINT = 760;
   var CARD_W = 420;
@@ -404,50 +420,50 @@
   var MAX_CARD_W = 900, MAX_CARD_H = 900;
 
   var canvasState = null;
-  var currentLayout = {};   // 从后端拉到的布局,拖拽/切换股票都往这同一份对象里写
+  var currentLayout = {};   // 从后端拉到的坐标/尺寸,拖拽/缩放/切换股票都往这同一份对象里写
   var saveTimer = null;
 
-  function fetchLayout() {
+  function fetchBoard() {
     return fetch("/api/my_board/layout")
       .then(function (r) { return r.ok ? r.json() : { layout: {} }; })
       .then(function (j) { return j.layout || {}; })
       .catch(function () { return {}; });
   }
 
-  function doSaveLayout() {
+  function doSaveBoard() {
     return fetch("/api/my_board/layout", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ layout: currentLayout }),
+      body: JSON.stringify({ layout: { cards: boardCards, positions: currentLayout } }),
     }).catch(function () { /* 静默失败,不打扰用户 */ });
   }
 
-  function queueSaveLayout() {
+  function queueSaveBoard() {
     clearTimeout(saveTimer);
     saveTimer = setTimeout(function () {
       saveTimer = null;
-      doSaveLayout();
+      doSaveBoard();
     }, SAVE_DEBOUNCE);
   }
 
-  // 防抖计时器还没触发时用户就关闭/切走页面,会丢最后一次拖动/切换 ——
+  // 防抖计时器还没触发时用户就关闭/切走页面,会丢最后一次拖动/切换/增删 ——
   // 页面隐藏前用 sendBeacon 补发一次(不受页面卸载影响,比 fetch 更可靠)。
-  function flushSaveLayout() {
+  function flushSaveBoard() {
     if (saveTimer == null) return;
     clearTimeout(saveTimer);
     saveTimer = null;
-    var payload = JSON.stringify({ layout: currentLayout });
+    var payload = JSON.stringify({ layout: { cards: boardCards, positions: currentLayout } });
     if (navigator.sendBeacon) {
       navigator.sendBeacon("/api/my_board/layout", new Blob([payload], { type: "application/json" }));
     } else {
-      doSaveLayout();
+      doSaveBoard();
     }
   }
 
   document.addEventListener("visibilitychange", function () {
-    if (document.visibilityState === "hidden") flushSaveLayout();
+    if (document.visibilityState === "hidden") flushSaveBoard();
   });
-  window.addEventListener("pagehide", flushSaveLayout);
+  window.addEventListener("pagehide", flushSaveBoard);
 
   function saveSlotSelection(slot) {
     var entry = currentLayout[slot.id] || {};
@@ -460,7 +476,7 @@
     if (cur) { entry.code = cur.code; entry.type = cur.type; entry.name = cur.name; }
     else { delete entry.code; delete entry.type; delete entry.name; }
     currentLayout[slot.id] = entry;
-    queueSaveLayout();
+    queueSaveBoard();
   }
 
   function resizeCanvasHeight(grid, cards) {
@@ -543,7 +559,7 @@
       entry.left = parseFloat(card.style.left) || 0;
       entry.top = parseFloat(card.style.top) || 0;
       currentLayout[cardId] = entry;
-      queueSaveLayout();
+      queueSaveBoard();
       try { handle.releasePointerCapture(e.pointerId); } catch (err) { /* 忽略 */ }
     }
 
@@ -585,7 +601,7 @@
       entry.width = card.offsetWidth;
       entry.height = card.offsetHeight;
       currentLayout[cardId] = entry;
-      queueSaveLayout();
+      queueSaveBoard();
       try { handle.releasePointerCapture(e.pointerId); } catch (err) { /* 忽略 */ }
     }
 
@@ -604,7 +620,6 @@
     grid.classList.add("mb-canvas-mode");
 
     var cards = Array.prototype.slice.call(grid.querySelectorAll(".mb-card"));
-    if (!cards.length) return null;
     var perRow = Math.max(1, Math.floor((grid.clientWidth + GAP) / (CARD_W + GAP)));
 
     cards.forEach(function (card, i) {
@@ -654,28 +669,205 @@
     });
   }
 
+  /* ── 新增/删除卡片 ─────────────────────────────────────────────────── */
+
+  var cardIdCounter = 0;
+  function genCardId() {
+    cardIdCounter += 1;
+    return "card_" + Date.now().toString(36) + "_" + cardIdCounter;
+  }
+
+  function nextAppendPos() {
+    var cards = canvasState ? canvasState.cards : [];
+    var maxBottom = 0;
+    cards.forEach(function (c) {
+      var top = parseFloat(c.style.top) || 0;
+      var bottom = top + c.offsetHeight;
+      if (bottom > maxBottom) maxBottom = bottom;
+    });
+    return { left: 0, top: cards.length ? maxBottom + GAP : 0 };
+  }
+
+  function mountCardHtml(html) {
+    var grid = $("mbGrid");
+    var tmp = document.createElement("div");
+    tmp.innerHTML = html;
+    var el = tmp.firstElementChild;
+    grid.appendChild(el);
+    return el;
+  }
+
+  function placeNewCard(cardEl) {
+    if (!canvasState) return;
+    var pos = nextAppendPos();
+    cardEl.style.left = pos.left + "px";
+    cardEl.style.top = pos.top + "px";
+    cardEl.style.zIndex = 10 + canvasState.cards.length;
+    canvasState.cards.push(cardEl);
+    var handle = cardEl.querySelector(".mb-drag-handle");
+    if (handle) bindDrag(canvasState.grid, cardEl, handle, canvasState.cards);
+    var resizeHandle = cardEl.querySelector(".mb-resize-handle");
+    if (resizeHandle) bindResize(canvasState.grid, cardEl, resizeHandle, canvasState.cards, cardEl.getAttribute("data-card-id"));
+    refreshCanvas();
+  }
+
+  function addStockCard() {
+    if (boardCards.length >= MAX_BOARD_CARDS) return;
+    var id = genCardId();
+    var card = { id: id, kind: "stock" };
+    boardCards.push(card);
+    var el = mountCardHtml(stockCardHtml(card));
+    slotState[id] = null;
+    renderSlotTitle(card);
+    renderSlotBody(card);
+    bindSwitchUI(card);
+    placeNewCard(el);
+    queueSaveBoard();
+    closeAddMenu();
+    openPop(card);
+  }
+
+  function addRankCard(rankId) {
+    if (boardCards.length >= MAX_BOARD_CARDS) return;
+    if (!RANK_INFO[rankId] || boardCards.some(function (c) { return c.id === rankId; })) return;
+    var card = { id: rankId, kind: "rank" };
+    boardCards.push(card);
+    var el = mountCardHtml(rankCardHtml(card));
+    placeNewCard(el);
+    queueSaveBoard();
+    closeAddMenu();
+    if (lastRankingData) {
+      var dateEl = $("mbRankDate_" + rankId);
+      if (dateEl) dateEl.textContent = lastRankingData.trade_date || "";
+      var bodyEl = $("mbRankBody_" + rankId);
+      if (bodyEl) bodyEl.innerHTML = RANK_INFO[rankId].render(lastRankingData);
+      refreshCanvas();
+    } else {
+      loadRanking();
+    }
+  }
+
+  function removeCard(cardId) {
+    var idx = -1;
+    for (var i = 0; i < boardCards.length; i++) {
+      if (boardCards[i].id === cardId) { idx = i; break; }
+    }
+    if (idx === -1) return;
+    var card = boardCards[idx];
+    var el = $("mbCard_" + cardId);
+    boardCards.splice(idx, 1);
+
+    if (canvasState && el) {
+      var ci = canvasState.cards.indexOf(el);
+      if (ci !== -1) canvasState.cards.splice(ci, 1);
+    }
+    if (card.kind === "stock") {
+      if (slotCharts[cardId]) { slotCharts[cardId].dispose(); delete slotCharts[cardId]; }
+      if (slotResizeHandlers[cardId]) {
+        window.removeEventListener("resize", slotResizeHandlers[cardId]);
+        delete slotResizeHandlers[cardId];
+      }
+      delete slotState[cardId];
+    }
+    if (el) el.remove();
+    delete currentLayout[cardId];
+    refreshCanvas();
+    queueSaveBoard();
+  }
+
+  /* ── "添加卡片"菜单 ────────────────────────────────────────────────── */
+
+  function hiddenRankIds() {
+    var present = {};
+    boardCards.forEach(function (c) { if (c.kind === "rank") present[c.id] = true; });
+    return Object.keys(RANK_INFO).filter(function (id) { return !present[id]; });
+  }
+
+  function renderAddMenu() {
+    var pop = $("mbAddPop");
+    if (!pop) return;
+    var hidden = hiddenRankIds();
+    var html = '<button type="button" class="mb-add-item" data-add="stock">+ 新增行情卡片</button>';
+    hidden.forEach(function (id) {
+      html += '<button type="button" class="mb-add-item" data-add="rank" data-rank-id="' +
+        esc(id) + '">+ ' + esc(RANK_INFO[id].name) + "</button>";
+    });
+    pop.innerHTML = html;
+  }
+
+  function openAddMenu() {
+    closeAllPops(null);
+    renderAddMenu();
+    $("mbAddPop").hidden = false;
+  }
+  function closeAddMenu() {
+    var p = $("mbAddPop");
+    if (p) p.hidden = true;
+  }
+
+  function bindAddMenu() {
+    var btn = $("mbAddCard");
+    var pop = $("mbAddPop");
+    if (!btn || !pop) return;
+    btn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      if (pop.hidden) openAddMenu(); else closeAddMenu();
+    });
+    pop.addEventListener("click", function (e) {
+      e.stopPropagation();
+      var item = e.target.closest("[data-add]");
+      if (!item) return;
+      if (item.getAttribute("data-add") === "stock") addStockCard();
+      else addRankCard(item.getAttribute("data-rank-id"));
+    });
+  }
+
   /* ── 入口 ──────────────────────────────────────────────────────────── */
+
+  function cardHtmlFor(card) {
+    return card.kind === "rank" ? rankCardHtml(card) : stockCardHtml(card);
+  }
 
   function load() {
     var grid = $("mbGrid");
-    grid.innerHTML = SLOTS.map(stockCardHtml).join("") + RANK_TABS.map(rankCardHtml).join("");
     bindResetButton();
+    bindAddMenu();
+    grid.addEventListener("click", function (e) {
+      var btn = e.target.closest("[data-remove-card]");
+      if (!btn) return;
+      e.stopPropagation();
+      removeCard(btn.getAttribute("data-remove-card"));
+    });
 
-    fetchLayout().then(function (serverLayout) {
-      currentLayout = serverLayout || {};
+    fetchBoard().then(function (saved) {
+      var savedCards = Array.isArray(saved.cards)
+        ? saved.cards.filter(function (c) {
+            return c && typeof c.id === "string" && (c.kind === "stock" || c.kind === "rank");
+          })
+        : null;
+      currentLayout = (saved.positions && typeof saved.positions === "object")
+        ? saved.positions
+        : (savedCards !== null ? {} : (saved && typeof saved === "object" ? saved : {}));
+      boardCards = savedCards !== null
+        ? savedCards
+        : DEFAULT_CARDS.map(function (c) { return { id: c.id, kind: c.kind }; });
 
-      SLOTS.forEach(function (slot) {
-        var saved = currentLayout[slot.id];
-        if (saved && saved.code && saved.type) {
-          slotState[slot.id] = { code: saved.code, type: saved.type, name: saved.name || saved.code };
-        } else if (slot.code) {
-          slotState[slot.id] = { code: slot.code, type: slot.type, name: slot.name };
+      grid.innerHTML = boardCards.map(cardHtmlFor).join("");
+
+      boardCards.forEach(function (card) {
+        if (card.kind !== "stock") return;
+        var def = DEFAULT_CARDS.filter(function (d) { return d.id === card.id; })[0];
+        var saved2 = currentLayout[card.id];
+        if (saved2 && saved2.code && saved2.type) {
+          slotState[card.id] = { code: saved2.code, type: saved2.type, name: saved2.name || saved2.code };
+        } else if (def && def.code) {
+          slotState[card.id] = { code: def.code, type: def.type, name: def.name };
         } else {
-          slotState[slot.id] = null;
+          slotState[card.id] = null;
         }
-        renderSlotTitle(slot);
-        bindSwitchUI(slot);
-        loadSlot(slot);
+        renderSlotTitle(card);
+        bindSwitchUI(card);
+        loadSlot(card);
       });
 
       canvasState = initCanvas(grid);

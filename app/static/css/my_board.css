@@ -26,6 +26,47 @@
 }
 .mb-reset-btn:hover { border-color: #2b6fe0; color: #2b6fe0; }
 
+.mb-add-wrap { position: relative; flex: none; }
+.mb-add-btn {
+  font-size: 12px;
+  font-weight: 600;
+  color: #2b6fe0;
+  background: rgba(43, 111, 224, .08);
+  border: 1px solid rgba(43, 111, 224, .25);
+  border-radius: 6px;
+  padding: 4px 12px;
+  cursor: pointer;
+  transition: background-color 120ms ease-out;
+}
+.mb-add-btn:hover { background: rgba(43, 111, 224, .16); }
+.mb-add-pop {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 30;
+  min-width: 190px;
+  background: var(--bg, #fff);
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(27, 31, 36, .16);
+  padding: 6px;
+}
+.mb-add-pop[hidden] { display: none; }
+.mb-add-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 10px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  color: var(--txt, #24292f);
+}
+.mb-add-item:hover { background: var(--bg2, #f6f8fa); }
+
 /* 自由拖拽画布:JS 给 .mb-grid 加 mb-canvas-mode 后,卡片改为绝对定位,
    可以自由拖动摆放(横向/纵向比对);高度由 JS 按内容动态写入 style.height。
    窄屏(<=760px)不开启画布,退回原来的堆叠布局。 */
@@ -56,7 +97,8 @@
   .mb-grid.mb-canvas-mode .mb-card {
     position: static !important; width: auto !important; height: auto !important;
   }
-  .mb-drag-handle, .mb-reset-btn, .mb-switch-btn, .mb-resize-handle { display: none; }
+  .mb-drag-handle, .mb-reset-btn, .mb-switch-btn, .mb-resize-handle,
+  .mb-add-wrap, .mb-card-close { display: none; }
 }
 
 .mb-card {
@@ -119,6 +161,20 @@
   transition: background-color 120ms ease-out;
 }
 .mb-switch-btn:hover { background: rgba(43, 111, 224, .16); }
+
+.mb-card-close {
+  flex: none;
+  font-size: 13px;
+  line-height: 1;
+  padding: 4px 7px;
+  border-radius: 6px;
+  color: var(--txt2, #8a929c);
+  background: none;
+  border: none;
+  cursor: pointer;
+  transition: background-color 120ms ease-out, color 120ms ease-out;
+}
+.mb-card-close:hover { background: rgba(229, 72, 77, .12); color: #e5484d; }
 
 .mb-drag-handle {
   margin-left: auto;
