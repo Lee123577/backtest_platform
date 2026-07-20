@@ -87,7 +87,7 @@
   position: absolute;
   width: 420px;
   min-width: 300px;
-  min-height: 200px;
+  min-height: 300px;
   display: flex;
   flex-direction: column;
   transition: left 120ms ease-out, top 120ms ease-out, box-shadow 160ms ease-out, transform 160ms ease-out;
@@ -238,6 +238,21 @@
 }
 .mb-guide.v { width: 1px; top: 0; bottom: 0; }
 .mb-guide.h { height: 1px; left: 0; right: 0; }
+
+/* 卡片全部删光后的空画布提示 */
+.mb-empty-canvas {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 160px;
+  font-size: 13px;
+  color: var(--txt2, #8a929c);
+  text-align: center;
+}
+.mb-grid.mb-canvas-mode .mb-empty-canvas {
+  position: absolute;
+  inset: 0;
+}
 
 /* ── 行情卡片:报价 / 图表 ──────────────────────────────────────────── */
 

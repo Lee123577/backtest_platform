@@ -161,8 +161,8 @@
         {
           type: "slider", start: 0, end: 100, height: 16, bottom: 4,
           borderColor: "transparent", backgroundColor: "#f6f8fa",
-          fillerColor: "rgba(43,111,224,.15)", moveHandleSize: 0,
-          handleStyle: { color: "#2b6fe0", borderColor: "#2b6fe0" },
+          fillerColor: "rgba(9,105,218,.15)", moveHandleSize: 0,
+          handleStyle: { color: "#0969da", borderColor: "#0969da" },
           textStyle: { color: "#8a929c", fontSize: 10 },
         },
       ],
@@ -418,7 +418,8 @@
   var SNAP = 8;
   var ROW_H = 420;
   var SAVE_DEBOUNCE = 500;
-  var MIN_CARD_W = 300, MIN_CARD_H = 200;
+  var MIN_CARD_W = 300, MIN_CARD_H = 300;
+  var EMPTY_CANVAS_H = 160;
   var MAX_CARD_W = 900, MAX_CARD_H = 900;
 
   var canvasState = null;
@@ -482,6 +483,7 @@
   }
 
   function resizeCanvasHeight(grid, cards) {
+    if (!cards.length) { grid.style.height = EMPTY_CANVAS_H + "px"; return; }
     var maxBottom = 0;
     cards.forEach(function (card) {
       var bottom = card.offsetTop + card.offsetHeight;
@@ -492,6 +494,24 @@
 
   function refreshCanvas() {
     if (canvasState) resizeCanvasHeight(canvasState.grid, canvasState.cards);
+  }
+
+  // 卡片全部删光后画布不能留一片看不出所以然的空白 —— 补一句提示,
+  // 引导去右上角"添加卡片"重新加回来。
+  function emptyCanvasHintHtml() {
+    return '<div class="mb-empty-canvas" id="mbEmptyCanvas">这里空了，点右上角"添加卡片"新增一张</div>';
+  }
+
+  function updateEmptyCanvasHint() {
+    var grid = $("mbGrid");
+    if (!grid) return;
+    var existing = $("mbEmptyCanvas");
+    if (boardCards.length === 0) {
+      if (!existing) grid.insertAdjacentHTML("beforeend", emptyCanvasHintHtml());
+    } else if (existing) {
+      existing.remove();
+    }
+    refreshCanvas();
   }
 
   function bindDrag(grid, card, handle, allCards) {
@@ -659,6 +679,7 @@
     var btn = $("mbResetLayout");
     if (!btn) return;
     btn.addEventListener("click", function () {
+      if (!confirm("确定要重置为默认布局吗？你新增/删除的卡片和调整过的位置、大小都会丢失，且无法撤销。")) return;
       btn.disabled = true;
       clearTimeout(saveTimer);   // 丢弃还没发出的旧防抖保存,避免它在重置之后又把布局改回去
       saveTimer = null;
@@ -718,6 +739,7 @@
     var id = genCardId();
     var card = { id: id, kind: "stock" };
     boardCards.push(card);
+    updateEmptyCanvasHint();
     var el = mountCardHtml(stockCardHtml(card));
     slotState[id] = null;
     renderSlotTitle(card);
@@ -734,6 +756,7 @@
     if (!RANK_INFO[rankId] || boardCards.some(function (c) { return c.id === rankId; })) return;
     var card = { id: rankId, kind: "rank" };
     boardCards.push(card);
+    updateEmptyCanvasHint();
     var el = mountCardHtml(rankCardHtml(card));
     placeNewCard(el);
     queueSaveBoard();
@@ -773,7 +796,7 @@
     }
     if (el) el.remove();
     delete currentLayout[cardId];
-    refreshCanvas();
+    updateEmptyCanvasHint();
     queueSaveBoard();
   }
 
@@ -838,7 +861,14 @@
       var btn = e.target.closest("[data-remove-card]");
       if (!btn) return;
       e.stopPropagation();
-      removeCard(btn.getAttribute("data-remove-card"));
+      var cardId = btn.getAttribute("data-remove-card");
+      var card = boardCards.filter(function (c) { return c.id === cardId; })[0];
+      var cur = card && card.kind === "stock" ? slotState[cardId] : null;
+      var msg = cur
+        ? "确定删除「" + (cur.name || cur.code) + "」这张行情卡片吗？删除后需要重新搜索选择股票/指数，且不可撤销。"
+        : "确定删除这张卡片吗？删除后不可撤销。";
+      if (!confirm(msg)) return;
+      removeCard(cardId);
     });
 
     fetchBoard().then(function (saved) {
@@ -873,6 +903,7 @@
       });
 
       canvasState = initCanvas(grid);
+      updateEmptyCanvasHint();
       loadRanking();
     });
   }
