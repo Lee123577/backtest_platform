@@ -98,6 +98,7 @@
 
   function fillQuote(slot, rows) {
     var body = $("mbBody_" + slot.id);
+    if (!body) return;   // 请求还没回来卡片就被删了
     if (!rows || rows.length < 2) {
       body.innerHTML = '<div class="mb-error">暂无行情数据</div>';
       return;
@@ -206,7 +207,8 @@
       })
       .then(function (j) { fillQuote(slot, j.data || []); refreshCanvas(); })
       .catch(function (e) {
-        $("mbBody_" + slot.id).innerHTML = '<div class="mb-error">加载失败：' + esc(e.message) + "</div>";
+        var body = $("mbBody_" + slot.id);
+        if (body) body.innerHTML = '<div class="mb-error">加载失败：' + esc(e.message) + "</div>";
         refreshCanvas();
       });
   }
@@ -235,6 +237,7 @@
 
   function doSearch(slot, q) {
     var resultsEl = $("mbSearchResults_" + slot.id);
+    if (!resultsEl) return;   // 防抖计时器触发前卡片被删了
     if (!q) { resultsEl.innerHTML = '<div class="mb-search-hint">输入代码或名称搜索</div>'; return; }
     resultsEl.innerHTML = '<div class="mb-search-hint">搜索中…</div>';
     fetch("/api/my_board/search?q=" + encodeURIComponent(q))
@@ -425,6 +428,7 @@
   var canvasState = null;
   var currentLayout = {};   // 从后端拉到的坐标/尺寸,拖拽/缩放/切换股票都往这同一份对象里写
   var saveTimer = null;
+  var zCounter = 100;       // 每次拖拽/缩放递增,保证"最后操作的卡片在最上层"
 
   function fetchBoard() {
     return fetch("/api/my_board/layout")
@@ -438,6 +442,7 @@
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ layout: { cards: boardCards, positions: currentLayout } }),
+      keepalive: true,   // 防抖触发后立刻关页,请求也别被浏览器取消
     }).catch(function () { /* 静默失败,不打扰用户 */ });
   }
 
@@ -536,7 +541,8 @@
       origLeft = parseFloat(card.style.left) || 0;
       origTop = parseFloat(card.style.top) || 0;
       card.classList.add("dragging");
-      card.style.zIndex = 100;
+      zCounter += 1;
+      card.style.zIndex = zCounter;
       try { handle.setPointerCapture(e.pointerId); } catch (err) { /* 不支持就退化成普通拖动 */ }
       e.preventDefault();
     }
@@ -599,7 +605,8 @@
       startX = e.clientX; startY = e.clientY;
       origW = card.offsetWidth; origH = card.offsetHeight;
       card.classList.add("resizing");
-      card.style.zIndex = 100;
+      zCounter += 1;
+      card.style.zIndex = zCounter;
       try { handle.setPointerCapture(e.pointerId); } catch (err) { /* 不支持就退化成普通拖动 */ }
       e.preventDefault();
       e.stopPropagation();

@@ -25,6 +25,9 @@ SIZE_MIN, SIZE_MAX = 200, 1200
 _CODE_RE = re.compile(r"^[0-9A-Za-z]{1,10}$")
 _CARD_ID_RE = re.compile(r"^[0-9A-Za-z_]{1,40}$")
 _KINDS = ("stock", "rank")
+# 排行卡片类目是有限、写死的(与前端 my_board.js 的 RANK_INFO 保持一致);
+# 不校验的话,直接调 API 能往访客共享布局塞前端渲染不了的"僵尸"排行卡。
+_RANK_IDS = ("rk_groups", "rk_industry", "rk_concept", "rk_special")
 
 
 class LayoutError(Exception):
@@ -104,6 +107,8 @@ def _clean_cards(cards: Any) -> List[Dict[str, str]]:
             raise LayoutError("卡片 id 不合法")
         if kind not in _KINDS:
             raise LayoutError("卡片类型不合法")
+        if kind == "rank" and card_id not in _RANK_IDS:
+            raise LayoutError("排行卡片 id 不合法")
         if card_id in seen:
             continue
         seen.add(card_id)
