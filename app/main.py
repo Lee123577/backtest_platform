@@ -682,6 +682,12 @@ def api_admin_ip_delete(
 
 @app.get("/api/paper_trading/equity")
 def api_paper_equity(start: Optional[str] = None, end: Optional[str] = None):
+    for v in (start, end):
+        if v is not None:
+            try:
+                _date.fromisoformat(v)
+            except ValueError:
+                raise HTTPException(400, "日期格式须为 YYYY-MM-DD")
     try:
         paper_db.ensure_tables()
     except Exception:

@@ -44,10 +44,22 @@ class AuthError(RuntimeError):
 
 # ── 单 IP 发码限流：进程内滑动窗口(单 worker，够用) ─────────────────────────
 _ip_hits: Dict[str, Deque[float]] = {}
+_ip_hits_last_sweep = 0.0
+
+
+def _sweep_idle_ips(now: float) -> None:
+    """每小时清一次超过 1 小时没动静的 IP,防止字典随访客 IP 无限增长。"""
+    global _ip_hits_last_sweep
+    if now - _ip_hits_last_sweep < 3600:
+        return
+    _ip_hits_last_sweep = now
+    for ip in [ip for ip, dq in _ip_hits.items() if not dq or now - dq[-1] > 3600]:
+        del _ip_hits[ip]
 
 
 def _ip_allowed(ip: str) -> bool:
     now = time.time()
+    _sweep_idle_ips(now)
     dq = _ip_hits.setdefault(ip, deque())
     while dq and now - dq[0] > 3600:
         dq.popleft()

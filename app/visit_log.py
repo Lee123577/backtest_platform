@@ -172,8 +172,17 @@ def _client_ip(request: Request) -> str:
     if _is_from_trusted_proxy(direct):
         xff = request.headers.get("x-forwarded-for")
         if xff:
-            # XFF 是 "client, proxy1, proxy2" 形式,第一个是原始客户端
-            return xff.split(",")[0].strip()
+            # XFF 是 "client, proxy1, proxy2" 形式。不能取最左段:最左是
+            # 客户端自己写的,追加式代理($proxy_add_x_forwarded_for)只会往右
+            # 追加真实 IP —— 攻击者在最左塞 127.0.0.1 就能冒充白名单 IP。
+            # 正确做法:从右往左跳过可信代理,取第一个不可信地址。
+            hops = [h.strip() for h in xff.split(",") if h.strip()]
+            for hop in reversed(hops):
+                if not _is_from_trusted_proxy(hop):
+                    return hop
+            if hops:
+                # 整条链都是可信代理(如本机 curl 带 XFF: 127.0.0.1):取最左
+                return hops[0]
         real = request.headers.get("x-real-ip")
         if real:
             return real.strip()

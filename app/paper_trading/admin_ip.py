@@ -243,6 +243,40 @@ def get_request_ip(request: Request) -> str:
     return _client_ip(request)
 
 
+def _is_cross_site(source: str, host: str) -> bool:
+    """判断 Origin/Referer 是否与本站 Host 不同源。
+
+    只比 netloc(域名:端口),不比协议 —— 反代 TLS 终结后应用侧看到的是
+    http,而浏览器 Origin 是 https,比协议会把正常同源请求全拒掉。
+    """
+    from urllib.parse import urlparse
+    try:
+        netloc = urlparse(source).netloc
+    except ValueError:
+        return True
+    # netloc 为空(如 Origin: null、畸形值)一律视为跨站
+    return not netloc or netloc.lower() != (host or "").lower()
+
+
+def _reject_cross_site(request: Request) -> None:
+    """管理员写接口的 CSRF 防线:带 Origin/Referer 的浏览器请求必须同源。
+
+    IP 白名单只认来源 IP、不认 cookie,所以 SameSite 保护不了它 ——
+    管理员(或同一出口 IP 的任何人)浏览恶意网页时,跨站表单 POST 是
+    简单请求、无预检,能直接命中无 body 的写接口(如 /api/tasks/{name}/run)。
+    curl/脚本不带 Origin/Referer,不受影响,仍走 IP 白名单。
+    """
+    source = request.headers.get("origin") or request.headers.get("referer") or ""
+    if not source:
+        return
+    host = request.headers.get("host") or ""
+    if _is_cross_site(source, host):
+        raise HTTPException(
+            status_code=403,
+            detail="跨站请求被拒绝:管理员写操作只接受本站页面或无 Origin 的脚本调用。",
+        )
+
+
 def require_admin_ip(request: Request) -> str:
     """
     Dependency：校验请求 IP 是否在白名单。返回 IP 字符串。
@@ -252,6 +286,7 @@ def require_admin_ip(request: Request) -> str:
     加入并放行。仅触发一次（_first_run_checked），后续依然走 is_admin 校验。
     """
     global _first_run_checked
+    _reject_cross_site(request)
     ensure_table()
     ip = get_request_ip(request)
 
