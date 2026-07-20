@@ -255,6 +255,21 @@
 .mb-card:hover .mb-resize-handle::before,
 .mb-card.resizing .mb-resize-handle::before { opacity: .9; }
 
+/* 布局保存被服务端拒绝时的提示条 */
+.mb-save-error {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 100;
+  font-size: 13px;
+  color: #fff;
+  background: #e5484d;
+  border-radius: 8px;
+  padding: 8px 16px;
+  box-shadow: 0 6px 20px rgba(27, 31, 36, .2);
+}
+
 /* 拖动时的对齐吸附参考线 */
 .mb-guide {
   position: absolute;

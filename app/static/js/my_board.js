@@ -328,9 +328,12 @@
     var list = compareState[cardId] || [];
     if (!list.length) return "";
     return list.map(function (it, i) {
+      // 移除按钮要同时带 code 和 type:股票和指数存在同码(000001 是上证
+      // 指数也是平安银行),只按 code 删会把两条一起误删
       return '<span class="mb-cmp-chip" style="--cmp-color:' + COMPARE_COLORS[i % COMPARE_COLORS.length] + '">' +
         '<span class="mb-cmp-dot"></span>' + esc(it.name || it.code) +
-        '<button type="button" class="mb-cmp-remove" data-cmp-remove="' + esc(it.code) + '" title="从对比中移除">✕</button>' +
+        '<button type="button" class="mb-cmp-remove" data-cmp-remove="' + esc(it.code) +
+        '" data-cmp-remove-type="' + esc(it.type) + '" title="从对比中移除">✕</button>' +
         "</span>";
     }).join("");
   }
@@ -494,9 +497,11 @@
     saveCompareSelection(card);
   }
 
-  function removeFromCompare(card, code) {
+  function removeFromCompare(card, code, type) {
     var list = compareState[card.id] || [];
-    compareState[card.id] = list.filter(function (it) { return it.code !== code; });
+    compareState[card.id] = list.filter(function (it) {
+      return !(it.code === code && it.type === type);
+    });
     loadCompare(card);
     saveCompareSelection(card);
   }
@@ -527,7 +532,7 @@
     $("mbCmpChips_" + card.id).addEventListener("click", function (e) {
       var btn = e.target.closest("[data-cmp-remove]");
       if (!btn) return;
-      removeFromCompare(card, btn.getAttribute("data-cmp-remove"));
+      removeFromCompare(card, btn.getAttribute("data-cmp-remove"), btn.getAttribute("data-cmp-remove-type"));
     });
   }
 
@@ -894,13 +899,30 @@
       .catch(function () { return {}; });
   }
 
+  // 保存被服务端拒绝(校验 400 之类)是持续性的:用户继续拖半天,其实一笔
+  // 都没存上,必须让他知道。节流 8s 提示一次,别每次防抖保存都弹。
+  var saveErrTimer = null;
+  function notifySaveError() {
+    if (saveErrTimer) return;
+    var el = document.createElement("div");
+    el.className = "mb-save-error";
+    el.textContent = "布局保存失败，最近的改动可能不会保留";
+    document.body.appendChild(el);
+    saveErrTimer = setTimeout(function () {
+      saveErrTimer = null;
+      el.remove();
+    }, 8000);
+  }
+
   function doSaveBoard() {
     return fetch("/api/my_board/layout", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ layout: { cards: boardCards, positions: currentLayout } }),
       keepalive: true,   // 防抖触发后立刻关页,请求也别被浏览器取消
-    }).catch(function () { /* 静默失败,不打扰用户 */ });
+    }).then(function (r) {
+      if (!r.ok) notifySaveError();
+    }).catch(function () { /* 网络抖动是暂时的,静默,下次保存自然重试 */ });
   }
 
   function queueSaveBoard() {

@@ -146,6 +146,12 @@ def _clean_cards(cards: Any) -> List[Dict[str, str]]:
             raise LayoutError("排行卡片 id 不合法")
         if kind in _SINGLETON_IDS and card_id != _SINGLETON_IDS[kind]:
             raise LayoutError("卡片 id 不合法")
+        # 反向也拦:保留 id(排行/单例)不允许挂在别的 kind 下 —— 否则伪造一张
+        # id=dr_summary 的行情卡就能把"添加卡片"菜单里的对应项顶掉
+        if card_id in _RANK_IDS and kind != "rank":
+            raise LayoutError("卡片 id 不合法")
+        if card_id in _SINGLETON_IDS.values() and _SINGLETON_IDS.get(kind) != card_id:
+            raise LayoutError("卡片 id 不合法")
         if card_id in seen:
             continue
         seen.add(card_id)
