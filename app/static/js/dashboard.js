@@ -29,7 +29,6 @@
     { href: "/", ico: "📉", label: "单股策略", desc: "指标回测" },
     { href: "/?mode=portfolio", ico: "🧮", label: "选股策略", desc: "组合回测" },
     { href: "/paper_trading", ico: "💹", label: "实盘观察", desc: "模拟盘" },
-    { href: "/subscribe", ico: "💎", label: "购买订阅", desc: "开通会员" },
   ];
 
   function renderShortcuts() {

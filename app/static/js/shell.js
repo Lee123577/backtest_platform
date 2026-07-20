@@ -25,9 +25,7 @@
       { label: "实盘观察", href: "/paper_trading", ico: "💹" },
       { label: "自选盯盘", href: "/watchlist", ico: "⭐" },
     ]},
-    { title: "会员", items: [
-      { label: "购买订阅", href: "/subscribe", ico: "💎" },
-    ]},
+    // 购买订阅页先隐藏入口(产品要求暂缓上线,页面/接口都还在,只是不导流量进去)
     // 运维页:仅管理员 IP 可见(默认 hidden,确认身份后才显示,避免闪现)
     { title: "系统", adminOnly: true, items: [
       { label: "定时任务", href: "/tasks", ico: "⏱️" },
@@ -107,7 +105,6 @@
       '<div class="spx-menu" id="spxMenu" hidden>' +
       '<div class="spx-menu-sub">' + esc(maskPhone(user.phone)) + "</div>" +
       '<a href="/dashboard">仪表盘</a>' +
-      '<a href="/subscribe">我的订阅</a>' +
       '<a href="/watchlist">自选盯盘</a>' +
       '<button id="spxLogout">退出登录</button>' +
       "</div>";
