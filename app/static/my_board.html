@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="/static/css/auth.css?v=20260714">
   <link rel="stylesheet" href="/static/css/feedback.css?v=20260713">
   <link rel="stylesheet" href="/static/css/shell.css?v=20260714">
-  <link rel="stylesheet" href="/static/css/my_board.css?v=20260720c">
+  <link rel="stylesheet" href="/static/css/my_board.css?v=20260721b">
 </head>
 <body>
 
@@ -22,11 +22,12 @@
 
 <main>
   <div class="mb-hint-row">
-    <div class="mb-hint">我关注的标的 + 板块涨幅排行榜（数据来自本站行情库，仅供研究，不构成投资建议）· 卡片可自由拖动、缩放、增删；登录后布局按账号保存，未登录则用站点默认布局</div>
+    <div class="mb-hint">行情走势、多股对比、板块排行、复盘摘要等卡片自由组合的个人看板（数据来自本站行情库，仅供研究，不构成投资建议）· 卡片可拖动、缩放、增删，布局自动保存；登录后按账号各存一份</div>
     <div class="mb-add-wrap">
       <button type="button" class="mb-add-btn" id="mbAddCard">+ 添加卡片</button>
       <div class="mb-add-pop" id="mbAddPop" hidden></div>
     </div>
+    <button type="button" class="mb-reset-btn" id="mbTidyLayout" title="按卡片实际大小自动重新排列，消除重叠和空隙">一键整理</button>
     <button type="button" class="mb-reset-btn" id="mbResetLayout">重置布局</button>
   </div>
   <div class="mb-grid" id="mbGrid"></div>
@@ -40,7 +41,7 @@
 <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
 <script src="/static/js/auth.js?v=20260714"></script>
 <script src="/static/js/feedback.js?v=20260713"></script>
-<script src="/static/js/my_board.js?v=20260720c"></script>
+<script src="/static/js/my_board.js?v=20260721b"></script>
 <script src="/static/js/shell.js?v=20260721"></script>
 </body>
 </html>

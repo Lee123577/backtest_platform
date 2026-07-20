@@ -18,6 +18,7 @@
   // 首次访问(或重置布局后)展示的默认卡片集合;新增卡片没有默认股票,
   // 需要用户自己搜索选择。
   var DEFAULT_CARDS = [
+    { id: "idx_overview", kind: "indices" },
     { id: "slot1", kind: "stock", code: "603993", type: "stock", name: "洛阳钼业" },
     { id: "slot2", kind: "stock", code: "000001", type: "index", name: "上证综合指数" },
     { id: "slot3", kind: "stock", code: null, type: null, name: null },
@@ -27,7 +28,7 @@
     { id: "rk_special", kind: "rank" },
   ];
   var DAYS_BACK = 180;   // 拉近半年(自然日),图表下方滑块可再拖出子区间
-  var MAX_BOARD_CARDS = 50;
+  var MAX_BOARD_CARDS = 10;   // 与后端 service.MAX_CARDS 保持一致
   var MAX_COMPARE_STOCKS = 6;
   var COMPARE_COLORS = ["#0969da", "#cf222e", "#1a7f37", "#9a6700", "#8250df", "#bf3989"];
 
@@ -651,6 +652,224 @@
       });
   }
 
+  /* ── 单例卡片(每种全站只有一张,没有可配置内容,数据直接来自各自模块的
+     现成接口):每日复盘摘要 / AI热门板块战绩 / 指数速览。跟排行卡片一样
+     id 是写死的,"添加卡片"菜单里已存在就不再出现,不会重复添加。      */
+
+  var SINGLETON_DEFS = [
+    { id: "dr_summary", kind: "review", label: "每日复盘摘要" },
+    { id: "hs_today", kind: "hotsector", label: "AI热门板块战绩" },
+    { id: "idx_overview", kind: "indices", label: "指数速览" },
+  ];
+
+  function pctSpan(v, digits) {
+    if (v == null) return '<span class="mb-flat">—</span>';
+    var cls = v > 0 ? "mb-up" : (v < 0 ? "mb-down" : "mb-flat");
+    return '<span class="' + cls + '">' + (v > 0 ? "+" : "") + num(v, digits) + "%</span>";
+  }
+
+  // 每日复盘摘要
+  function reviewCardHtml(card) {
+    return '<div class="mb-card mb-review-card" id="mbCard_' + card.id + '" data-card-id="' + card.id + '">' +
+      '<div class="mb-card-head">' +
+      '<span class="mb-name">每日复盘摘要</span>' +
+      '<span class="mb-rank-date" id="mbDrDate_' + card.id + '"></span>' +
+      '<span class="mb-drag-handle" title="拖动排列位置,便于横向/纵向比对">⠿</span>' +
+      '<button type="button" class="mb-card-close" data-remove-card="' + esc(card.id) + '" title="删除这张卡片">✕</button>' +
+      "</div>" +
+      '<div class="mb-review-body" id="mbDrBody_' + card.id + '"><div class="mb-loading">加载中…</div></div>' +
+      '<span class="mb-resize-handle" title="拖动右下角调整卡片大小"></span>' +
+      "</div>";
+  }
+
+  function renderReviewCard(cardId, review) {
+    var dateEl = $("mbDrDate_" + cardId);
+    var body = $("mbDrBody_" + cardId);
+    if (!body) return;   // 请求还没回来卡片就被删了
+    if (dateEl) dateEl.textContent = review ? String(review.review_date || "") : "";
+    if (!review) { body.innerHTML = '<div class="no-data">暂无复盘数据</div>'; return; }
+
+    var ctx = review.context || {};
+    var idxHtml = (ctx.indices || []).slice(0, 4).map(function (ix) {
+      return '<div class="dr-idx-chip"><span class="dr-idx-name">' + esc(ix.name) + "</span>" +
+        '<span class="dr-idx-val">' + num(ix.close) + "</span>" + pctSpan(ix.pct_change) + "</div>";
+    }).join("");
+    var b = ctx.breadth || {};
+    var hs = (ctx.ai_hotsector || {}).settled;
+
+    body.innerHTML =
+      '<div class="mb-review-title">' + esc(review.title || "今日复盘") + "</div>" +
+      '<div class="dr-idx-row">' + (idxHtml || '<div class="no-data">暂无指数数据</div>') + "</div>" +
+      '<div class="rk-row"><div class="rk-name">涨 / 跌家数</div>' +
+      '<span class="rk-pct rk-up">' + (b.up != null ? b.up : "—") + "</span>&nbsp;/&nbsp;" +
+      '<span class="rk-pct rk-down">' + (b.down != null ? b.down : "—") + "</span></div>" +
+      '<div class="rk-row"><div class="rk-name">AI 选股结算(昨买今卖)</div>' +
+      (hs
+        ? '<span class="rk-pct">' + hs.win_count + "/" + hs.total_count + " 涨</span>"
+        : '<span class="rk-pct rk-flat">—</span>') + "</div>" +
+      '<a class="mb-review-link" href="/daily_review">查看完整复盘 →</a>';
+  }
+
+  function loadReviewCard(card) {
+    fetch("/api/daily_review/latest")
+      .then(function (r) { return r.ok ? r.json() : { review: null }; })
+      .then(function (j) { renderReviewCard(card.id, j.review); refreshCanvas(); })
+      .catch(function () { renderReviewCard(card.id, null); refreshCanvas(); });
+  }
+
+  // AI热门板块战绩
+  function hotsectorCardHtml(card) {
+    return '<div class="mb-card mb-hotsector-card" id="mbCard_' + card.id + '" data-card-id="' + card.id + '">' +
+      '<div class="mb-card-head">' +
+      '<span class="mb-name">AI热门板块战绩</span>' +
+      '<span class="mb-rank-date" id="mbHsDate_' + card.id + '"></span>' +
+      '<span class="mb-drag-handle" title="拖动排列位置,便于横向/纵向比对">⠿</span>' +
+      '<button type="button" class="mb-card-close" data-remove-card="' + esc(card.id) + '" title="删除这张卡片">✕</button>' +
+      "</div>" +
+      '<div class="mb-rank-body" id="mbHsBody_' + card.id + '"><div class="mb-loading">加载中…</div></div>' +
+      '<span class="mb-resize-handle" title="拖动右下角调整卡片大小"></span>' +
+      "</div>";
+  }
+
+  function renderHotsectorCard(cardId, pick, stats) {
+    var dateEl = $("mbHsDate_" + cardId);
+    var body = $("mbHsBody_" + cardId);
+    if (!body) return;   // 请求还没回来卡片就被删了
+    if (dateEl) dateEl.textContent = pick ? String(pick.pick_date || "") : "";
+    if (!pick || !pick.stocks || !pick.stocks.length) {
+      body.innerHTML = '<div class="no-data">今日暂无选股</div>';
+      return;
+    }
+
+    var bySector = {};
+    var order = [];
+    pick.stocks.forEach(function (s) {
+      if (!bySector[s.sector_name]) { bySector[s.sector_name] = []; order.push(s.sector_name); }
+      bySector[s.sector_name].push(s);
+    });
+    var html = order.map(function (sector) {
+      var rows = bySector[sector].map(function (s, i) {
+        var extra = s.is_win == null ? "" :
+          (s.is_win ? '<span class="mb-hs-tag mb-hs-tag--win">已结算·涨</span>' : '<span class="mb-hs-tag mb-hs-tag--lose">已结算·跌</span>');
+        var pct = s.pct_change != null ? Number(s.pct_change) * 100 : null;
+        return row(i, (s.name || s.code) + "(" + s.code + ")", pct, s.stock_reason, extra);
+      }).join("");
+      return '<div class="rk-group-label">' + esc(sector) + "</div>" + rows;
+    }).join("");
+    var statLine = stats && stats.total_count
+      ? '<div class="rk-note">累计胜率 ' + stats.win_count + "/" + stats.total_count +
+        "(" + (stats.win_rate != null ? num(stats.win_rate * 100, 1) : "—") + "%) · 累计收益 " +
+        (stats.cum_return != null ? num(stats.cum_return * 100) + "%" : "—") + "</div>"
+      : "";
+    body.innerHTML = html + statLine;
+  }
+
+  function loadHotsectorCard(card) {
+    Promise.all([
+      fetch("/api/ai_hotsector/today").then(function (r) { return r.ok ? r.json() : { pick: null }; })
+        .catch(function () { return { pick: null }; }),
+      fetch("/api/ai_hotsector/stats").then(function (r) { return r.ok ? r.json() : null; })
+        .catch(function () { return null; }),
+    ]).then(function (res) {
+      renderHotsectorCard(card.id, res[0].pick, res[1]);
+      refreshCanvas();
+    });
+  }
+
+  // 指数速览
+  var OVERVIEW_INDICES = [
+    { code: "000001", name: "上证指数" },
+    { code: "399006", name: "创业板指" },
+    { code: "000300", name: "沪深300" },
+    { code: "000905", name: "中证500" },
+    { code: "000852", name: "中证1000" },
+    { code: "000016", name: "上证50" },
+  ];
+
+  function indicesCardHtml(card) {
+    return '<div class="mb-card mb-indices-card" id="mbCard_' + card.id + '" data-card-id="' + card.id + '">' +
+      '<div class="mb-card-head">' +
+      '<span class="mb-name">指数速览</span>' +
+      '<span class="mb-rank-date" id="mbIxDate_' + card.id + '"></span>' +
+      '<span class="mb-drag-handle" title="拖动排列位置,便于横向/纵向比对">⠿</span>' +
+      '<button type="button" class="mb-card-close" data-remove-card="' + esc(card.id) + '" title="删除这张卡片">✕</button>' +
+      "</div>" +
+      '<div class="mb-indices-grid" id="mbIxBody_' + card.id + '"><div class="mb-loading">加载中…</div></div>' +
+      '<span class="mb-resize-handle" title="拖动右下角调整卡片大小"></span>' +
+      "</div>";
+  }
+
+  function renderIndicesCard(cardId, resultsList) {
+    var body = $("mbIxBody_" + cardId);
+    if (!body) return;   // 请求还没回来卡片就被删了
+    var dateEl = $("mbIxDate_" + cardId);
+    var latestDate = "";
+    var html = OVERVIEW_INDICES.map(function (ix, i) {
+      var rows = resultsList[i] || [];
+      if (!rows.length) {
+        return '<div class="mb-ix-tile"><div class="mb-ix-name">' + esc(ix.name) + '</div><div class="mb-ix-val">—</div></div>';
+      }
+      var last = rows[rows.length - 1];
+      var prev = rows.length > 1 ? rows[rows.length - 2] : null;
+      if (last.date && last.date > latestDate) latestDate = last.date;
+      var chg = prev && prev.close ? (last.close - prev.close) / prev.close * 100 : null;
+      var cls = chg == null ? "mb-flat" : (chg > 0 ? "mb-up" : (chg < 0 ? "mb-down" : "mb-flat"));
+      var sign = chg != null && chg > 0 ? "+" : "";
+      return '<div class="mb-ix-tile"><div class="mb-ix-name">' + esc(ix.name) + '</div>' +
+        '<div class="mb-ix-val ' + cls + '">' + num(last.close) + "</div>" +
+        '<div class="mb-ix-chg ' + cls + '">' + (chg == null ? "—" : sign + num(chg) + "%") + "</div></div>";
+    }).join("");
+    if (dateEl) dateEl.textContent = latestDate;
+    body.innerHTML = html;
+  }
+
+  function loadIndicesCard(card) {
+    var end = new Date();
+    var start = new Date(end.getTime() - 15 * 86400000);
+    var qs = "?start_date=" + fmtDate(start) + "&end_date=" + fmtDate(end);
+    Promise.all(OVERVIEW_INDICES.map(function (ix) {
+      return fetch("/api/index/" + encodeURIComponent(ix.code) + "/kline" + qs)
+        .then(function (r) { return r.ok ? r.json() : { data: [] }; })
+        .then(function (j) { return j.data || []; })
+        .catch(function () { return []; });
+    })).then(function (results) {
+      renderIndicesCard(card.id, results);
+      refreshCanvas();
+    });
+  }
+
+  function loadSingleton(card) {
+    if (card.kind === "review") loadReviewCard(card);
+    else if (card.kind === "hotsector") loadHotsectorCard(card);
+    else if (card.kind === "indices") loadIndicesCard(card);
+  }
+
+  function singletonCardHtml(card) {
+    if (card.kind === "review") return reviewCardHtml(card);
+    if (card.kind === "hotsector") return hotsectorCardHtml(card);
+    return indicesCardHtml(card);
+  }
+
+  function hiddenSingletonDefs() {
+    var present = {};
+    boardCards.forEach(function (c) { present[c.id] = true; });
+    return SINGLETON_DEFS.filter(function (d) { return !present[d.id]; });
+  }
+
+  function addSingletonCard(id) {
+    if (boardCards.length >= MAX_BOARD_CARDS) return;
+    var def = SINGLETON_DEFS.filter(function (d) { return d.id === id; })[0];
+    if (!def || boardCards.some(function (c) { return c.id === id; })) return;
+    var card = { id: def.id, kind: def.kind };
+    boardCards.push(card);
+    updateEmptyCanvasHint();
+    var el = mountCardHtml(singletonCardHtml(card));
+    placeNewCard(el);
+    queueSaveBoard();
+    closeAddMenu();
+    loadSingleton(card);
+  }
+
   /* ── 自由拖拽/缩放画布(布局存后端,登录按账号、未登录用访客共享默认布局) ── */
 
   var CANVAS_BREAKPOINT = 760;
@@ -879,8 +1098,26 @@
     handle.addEventListener("pointercancel", onUp);
   }
 
-  function defaultPos(i, perRow) {
-    return { left: (i % perRow) * (CARD_W + GAP), top: Math.floor(i / perRow) * ROW_H };
+  // 行式装箱:按当前视觉顺序(先 top 后 left)排,一行放不下就换行,行高取
+  // 该行最高的卡片 —— 卡片尺寸各异(对比卡 760 宽、用户还可以任意 resize),
+  // 固定网格摆法要么重叠要么留大缝,按实际渲染尺寸装箱才整齐。卡片高度由
+  // CSS 统一保底(内容超出在卡片内滚动),所以量出来的尺寸在数据加载前后
+  // 一致,不会"加载完长高压住下一行"。
+  function packCards(cards, gridWidth, startY) {
+    var sorted = cards.slice().sort(function (a, b) {
+      var at = parseFloat(a.style.top) || 0, bt = parseFloat(b.style.top) || 0;
+      if (Math.abs(at - bt) > 40) return at - bt;
+      return (parseFloat(a.style.left) || 0) - (parseFloat(b.style.left) || 0);
+    });
+    var x = 0, y = startY || 0, rowH = 0;
+    sorted.forEach(function (card) {
+      var w = card.offsetWidth, h = card.offsetHeight;
+      if (x > 0 && x + w > gridWidth) { x = 0; y += rowH + GAP; rowH = 0; }
+      card.style.left = x + "px";
+      card.style.top = y + "px";
+      x += w + GAP;
+      if (h > rowH) rowH = h;
+    });
   }
 
   function initCanvas(grid) {
@@ -888,17 +1125,31 @@
     grid.classList.add("mb-canvas-mode");
 
     var cards = Array.prototype.slice.call(grid.querySelectorAll(".mb-card"));
-    var perRow = Math.max(1, Math.floor((grid.clientWidth + GAP) / (CARD_W + GAP)));
+    var unplaced = [];
 
     cards.forEach(function (card, i) {
       var saved = currentLayout[card.getAttribute("data-card-id")];
-      var pos = saved || defaultPos(i, perRow);
-      card.style.left = pos.left + "px";
-      card.style.top = pos.top + "px";
       card.style.zIndex = 10 + i;
       if (saved && saved.width) card.style.width = saved.width + "px";
       if (saved && saved.height) card.style.height = saved.height + "px";
+      if (saved) {
+        card.style.left = saved.left + "px";
+        card.style.top = saved.top + "px";
+      } else {
+        unplaced.push(card);
+      }
     });
+    // 没有保存过坐标的卡片(新访客默认布局/别处新加的卡片种类):从已摆放
+    // 卡片的下方开始装箱,不跟用户摆好的位置打架。
+    if (unplaced.length) {
+      var startY = 0;
+      cards.forEach(function (c) {
+        if (unplaced.indexOf(c) !== -1) return;
+        var bottom = (parseFloat(c.style.top) || 0) + c.offsetHeight;
+        if (bottom + GAP > startY) startY = bottom + GAP;
+      });
+      packCards(unplaced, grid.clientWidth, startY);
+    }
     resizeCanvasHeight(grid, cards);
 
     cards.forEach(function (card) {
@@ -919,6 +1170,26 @@
     });
 
     return { grid: grid, cards: cards };
+  }
+
+  // 一键整理:按真实渲染尺寸重新装箱(此时内容已加载,量到的就是成品高度),
+  // 拖乱了/删出窟窿了点一下就恢复整齐,不用一张张手动对齐。
+  function bindTidyButton() {
+    var btn = $("mbTidyLayout");
+    if (!btn) return;
+    btn.addEventListener("click", function () {
+      if (!canvasState || !canvasState.cards.length) return;
+      packCards(canvasState.cards, canvasState.grid.clientWidth, 0);
+      canvasState.cards.forEach(function (card) {
+        var cardId = card.getAttribute("data-card-id");
+        var entry = currentLayout[cardId] || {};
+        entry.left = parseFloat(card.style.left) || 0;
+        entry.top = parseFloat(card.style.top) || 0;
+        currentLayout[cardId] = entry;
+      });
+      refreshCanvas();
+      queueSaveBoard();
+    });
   }
 
   function bindResetButton() {
@@ -1080,13 +1351,31 @@
   function renderAddMenu() {
     var pop = $("mbAddPop");
     if (!pop) return;
+    // 到上限就不再列可添加项,明说原因 —— 比点了没反应强
+    if (boardCards.length >= MAX_BOARD_CARDS) {
+      pop.innerHTML = '<div class="mb-add-full">卡片已达上限（' + MAX_BOARD_CARDS +
+        ' 张），删除一些再添加</div>';
+      return;
+    }
     var hidden = hiddenRankIds();
-    var html = '<button type="button" class="mb-add-item" data-add="stock">+ 新增行情卡片</button>' +
-      '<button type="button" class="mb-add-item" data-add="compare">+ 新增多股对比卡片</button>';
-    hidden.forEach(function (id) {
-      html += '<button type="button" class="mb-add-item" data-add="rank" data-rank-id="' +
-        esc(id) + '">+ ' + esc(RANK_INFO[id].name) + "</button>";
-    });
+    var html = '<div class="mb-add-label">行情图表</div>' +
+      '<button type="button" class="mb-add-item" data-add="stock">+ 行情卡片</button>' +
+      '<button type="button" class="mb-add-item" data-add="compare">+ 多股对比</button>';
+    if (hidden.length) {
+      html += '<div class="mb-add-label">板块排行</div>';
+      hidden.forEach(function (id) {
+        html += '<button type="button" class="mb-add-item" data-add="rank" data-rank-id="' +
+          esc(id) + '">+ ' + esc(RANK_INFO[id].name) + "</button>";
+      });
+    }
+    var hiddenSingles = hiddenSingletonDefs();
+    if (hiddenSingles.length) {
+      html += '<div class="mb-add-label">数据摘要</div>';
+      hiddenSingles.forEach(function (d) {
+        html += '<button type="button" class="mb-add-item" data-add="singleton" data-singleton-id="' +
+          esc(d.id) + '">+ ' + esc(d.label) + "</button>";
+      });
+    }
     pop.innerHTML = html;
   }
 
@@ -1114,6 +1403,7 @@
       if (!item) return;
       if (item.getAttribute("data-add") === "stock") addStockCard();
       else if (item.getAttribute("data-add") === "compare") addCompareCard();
+      else if (item.getAttribute("data-add") === "singleton") addSingletonCard(item.getAttribute("data-singleton-id"));
       else addRankCard(item.getAttribute("data-rank-id"));
     });
   }
@@ -1123,12 +1413,16 @@
   function cardHtmlFor(card) {
     if (card.kind === "rank") return rankCardHtml(card);
     if (card.kind === "compare") return compareCardHtml(card);
+    if (card.kind === "review" || card.kind === "hotsector" || card.kind === "indices") {
+      return singletonCardHtml(card);
+    }
     return stockCardHtml(card);
   }
 
   function load() {
     var grid = $("mbGrid");
     bindResetButton();
+    bindTidyButton();
     bindAddMenu();
     grid.addEventListener("click", function (e) {
       var btn = e.target.closest("[data-remove-card]");
@@ -1149,7 +1443,8 @@
     fetchBoard().then(function (saved) {
       var savedCards = Array.isArray(saved.cards)
         ? saved.cards.filter(function (c) {
-            return c && typeof c.id === "string" && (c.kind === "stock" || c.kind === "rank" || c.kind === "compare");
+            return c && typeof c.id === "string" && (c.kind === "stock" || c.kind === "rank" ||
+              c.kind === "compare" || c.kind === "review" || c.kind === "hotsector" || c.kind === "indices");
           })
         : null;
       currentLayout = (saved.positions && typeof saved.positions === "object")
@@ -1167,6 +1462,10 @@
           compareState[card.id] = (savedCmp && Array.isArray(savedCmp.codes)) ? savedCmp.codes : [];
           bindCompareUI(card);
           loadCompare(card);
+          return;
+        }
+        if (card.kind === "review" || card.kind === "hotsector" || card.kind === "indices") {
+          loadSingleton(card);
           return;
         }
         if (card.kind !== "stock") return;

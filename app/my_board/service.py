@@ -2,8 +2,8 @@
 数据看板布局 —— 登录用户各自一份,访客共享 user_id=0 的默认布局。
 
 存储的布局是一份 {"cards": [...], "positions": {...}} 文档:
-- cards:    当前画布上有哪些卡片、什么类型(stock/rank/compare),决定了增删卡片后
-            下次打开时展示哪些卡片、以及它们的先后顺序。
+- cards:    当前画布上有哪些卡片、什么类型(stock/rank/compare/review/hotsector/indices),
+            决定了增删卡片后下次打开时展示哪些卡片、以及它们的先后顺序。
 - positions:每张卡片的坐标/尺寸,行情卡片(kind=stock)还可以带 code/type,
             记录用户把这张卡片切换成了哪只股票/指数;对比卡片(kind=compare)
             带 codes(数组,最多 MAX_COMPARE_CODES 支),记录这张卡片同时对比
@@ -21,16 +21,24 @@ from typing import Any, Dict, List, Optional
 
 from . import db
 
-MAX_CARDS = 50
+MAX_CARDS = 10   # 与前端 my_board.js 的 MAX_BOARD_CARDS 保持一致
 MAX_COMPARE_CODES = 6
 COORD_MIN, COORD_MAX = -5000, 20000
 SIZE_MIN, SIZE_MAX = 200, 1200
 _CODE_RE = re.compile(r"^[0-9A-Za-z]{1,10}$")
 _CARD_ID_RE = re.compile(r"^[0-9A-Za-z_]{1,40}$")
-_KINDS = ("stock", "rank", "compare")
+_KINDS = ("stock", "rank", "compare", "review", "hotsector", "indices")
 # 排行卡片类目是有限、写死的(与前端 my_board.js 的 RANK_INFO 保持一致);
 # 不校验的话,直接调 API 能往访客共享布局塞前端渲染不了的"僵尸"排行卡。
 _RANK_IDS = ("rk_groups", "rk_industry", "rk_concept", "rk_special")
+# 单例卡片(每种卡片全站只有一个固定 id,没有可配置内容,数据来自各自模块
+# 现成的接口):每日复盘摘要 / AI热门板块战绩 / 指数速览。跟排行卡片一样,
+# id 与 kind 是绑定死的,不校验的话能塞进前端渲染不了的 id。
+_SINGLETON_IDS = {
+    "review": "dr_summary",
+    "hotsector": "hs_today",
+    "indices": "idx_overview",
+}
 
 
 class LayoutError(Exception):
@@ -136,6 +144,8 @@ def _clean_cards(cards: Any) -> List[Dict[str, str]]:
             raise LayoutError("卡片类型不合法")
         if kind == "rank" and card_id not in _RANK_IDS:
             raise LayoutError("排行卡片 id 不合法")
+        if kind in _SINGLETON_IDS and card_id != _SINGLETON_IDS[kind]:
+            raise LayoutError("卡片 id 不合法")
         if card_id in seen:
             continue
         seen.add(card_id)

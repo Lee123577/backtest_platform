@@ -59,6 +59,13 @@
   padding: 6px;
 }
 .mb-add-pop[hidden] { display: none; }
+.mb-add-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--txt2, #8a929c);
+  padding: 8px 10px 3px;
+}
+.mb-add-label:first-child { padding-top: 3px; }
 .mb-add-item {
   display: block;
   width: 100%;
@@ -73,6 +80,13 @@
   color: var(--txt, #24292f);
 }
 .mb-add-item:hover { background: var(--bg2, #f6f8fa); }
+.mb-add-full {
+  font-size: 12px;
+  color: var(--txt2, #8a929c);
+  padding: 10px 8px;
+  text-align: center;
+  line-height: 1.6;
+}
 
 /* 自由拖拽画布:JS 给 .mb-grid 加 mb-canvas-mode 后,卡片改为绝对定位,
    可以自由拖动摆放(横向/纵向比对);高度由 JS 按内容动态写入 style.height。
@@ -86,6 +100,10 @@
 .mb-grid.mb-canvas-mode .mb-card {
   position: absolute;
   width: 420px;
+  /* 默认统一高度:不设的话卡片会随内容无限长高(行业排行 20 行能撑出
+     1200px+),跟下方卡片重叠;超出部分在卡片内滚动,跟手动 resize 后的
+     行为一致。用户拖右下角改过大小的,JS 会写内联样式覆盖这里。 */
+  height: 420px;
   min-width: 300px;
   min-height: 300px;
   display: flex;
@@ -97,11 +115,14 @@
 /* 多股对比卡片比普通行情卡片大一圈,方便同时看清多条曲线 */
 .mb-grid.mb-canvas-mode .mb-card.mb-compare-card {
   width: 760px;
+  height: 460px;
   min-height: 460px;
 }
 .mb-grid.mb-canvas-mode .mb-card-body { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .mb-grid.mb-canvas-mode .mb-chart { flex: 1; min-height: 100px; }
 .mb-grid.mb-canvas-mode .mb-rank-body { flex: 1; min-height: 0; max-height: none; }
+.mb-grid.mb-canvas-mode .mb-review-body,
+.mb-grid.mb-canvas-mode .mb-indices-grid { flex: 1; min-height: 0; overflow-y: auto; }
 
 @media (max-width: 760px) {
   .mb-grid { display: grid; grid-template-columns: 1fr; gap: 16px; }
@@ -298,6 +319,11 @@
   padding: 30px 0;
   text-align: center;
 }
+.mb-loading { animation: mb-pulse 1.2s ease-in-out infinite; }
+@keyframes mb-pulse {
+  0%, 100% { opacity: .45; }
+  50% { opacity: 1; }
+}
 .mb-error { color: #e5484d; }
 
 /* 未选择股票的空槽位 */
@@ -366,6 +392,64 @@
 
 .mb-compare-chart { height: 380px; }
 .mb-grid.mb-canvas-mode .mb-compare-card .mb-chart { flex: 1; min-height: 200px; }
+
+/* ── 每日复盘摘要卡 ────────────────────────────────────────────────── */
+
+.mb-review-title { font-size: 15px; font-weight: 700; color: var(--txt, #24292f); margin: 8px 0 10px; }
+.dr-idx-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.dr-idx-chip {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  background: var(--bg2, #f6f8fa);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+.dr-idx-name { color: var(--txt2, #8a929c); }
+.dr-idx-val { font-weight: 700; font-variant-numeric: tabular-nums; color: var(--txt, #24292f); }
+.mb-review-link {
+  display: inline-block;
+  margin-top: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--mb-accent);
+  text-decoration: none;
+}
+.mb-review-link:hover { text-decoration: underline; }
+
+/* ── AI热门板块战绩卡(复用排行榜的 rk-row/rk-group-label 列表样式) ──── */
+
+.mb-hs-tag {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  margin-left: 6px;
+}
+.mb-hs-tag--win { background: rgba(207, 34, 46, .1); color: #cf222e; }
+.mb-hs-tag--lose { background: rgba(26, 127, 55, .1); color: #1a7f37; }
+
+/* ── 指数速览卡 ────────────────────────────────────────────────────── */
+
+.mb-indices-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-top: 6px;
+}
+.mb-ix-tile {
+  background: var(--bg2, #f6f8fa);
+  border-radius: 10px;
+  padding: 12px 10px;
+  text-align: center;
+}
+.mb-ix-name { font-size: 12px; color: var(--txt2, #8a929c); margin-bottom: 6px; }
+.mb-ix-val { font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.mb-ix-chg { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 2px; }
+
+@media (max-width: 520px) {
+  .mb-indices-grid { grid-template-columns: repeat(2, 1fr); }
+}
 
 /* ── 搜索切换弹层 ──────────────────────────────────────────────────── */
 
@@ -478,4 +562,5 @@
 
 @media (prefers-reduced-motion: reduce) {
   .mb-card, .mb-grid.mb-canvas-mode .mb-card, .rk-row { transition: none; }
+  .mb-loading { animation: none; }
 }
