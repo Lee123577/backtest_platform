@@ -28,6 +28,8 @@
   ];
   var DAYS_BACK = 180;   // 拉近半年(自然日),图表下方滑块可再拖出子区间
   var MAX_BOARD_CARDS = 50;
+  var MAX_COMPARE_STOCKS = 6;
+  var COMPARE_COLORS = ["#0969da", "#cf222e", "#1a7f37", "#9a6700", "#8250df", "#bf3989"];
 
   var $ = function (id) { return document.getElementById(id); };
   function esc(s) {
@@ -219,7 +221,7 @@
 
   function closeAllPops(exceptId) {
     boardCards.forEach(function (c) {
-      if (c.kind !== "stock") return;
+      if (c.kind !== "stock" && c.kind !== "compare") return;
       if (c.id !== exceptId) { var p = $("mbPop_" + c.id); if (p) p.hidden = true; }
     });
   }
@@ -291,6 +293,242 @@
   }
 
   document.addEventListener("click", function () { closeAllPops(null); closeAddMenu(); });
+
+  /* ── 多股对比卡片(同时对比多支股票/指数区间涨跌幅曲线) ──────────────────
+     卡片本身比行情卡片大一圈(见 CSS .mb-compare-card),方便看清多条曲线;
+     由于各股票绝对价格量级差异很大(几元 vs 几百元),不直接画收盘价,
+     而是换算成"相对区间首日收盘价的涨跌幅 %",这样才有可比性。         */
+
+  var compareState = {};          // cardId -> [{code,type,name}, ...]
+  var compareCharts = {};         // cardId -> echarts 实例
+  var compareResizeHandlers = {}; // cardId -> 当前绑定的 resize 回调
+
+  function compareCardHtml(card) {
+    return '<div class="mb-card mb-compare-card" id="mbCard_' + card.id + '" data-card-id="' + card.id + '">' +
+      '<div class="mb-card-head">' +
+      '<span class="mb-name">多股对比</span>' +
+      '<span class="mb-compare-count" id="mbCmpCount_' + card.id + '"></span>' +
+      '<button type="button" class="mb-switch-btn" id="mbCmpAdd_' + card.id + '" title="添加股票/指数到对比">+ 添加</button>' +
+      '<span class="mb-drag-handle" title="拖动排列位置,便于横向/纵向比对">⠿</span>' +
+      '<button type="button" class="mb-card-close" data-remove-card="' + esc(card.id) + '" title="删除这张卡片">✕</button>' +
+      "</div>" +
+      '<div class="mb-compare-chips" id="mbCmpChips_' + card.id + '"></div>' +
+      '<div class="mb-card-body" id="mbCmpBody_' + card.id + '"></div>' +
+      '<div class="mb-search-pop" id="mbPop_' + card.id + '" hidden>' +
+      '<input type="text" class="mb-search-input" id="mbSearchInput_' + card.id +
+      '" placeholder="搜代码或名称,如 600519 / 茅台" autocomplete="off">' +
+      '<div class="mb-search-results" id="mbSearchResults_' + card.id + '"></div>' +
+      "</div>" +
+      '<span class="mb-resize-handle" title="拖动右下角调整卡片大小"></span>' +
+      "</div>";
+  }
+
+  function compareChipsHtml(cardId) {
+    var list = compareState[cardId] || [];
+    if (!list.length) return "";
+    return list.map(function (it, i) {
+      return '<span class="mb-cmp-chip" style="--cmp-color:' + COMPARE_COLORS[i % COMPARE_COLORS.length] + '">' +
+        '<span class="mb-cmp-dot"></span>' + esc(it.name || it.code) +
+        '<button type="button" class="mb-cmp-remove" data-cmp-remove="' + esc(it.code) + '" title="从对比中移除">✕</button>' +
+        "</span>";
+    }).join("");
+  }
+
+  function renderCompareChips(cardId) {
+    var el = $("mbCmpChips_" + cardId);
+    if (el) el.innerHTML = compareChipsHtml(cardId);
+    var countEl = $("mbCmpCount_" + cardId);
+    if (countEl) {
+      var n = (compareState[cardId] || []).length;
+      countEl.textContent = n ? n + "/" + MAX_COMPARE_STOCKS : "";
+    }
+  }
+
+  function drawCompareChart(cardId, list, resultsList) {
+    var body = $("mbCmpBody_" + cardId);
+    if (!body) return;   // 请求还没回来卡片就被删了
+    var hasAny = resultsList.some(function (r) { return r && r.length >= 2; });
+    if (!hasAny) { body.innerHTML = '<div class="mb-error">暂无行情数据</div>'; return; }
+
+    body.innerHTML = '<div class="mb-meta">近 ' + DAYS_BACK + ' 天涨跌幅对比（以区间首日收盘价为基准）· 拖动图表下方滑块可放大看某段时间</div>' +
+      '<div class="mb-chart mb-compare-chart" id="mbCmpChart_' + cardId + '"></div>';
+    if (!window.echarts) return;
+
+    var el = $("mbCmpChart_" + cardId);
+    if (compareCharts[cardId]) { compareCharts[cardId].dispose(); }
+    if (compareResizeHandlers[cardId]) {
+      window.removeEventListener("resize", compareResizeHandlers[cardId]);
+      delete compareResizeHandlers[cardId];
+    }
+    var chart = echarts.init(el);
+    compareCharts[cardId] = chart;
+
+    var series = [];
+    var legendNames = [];
+    list.forEach(function (it, i) {
+      var rows = resultsList[i] || [];
+      var valid = rows.filter(function (r) { return r.date && r.close != null; });
+      if (valid.length < 2) return;
+      var base = valid[0].close;
+      var data = valid.map(function (r) {
+        return [r.date, base ? (r.close - base) / base * 100 : 0];
+      });
+      var name = it.name || it.code;
+      legendNames.push(name);
+      series.push({
+        name: name,
+        type: "line",
+        data: data,
+        showSymbol: false,
+        lineStyle: { width: 2, color: COMPARE_COLORS[i % COMPARE_COLORS.length] },
+        itemStyle: { color: COMPARE_COLORS[i % COMPARE_COLORS.length] },
+      });
+    });
+
+    chart.setOption({
+      grid: { left: 52, right: 16, top: 36, bottom: 46 },
+      legend: {
+        top: 0, left: 0, itemWidth: 10, itemHeight: 10,
+        textStyle: { fontSize: 11, color: "#57606a" },
+        data: legendNames,
+      },
+      tooltip: {
+        trigger: "axis",
+        formatter: function (params) {
+          if (!params || !params.length) return "";
+          var lines = [params[0].axisValueLabel || params[0].axisValue];
+          params.forEach(function (p) {
+            var v = p.data && p.data[1] != null ? p.data[1] : null;
+            var sign = v != null && v > 0 ? "+" : "";
+            lines.push(p.marker + p.seriesName + " " + (v == null ? "—" : sign + num(v) + "%"));
+          });
+          return lines.join("<br/>");
+        },
+      },
+      xAxis: {
+        type: "time",
+        axisLine: { lineStyle: { color: "#d0d7de" } },
+        axisLabel: { color: "#8a929c", fontSize: 11 },
+      },
+      yAxis: {
+        type: "value",
+        scale: true,
+        splitLine: { lineStyle: { color: "#eef1f4" } },
+        axisLabel: { color: "#8a929c", fontSize: 11, formatter: "{value}%" },
+      },
+      dataZoom: [
+        { type: "inside", start: 0, end: 100 },
+        {
+          type: "slider", start: 0, end: 100, height: 16, bottom: 6,
+          borderColor: "transparent", backgroundColor: "#f6f8fa",
+          fillerColor: "rgba(9,105,218,.15)", moveHandleSize: 0,
+          handleStyle: { color: "#0969da", borderColor: "#0969da" },
+          textStyle: { color: "#8a929c", fontSize: 10 },
+        },
+      ],
+      series: series,
+    });
+
+    var onResize = function () { chart.resize(); };
+    compareResizeHandlers[cardId] = onResize;
+    window.addEventListener("resize", onResize);
+  }
+
+  function loadCompare(card) {
+    var list = compareState[card.id] || [];
+    renderCompareChips(card.id);
+    var body = $("mbCmpBody_" + card.id);
+    if (!body) return;
+
+    if (!list.length) {
+      body.innerHTML = '<div class="mb-empty-slot"><p>这张卡片还没添加对比的股票/指数</p>' +
+        '<button type="button" class="mb-empty-btn" data-cmp-empty-pick="1">+ 添加股票或指数</button></div>';
+      refreshCanvas();
+      return;
+    }
+    body.innerHTML = '<div class="mb-loading">加载中…</div>';
+
+    var end = new Date();
+    var start = new Date(end.getTime() - DAYS_BACK * 86400000);
+    var qs = "?start_date=" + fmtDate(start) + "&end_date=" + fmtDate(end);
+
+    Promise.all(list.map(function (it) {
+      var url = (it.type === "index" ? "/api/index/" : "/api/stock/") +
+        encodeURIComponent(it.code) + "/kline" + qs;
+      return fetch(url)
+        .then(function (r) { return r.ok ? r.json() : { data: [] }; })
+        .then(function (j) { return j.data || []; })
+        .catch(function () { return []; });
+    })).then(function (results) {
+      if (!compareState[card.id]) return;   // 请求还没回来卡片就被删了
+      drawCompareChart(card.id, list, results);
+      refreshCanvas();
+    });
+  }
+
+  function saveCompareSelection(card) {
+    var entry = currentLayout[card.id] || {};
+    var cardEl = $("mbCard_" + card.id);
+    if (cardEl) {
+      entry.left = parseFloat(cardEl.style.left) || 0;
+      entry.top = parseFloat(cardEl.style.top) || 0;
+    }
+    entry.codes = (compareState[card.id] || []).map(function (it) {
+      return { code: it.code, type: it.type, name: it.name };
+    });
+    currentLayout[card.id] = entry;
+    queueSaveBoard();
+  }
+
+  function addToCompare(card, code, type, name) {
+    var list = compareState[card.id] = compareState[card.id] || [];
+    if (list.some(function (it) { return it.code === code && it.type === type; })) return;
+    if (list.length >= MAX_COMPARE_STOCKS) return;
+    list.push({ code: code, type: type, name: name });
+    var input = $("mbSearchInput_" + card.id);
+    if (input) input.value = "";
+    var resultsEl = $("mbSearchResults_" + card.id);
+    if (resultsEl) resultsEl.innerHTML = '<div class="mb-search-hint">输入代码或名称搜索</div>';
+    loadCompare(card);
+    saveCompareSelection(card);
+  }
+
+  function removeFromCompare(card, code) {
+    var list = compareState[card.id] || [];
+    compareState[card.id] = list.filter(function (it) { return it.code !== code; });
+    loadCompare(card);
+    saveCompareSelection(card);
+  }
+
+  function bindCompareUI(card) {
+    $("mbCmpAdd_" + card.id).addEventListener("click", function (e) {
+      e.stopPropagation();
+      openPop(card);
+    });
+    $("mbCard_" + card.id).addEventListener("click", function (e) {
+      if (e.target && e.target.getAttribute("data-cmp-empty-pick")) {
+        e.stopPropagation();
+        openPop(card);
+      }
+    });
+    $("mbPop_" + card.id).addEventListener("click", function (e) { e.stopPropagation(); });
+    var input = $("mbSearchInput_" + card.id);
+    input.addEventListener("input", function () {
+      clearTimeout(searchTimer);
+      var v = input.value.trim();
+      searchTimer = setTimeout(function () { doSearch(card, v); }, 250);
+    });
+    $("mbSearchResults_" + card.id).addEventListener("click", function (e) {
+      var item = e.target.closest(".mb-search-item");
+      if (!item) return;
+      addToCompare(card, item.getAttribute("data-code"), item.getAttribute("data-type"), item.getAttribute("data-name"));
+    });
+    $("mbCmpChips_" + card.id).addEventListener("click", function (e) {
+      var btn = e.target.closest("[data-cmp-remove]");
+      if (!btn) return;
+      removeFromCompare(card, btn.getAttribute("data-cmp-remove"));
+    });
+  }
 
   /* ── 板块涨幅排行榜(可增删的分类小卡片) ──────────────────────────────── */
 
@@ -619,6 +857,7 @@
       card.style.width = w + "px";
       card.style.height = h + "px";
       if (slotCharts[cardId]) slotCharts[cardId].resize();
+      if (compareCharts[cardId]) compareCharts[cardId].resize();
       resizeCanvasHeight(grid, allCards);
     }
 
@@ -758,6 +997,22 @@
     openPop(card);
   }
 
+  function addCompareCard() {
+    if (boardCards.length >= MAX_BOARD_CARDS) return;
+    var id = genCardId();
+    var card = { id: id, kind: "compare" };
+    boardCards.push(card);
+    updateEmptyCanvasHint();
+    var el = mountCardHtml(compareCardHtml(card));
+    compareState[id] = [];
+    bindCompareUI(card);
+    renderCompareChips(id);
+    placeNewCard(el);
+    queueSaveBoard();
+    closeAddMenu();
+    openPop(card);
+  }
+
   function addRankCard(rankId) {
     if (boardCards.length >= MAX_BOARD_CARDS) return;
     if (!RANK_INFO[rankId] || boardCards.some(function (c) { return c.id === rankId; })) return;
@@ -800,6 +1055,13 @@
         delete slotResizeHandlers[cardId];
       }
       delete slotState[cardId];
+    } else if (card.kind === "compare") {
+      if (compareCharts[cardId]) { compareCharts[cardId].dispose(); delete compareCharts[cardId]; }
+      if (compareResizeHandlers[cardId]) {
+        window.removeEventListener("resize", compareResizeHandlers[cardId]);
+        delete compareResizeHandlers[cardId];
+      }
+      delete compareState[cardId];
     }
     if (el) el.remove();
     delete currentLayout[cardId];
@@ -819,7 +1081,8 @@
     var pop = $("mbAddPop");
     if (!pop) return;
     var hidden = hiddenRankIds();
-    var html = '<button type="button" class="mb-add-item" data-add="stock">+ 新增行情卡片</button>';
+    var html = '<button type="button" class="mb-add-item" data-add="stock">+ 新增行情卡片</button>' +
+      '<button type="button" class="mb-add-item" data-add="compare">+ 新增多股对比卡片</button>';
     hidden.forEach(function (id) {
       html += '<button type="button" class="mb-add-item" data-add="rank" data-rank-id="' +
         esc(id) + '">+ ' + esc(RANK_INFO[id].name) + "</button>";
@@ -850,6 +1113,7 @@
       var item = e.target.closest("[data-add]");
       if (!item) return;
       if (item.getAttribute("data-add") === "stock") addStockCard();
+      else if (item.getAttribute("data-add") === "compare") addCompareCard();
       else addRankCard(item.getAttribute("data-rank-id"));
     });
   }
@@ -857,7 +1121,9 @@
   /* ── 入口 ──────────────────────────────────────────────────────────── */
 
   function cardHtmlFor(card) {
-    return card.kind === "rank" ? rankCardHtml(card) : stockCardHtml(card);
+    if (card.kind === "rank") return rankCardHtml(card);
+    if (card.kind === "compare") return compareCardHtml(card);
+    return stockCardHtml(card);
   }
 
   function load() {
@@ -873,7 +1139,9 @@
       var cur = card && card.kind === "stock" ? slotState[cardId] : null;
       var msg = cur
         ? "确定删除「" + (cur.name || cur.code) + "」这张行情卡片吗？删除后需要重新搜索选择股票/指数，且不可撤销。"
-        : "确定删除这张卡片吗？删除后不可撤销。";
+        : (card && card.kind === "compare"
+          ? "确定删除这张对比卡片吗？已添加的对比股票也会一并清空，且不可撤销。"
+          : "确定删除这张卡片吗？删除后不可撤销。");
       if (!confirm(msg)) return;
       removeCard(cardId);
     });
@@ -881,7 +1149,7 @@
     fetchBoard().then(function (saved) {
       var savedCards = Array.isArray(saved.cards)
         ? saved.cards.filter(function (c) {
-            return c && typeof c.id === "string" && (c.kind === "stock" || c.kind === "rank");
+            return c && typeof c.id === "string" && (c.kind === "stock" || c.kind === "rank" || c.kind === "compare");
           })
         : null;
       currentLayout = (saved.positions && typeof saved.positions === "object")
@@ -894,6 +1162,13 @@
       grid.innerHTML = boardCards.map(cardHtmlFor).join("");
 
       boardCards.forEach(function (card) {
+        if (card.kind === "compare") {
+          var savedCmp = currentLayout[card.id];
+          compareState[card.id] = (savedCmp && Array.isArray(savedCmp.codes)) ? savedCmp.codes : [];
+          bindCompareUI(card);
+          loadCompare(card);
+          return;
+        }
         if (card.kind !== "stock") return;
         var def = DEFAULT_CARDS.filter(function (d) { return d.id === card.id; })[0];
         var saved2 = currentLayout[card.id];

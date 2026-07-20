@@ -94,6 +94,11 @@
 }
 .mb-grid.mb-canvas-mode .mb-card.dragging,
 .mb-grid.mb-canvas-mode .mb-card.resizing { transition: none; }
+/* 多股对比卡片比普通行情卡片大一圈,方便同时看清多条曲线 */
+.mb-grid.mb-canvas-mode .mb-card.mb-compare-card {
+  width: 760px;
+  min-height: 460px;
+}
 .mb-grid.mb-canvas-mode .mb-card-body { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .mb-grid.mb-canvas-mode .mb-chart { flex: 1; min-height: 100px; }
 .mb-grid.mb-canvas-mode .mb-rank-body { flex: 1; min-height: 0; max-height: none; }
@@ -313,6 +318,54 @@
   transition: background-color 120ms ease-out;
 }
 .mb-empty-btn:hover { background: rgba(var(--mb-accent-rgb), .16); }
+
+/* ── 多股对比卡片:选中股票的色块标签 + 大图表 ────────────────────────── */
+
+.mb-compare-count { font-size: 11px; color: var(--txt2, #8a929c); font-variant-numeric: tabular-nums; }
+
+.mb-compare-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 10px 0 2px;
+}
+.mb-compare-chips:empty { margin: 0; }
+.mb-cmp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--txt, #24292f);
+  background: var(--bg2, #f6f8fa);
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 999px;
+  padding: 3px 6px 3px 10px;
+}
+.mb-cmp-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--cmp-color, #8a929c);
+}
+.mb-cmp-remove {
+  flex: none;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--txt2, #8a929c);
+  background: none;
+  border: none;
+  border-radius: 50%;
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  transition: background-color 120ms ease-out, color 120ms ease-out;
+}
+.mb-cmp-remove:hover { background: rgba(229, 72, 77, .14); color: #e5484d; }
+
+.mb-compare-chart { height: 380px; }
+.mb-grid.mb-canvas-mode .mb-compare-card .mb-chart { flex: 1; min-height: 200px; }
 
 /* ── 搜索切换弹层 ──────────────────────────────────────────────────── */
 
