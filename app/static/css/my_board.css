@@ -118,6 +118,13 @@
   height: 460px;
   min-height: 460px;
 }
+/* 按卡片内容天然高度设更贴合的默认值,避免统一 420 造成留白/参差:
+   指数速览只有 6 个小 tile、排行/摘要类内容也短于图表卡。用户手动 resize
+   过的,JS 会写内联样式覆盖这里。 */
+.mb-grid.mb-canvas-mode .mb-card.mb-indices-card { height: 300px; }
+.mb-grid.mb-canvas-mode .mb-card.mb-rank-card,
+.mb-grid.mb-canvas-mode .mb-card.mb-review-card,
+.mb-grid.mb-canvas-mode .mb-card.mb-hotsector-card { height: 360px; }
 .mb-grid.mb-canvas-mode .mb-card-body { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .mb-grid.mb-canvas-mode .mb-chart { flex: 1; min-height: 100px; }
 .mb-grid.mb-canvas-mode .mb-rank-body { flex: 1; min-height: 0; max-height: none; }
@@ -130,8 +137,15 @@
   .mb-grid.mb-canvas-mode .mb-card {
     position: static !important; width: auto !important; height: auto !important;
   }
-  .mb-drag-handle, .mb-reset-btn, .mb-switch-btn, .mb-resize-handle,
-  .mb-add-wrap, .mb-card-close { display: none; }
+  /* 只隐藏依赖精细指针的拖拽/缩放(触屏体验差);切换股票、删卡、添加、重置
+     在堆叠布局下依然可用,保留 —— 否则手机用户只能看死默认布局。
+     用 !important:桌面加载后缩到窄屏时 mb-canvas-mode 类会残留(JS 不在
+     resize 时重跑),画布模式的 .mb-resize-handle{display:block} 在源码里更靠
+     后、同特异性会盖过普通规则,响应式隐藏这里用 !important 稳压(只作用于
+     窄屏媒体查询内,桌面画布模式不受影响)。 */
+  .mb-drag-handle, .mb-resize-handle { display: none !important; }
+  /* 没了拖拽把手的 margin-left:auto 占位,把删除按钮推到右侧对齐 */
+  .mb-card-close { margin-left: auto; }
 }
 
 .mb-card {

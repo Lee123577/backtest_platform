@@ -24,7 +24,6 @@
     { id: "dr_summary", kind: "review" },
     { id: "hs_today", kind: "hotsector" },
     { id: "slot1", kind: "stock", code: "603993", type: "stock", name: "洛阳钼业" },
-    { id: "slot2", kind: "stock", code: "000001", type: "index", name: "上证综合指数" },
     { id: "rk_special", kind: "rank" },
   ];
   var DAYS_BACK = 180;   // 拉近半年(自然日),图表下方滑块可再拖出子区间
@@ -43,6 +42,9 @@
     return v == null ? "—" : Number(v).toFixed(digits === undefined ? 2 : digits);
   }
   function tagLabel(type) { return type === "index" ? "指数" : "个股"; }
+  // 涨跌箭头前缀:除了红/绿配色再加 ▲/▼,色盲也能辨、视觉更醒目(含尾随空格,
+  // 平/无数据返回空串不留多余空格)。
+  function arrowPrefix(v) { return v > 0 ? "▲ " : (v < 0 ? "▼ " : ""); }
 
   // 当前画布上的卡片(持久化的核心:哪些卡片存在、什么类型、什么顺序)
   var boardCards = [];   // [{id, kind: "stock"|"rank"}]
@@ -111,7 +113,7 @@
     body.innerHTML =
       '<div class="mb-quote">' +
       '<span class="mb-close ' + cls + '">' + num(last.close) + "</span>" +
-      '<span class="mb-chg-chip ' + cls + '">' + (chg == null ? "—" : sign + num(chg) + "%") + "</span>" +
+      '<span class="mb-chg-chip ' + cls + '">' + (chg == null ? "—" : arrowPrefix(chg) + sign + num(chg) + "%") + "</span>" +
       "</div>" +
       '<div class="mb-meta">最新 ' + esc(last.date) + " · 近 " + rows.length + " 个交易日 · 拖动图表下方滑块可放大看某段时间</div>" +
       '<div class="mb-chart" id="mbChart_' + slot.id + '"></div>';
@@ -537,7 +539,7 @@
   function pctHtml(v) {
     if (v == null) return '<span class="rk-pct rk-flat">—</span>';
     var cls = v > 0 ? "rk-up" : (v < 0 ? "rk-down" : "rk-flat");
-    return '<span class="rk-pct ' + cls + '">' + (v > 0 ? "+" : "") + Number(v).toFixed(2) + "%</span>";
+    return '<span class="rk-pct ' + cls + '">' + arrowPrefix(v) + (v > 0 ? "+" : "") + Number(v).toFixed(2) + "%</span>";
   }
   function rankNo(i) {
     var cls = i === 0 ? " top1" : i === 1 ? " top2" : i === 2 ? " top3" : "";
@@ -667,7 +669,7 @@
   function pctSpan(v, digits) {
     if (v == null) return '<span class="mb-flat">—</span>';
     var cls = v > 0 ? "mb-up" : (v < 0 ? "mb-down" : "mb-flat");
-    return '<span class="' + cls + '">' + (v > 0 ? "+" : "") + num(v, digits) + "%</span>";
+    return '<span class="' + cls + '">' + arrowPrefix(v) + (v > 0 ? "+" : "") + num(v, digits) + "%</span>";
   }
 
   // 每日复盘摘要
@@ -822,7 +824,7 @@
       var sign = chg != null && chg > 0 ? "+" : "";
       return '<div class="mb-ix-tile"><div class="mb-ix-name">' + esc(ix.name) + '</div>' +
         '<div class="mb-ix-val ' + cls + '">' + num(q.close) + "</div>" +
-        '<div class="mb-ix-chg ' + cls + '">' + (chg == null ? "—" : sign + num(chg) + "%") + "</div></div>";
+        '<div class="mb-ix-chg ' + cls + '">' + (chg == null ? "—" : arrowPrefix(chg) + sign + num(chg) + "%") + "</div></div>";
     }).join("");
     if (dateEl) dateEl.textContent = latestDate;
     body.innerHTML = html;
