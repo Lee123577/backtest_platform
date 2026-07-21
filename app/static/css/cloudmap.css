@@ -1,0 +1,243 @@
+/* 大盘云图 —— 沉浸式深色布局(参考 52etf.site 视觉，数据/筛选仍是本站自己的) */
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body.cm-body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: #262931;
+  color: #fefefe;
+  overflow: hidden;
+}
+
+.cm-app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+/* ── 顶部 header ──────────────────────────────────────────────────────── */
+.cm-header {
+  height: 56px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #363a46;
+  border-bottom: 1px solid #4a4f5d;
+  padding: 0 16px;
+}
+.cm-header-left { width: 200px; flex: none; }
+.cm-brand {
+  font-size: 24px;
+  color: #fefefe;
+  text-decoration: none;
+  cursor: pointer;
+  user-select: none;
+}
+.cm-brand:hover { color: #f63538; }
+
+.cm-header-center {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  overflow: hidden;
+}
+.cm-idx-tile {
+  width: 96px;
+  flex: none;
+  text-align: center;
+  font-size: 13px;
+  cursor: default;
+  user-select: none;
+}
+.cm-idx-name { color: #cfd2da; }
+.cm-idx-val { font-size: 14px; font-weight: 600; margin-top: 1px; }
+.cm-idx-pct { margin-top: 1px; }
+.cm-up { color: #f63538; }
+.cm-down { color: #30cc5a; }
+.cm-flat { color: #cfd2da; }
+
+.cm-header-right {
+  width: 200px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 16px;
+}
+.cm-time { font-size: 15px; color: #fefefe; user-select: none; }
+.cm-fullscreen-btn {
+  border: none;
+  background: transparent;
+  color: #fefefe;
+  font-size: 18px;
+  cursor: pointer;
+  padding: 4px;
+  line-height: 1;
+}
+.cm-fullscreen-btn:hover { color: #f63538; }
+
+/* ── 中部：左侧栏 + 主画布 ────────────────────────────────────────────── */
+.cm-shell {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.cm-sidebar {
+  width: 158px;
+  flex: none;
+  background: #232324;
+  padding: 10px 8px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.cm-board-box {
+  width: 142px;
+  background: #3f414b;
+  border-radius: 2px;
+  overflow: hidden;
+}
+.cm-board-item {
+  width: 100%;
+  height: 28px;
+  border: none;
+  border-top: 1px solid #292b32;
+  background: transparent;
+  color: #fefefe;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 8px;
+  cursor: pointer;
+}
+.cm-board-item:first-child { border-top: none; }
+.cm-board-item:hover { background: #34363f; }
+.cm-board-item.active { background: #292b32; font-weight: 600; }
+.cm-board-pct { font-size: 12px; }
+
+.cm-select-row {
+  width: 142px;
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cm-select {
+  width: 100%;
+  height: 30px;
+  background: #3f414b;
+  color: #fefefe;
+  border: none;
+  border-radius: 2px;
+  font-size: 12px;
+  padding: 0 8px;
+  cursor: pointer;
+}
+.cm-select option { color: #232324; }
+
+.cm-stats { width: 142px; margin-top: 18px; color: #fefefe; }
+.cm-stats-row3, .cm-stats-row2 { display: flex; }
+.cm-stats-row2 { margin-top: 10px; }
+.cm-stats-col { flex: 1; text-align: center; }
+.cm-stats-label { font-size: 13px; color: #cfd2da; }
+.cm-stats-val { margin-top: 2px; font-size: 13px; }
+.cm-stats-col.up .cm-stats-val, .cm-stats-col.up .cm-stats-label { color: #f63538; }
+.cm-stats-col.down .cm-stats-val, .cm-stats-col.down .cm-stats-label { color: #30cc5a; }
+
+.cm-refresh-row {
+  width: 142px;
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.cm-refresh-btn {
+  width: 100%;
+  height: 30px;
+  border: 1px solid #f63538;
+  border-radius: 15px;
+  background: transparent;
+  color: #f63538;
+  font-size: 13px;
+  cursor: pointer;
+}
+.cm-refresh-btn:hover { background: #f63538; color: #fff; }
+.cm-auto-refresh {
+  font-size: 12px;
+  color: #cfd2da;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.cm-tips {
+  width: 142px;
+  margin-top: 20px;
+  text-align: left;
+  font-size: 12px;
+  color: #fefefe;
+  line-height: 1.7;
+  border: 1px solid #4a4f5d;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.cm-tips-title { font-size: 12.5px; font-weight: 700; margin-bottom: 4px; }
+
+/* ── 主画布 ───────────────────────────────────────────────────────────── */
+.cm-main {
+  flex: 1;
+  position: relative;
+  min-width: 0;
+  background: #262931;
+}
+.cm-treemap { width: 100%; height: 100%; }
+.cm-loading, .cm-error {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 13px;
+  color: #cfd2da;
+}
+.cm-error { color: #f63538; }
+
+/* ── 底部图例条 ───────────────────────────────────────────────────────── */
+.cm-footer {
+  height: 38px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px;
+  background: #363a46;
+  border-top: 1px solid #4a4f5d;
+}
+.cm-footer-left { font-size: 12px; color: #cfd2da; }
+.cm-footer-legend { display: flex; gap: 4px; }
+.cm-legend-swatch {
+  width: 48px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12.5px;
+  color: #fff;
+  font-weight: 400;
+  user-select: none;
+}
+
+/* 窄屏兜底：侧栏收窄，避免横向溢出 */
+@media (max-width: 900px) {
+  .cm-header-center { display: none; }
+  .cm-sidebar { width: 128px; }
+  .cm-board-box, .cm-select-row, .cm-stats, .cm-refresh-row, .cm-tips { width: 112px; }
+}

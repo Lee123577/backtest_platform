@@ -29,6 +29,11 @@ _CACHE_TTL = 60  # 秒
 def _categorize(code: str) -> str:
     """按代码前缀分类（用于 treemap 一级分组）。
     没有 industry_sw1 数据时的兜底分组方式。
+
+    实测生产数据发现两处漏判(2026-07-21)：
+    - 001xxx(深市主板扩容后新号段，如 001309 深水规院)落进了"其他"
+    - 92xxxx(北交所 2023 年后新号段，如 920045)被"9/2 开头=B股"的旧规则
+      误吃成 B 股——真正的 B 股只有 200xxx(深)/900xxx(沪)两个号段。
     """
     if not code:
         return "其他"
@@ -41,11 +46,11 @@ def _categorize(code: str) -> str:
         return "创业板"
     if c.startswith("002") or c.startswith("003"):
         return "中小板"
-    if c.startswith("000"):
+    if c.startswith("000") or c.startswith("001"):
         return "深市主板"
-    if c.startswith("8") or c.startswith("4"):
+    if c.startswith("92") or c.startswith("8") or c.startswith("4"):
         return "北交所"
-    if c.startswith("9") or c.startswith("2"):
+    if c.startswith("200") or c.startswith("900"):
         return "B 股"
     return "其他"
 

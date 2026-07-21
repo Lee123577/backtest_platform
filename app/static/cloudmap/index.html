@@ -4,139 +4,111 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>大盘云图 · A股量化回测平台</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=20260708">
-  <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
-  <style>
-    .cm-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-    .cm-date-badge {
-      background: var(--bg2); padding: 4px 10px; border-radius: 12px;
-      font-size: 11px; color: var(--txt2);
-    }
-    .cm-summary-row {
-      display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-      gap: 10px; margin: 10px 0 14px;
-    }
-    .cm-stat {
-      background: var(--bg2); border-radius: 6px; padding: 10px 12px;
-      border-left: 3px solid var(--accent);
-    }
-    .cm-stat.up { border-left-color: #cf222e; }
-    .cm-stat.down { border-left-color: #1a7f37; }
-    .cm-stat .label { font-size: 11px; color: var(--txt2); }
-    .cm-stat .val { font-size: 20px; font-weight: 700; margin-top: 2px; }
-    .cm-stat.up .val { color: #cf222e; }
-    .cm-stat.down .val { color: #1a7f37; }
-
-    #treemap {
-      width: 100%; height: 75vh; min-height: 480px;
-      background: #111; border-radius: 6px;
-    }
-    .cm-legend {
-      font-size: 10px; color: var(--txt2); margin-top: 6px;
-      display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
-    }
-    .cm-legend .swatch {
-      display: inline-block; width: 14px; height: 10px; vertical-align: middle;
-    }
-    .cm-controls { display: flex; align-items: center; gap: 8px; }
-    .cm-controls select {
-      padding: 5px 10px; border: 1px solid var(--border); border-radius: 5px;
-      background: #fff; font-size: 13px; cursor: pointer;
-    }
-    .cm-controls .btn-refresh {
-      padding: 5px 14px; border: 1px solid var(--border); border-radius: 5px;
-      background: var(--bg2); cursor: pointer; font-size: 12px; color: var(--accent);
-    }
-    .cm-controls .btn-refresh:hover { background: var(--accent); color: #fff; }
-    .cm-loading {
-      text-align: center; padding: 80px; color: var(--txt2); font-size: 13px;
-    }
-    .cm-error {
-      background: #ffebe9; color: var(--red); padding: 12px;
-      border-radius: 6px; font-size: 13px; margin: 12px 0;
-    }
-  </style>
-  <link rel="stylesheet" href="/static/css/feedback.css?v=20260713">
-  <link rel="stylesheet" href="/static/css/shell.css?v=20260714">
+  <script src="/static/js/vendor/echarts.min.js?v=20260722a"></script>
+  <link rel="stylesheet" href="/static/css/cloudmap.css?v=20260722a">
 </head>
-<body>
+<body class="cm-body">
 
-<header>
-  <h1>📈 A股量化回测平台</h1>
-  <nav class="header-nav">
-    <a class="nav-btn" href="/" style="text-decoration:none;display:inline-flex;align-items:center;">单股策略</a>
-    <a class="nav-btn" href="/?mode=portfolio" style="text-decoration:none;display:inline-flex;align-items:center;">选股策略</a>
-    <button class="nav-btn active">大盘云图</button>
-    <a class="nav-btn" href="/paper_trading" style="text-decoration:none;display:inline-flex;align-items:center;">实盘观察</a>
-    <a class="nav-btn" href="/ai_hotsector" style="text-decoration:none;display:inline-flex;align-items:center;">AI热门板块</a>
-    <a class="nav-btn" href="/daily_review" style="text-decoration:none;display:inline-flex;align-items:center;">每日复盘</a>
-    <a class="nav-btn" href="/watchlist" style="text-decoration:none;display:inline-flex;align-items:center;">自选盯盘</a>  </nav>
-</header>
+<div class="cm-app">
+  <header class="cm-header">
+    <div class="cm-header-left">
+      <a href="/dashboard" class="cm-brand" title="返回仪表盘">大盘云图</a>
+    </div>
+    <div class="cm-header-center" id="cmIndices">
+      <!-- 指数行情条：JS 渲染 -->
+    </div>
+    <div class="cm-header-right">
+      <span class="cm-time" id="cmTime">—</span>
+      <button class="cm-fullscreen-btn" id="cmFullscreenBtn" title="全屏">⛶</button>
+    </div>
+  </header>
 
-<main>
-  <div class="panel">
-    <div class="panel-title">
-      <div class="cm-head">
-        大盘云图
-        <span class="cm-date-badge" id="dateBadge">—</span>
-        <span style="margin-left:auto;" class="cm-controls">
-          <select id="marketFilter">
-            <option value="all">全部 A 股</option>
-            <option value="SH">仅沪市</option>
-            <option value="SZ">仅深市</option>
-            <option value="BJ">仅北交所</option>
-          </select>
-          <select id="categoryFilter">
-            <option value="all">全部板块</option>
-            <option value="沪市主板">沪市主板</option>
-            <option value="深市主板">深市主板</option>
-            <option value="科创板">科创板</option>
-            <option value="创业板">创业板</option>
-            <option value="中小板">中小板</option>
-            <option value="北交所">北交所</option>
-          </select>
-          <select id="minCapFilter">
-            <option value="0">无市值下限</option>
-            <option value="50" selected>市值 ≥ 50 亿</option>
-            <option value="100">市值 ≥ 100 亿</option>
-            <option value="500">市值 ≥ 500 亿</option>
-            <option value="1000">市值 ≥ 1000 亿</option>
-          </select>
-          <label style="font-size:11px;color:var(--txt2);display:inline-flex;align-items:center;gap:4px;">
-            <input type="checkbox" id="autoRefresh" checked> 自动刷新
-          </label>
-          <button class="btn-refresh" id="refreshBtn">⟳ 刷新</button>
-        </span>
+  <div class="cm-shell">
+    <aside class="cm-sidebar">
+      <div class="cm-board-box">
+        <button type="button" class="cm-board-item active" data-cat="all">
+          <span>全部板块</span><span class="cm-board-pct" id="cmBoardPctAll">—</span>
+        </button>
+        <button type="button" class="cm-board-item" data-cat="沪市主板">
+          <span>沪市主板</span><span class="cm-board-pct" id="cmBoardPct-沪市主板">—</span>
+        </button>
+        <button type="button" class="cm-board-item" data-cat="深市主板">
+          <span>深市主板</span><span class="cm-board-pct" id="cmBoardPct-深市主板">—</span>
+        </button>
+        <button type="button" class="cm-board-item" data-cat="科创板">
+          <span>科创板</span><span class="cm-board-pct" id="cmBoardPct-科创板">—</span>
+        </button>
+        <button type="button" class="cm-board-item" data-cat="创业板">
+          <span>创业板</span><span class="cm-board-pct" id="cmBoardPct-创业板">—</span>
+        </button>
+        <button type="button" class="cm-board-item" data-cat="中小板">
+          <span>中小板</span><span class="cm-board-pct" id="cmBoardPct-中小板">—</span>
+        </button>
+        <button type="button" class="cm-board-item" data-cat="北交所">
+          <span>北交所</span><span class="cm-board-pct" id="cmBoardPct-北交所">—</span>
+        </button>
       </div>
-    </div>
 
-    <div class="cm-summary-row" id="summaryRow"></div>
-    <div id="treemap"></div>
-    <div class="cm-legend" id="legend"></div>
+      <div class="cm-select-row">
+        <select id="marketFilter" class="cm-select">
+          <option value="all">全部 A 股</option>
+          <option value="SH">仅沪市</option>
+          <option value="SZ">仅深市</option>
+          <option value="BJ">仅北交所</option>
+        </select>
+        <select id="minCapFilter" class="cm-select">
+          <option value="0">无市值下限</option>
+          <option value="50" selected>市值 ≥ 50 亿</option>
+          <option value="100">市值 ≥ 100 亿</option>
+          <option value="500">市值 ≥ 500 亿</option>
+          <option value="1000">市值 ≥ 1000 亿</option>
+        </select>
+      </div>
 
-    <div style="font-size:11px;color:var(--txt2);margin-top:6px;line-height:1.6;">
-      📌 <b>操作提示</b>：
-      矩形面积 = 流通市值 ·
-      颜色 = 涨跌幅（红涨绿跌） ·
-      hover 看个股详情 ·
-      点击大类块下钻 ·
-      <span id="autoRefreshHint">自动刷新 60 秒</span>
-    </div>
+      <div class="cm-stats">
+        <div class="cm-stats-row3">
+          <div class="cm-stats-col up"><div class="cm-stats-label">上涨</div><div class="cm-stats-val" id="cmUp">0</div></div>
+          <div class="cm-stats-col"><div class="cm-stats-label">平盘</div><div class="cm-stats-val" id="cmFlat">0</div></div>
+          <div class="cm-stats-col down"><div class="cm-stats-label">下跌</div><div class="cm-stats-val" id="cmDown">0</div></div>
+        </div>
+        <div class="cm-stats-row2">
+          <div class="cm-stats-col"><div class="cm-stats-label">成交额</div><div class="cm-stats-val" id="cmAmount">0亿</div></div>
+          <div class="cm-stats-col"><div class="cm-stats-label">比昨日</div><div class="cm-stats-val" id="cmVolDelta">0</div></div>
+        </div>
+      </div>
 
-    <div id="loading" class="cm-loading" style="display:none;">加载中…</div>
-    <div id="error" class="cm-error" style="display:none;"></div>
+      <div class="cm-refresh-row">
+        <button type="button" class="cm-refresh-btn" id="refreshBtn">⟳ 刷新</button>
+        <label class="cm-auto-refresh">
+          <input type="checkbox" id="autoRefresh" checked> 自动刷新
+        </label>
+      </div>
+
+      <div class="cm-tips">
+        <div class="cm-tips-title">操作提示：</div>
+        <div>· 面积代表流通市值</div>
+        <div>· 颜色代表涨跌幅度</div>
+        <div>· <span id="autoRefreshHint">自动刷新 60 秒</span></div>
+        <div>· hover 查看个股详情</div>
+        <div>· 点击色块下钻板块</div>
+        <div>· 全屏观看效果更好</div>
+      </div>
+    </aside>
+
+    <main class="cm-main">
+      <div id="treemap" class="cm-treemap"></div>
+      <div id="loading" class="cm-loading" style="display:none;">加载中…</div>
+      <div id="error" class="cm-error" style="display:none;"></div>
+    </main>
   </div>
-</main>
 
-<footer class="site-footer">
-  💡 需要定制策略 / 接入实盘？只提供代码，服务器需自行购买 · 第一单免费（目前限时全免）·
-  <a href="mailto:lihaichuan393@gmail.com">lihaichuan393@gmail.com</a>
-</footer>
+  <footer class="cm-footer">
+    <div class="cm-footer-left" id="cmDateBadge">—</div>
+    <div class="cm-footer-legend" id="legend"></div>
+  </footer>
+</div>
 
-<script src="/static/js/cloudmap.js"></script>
+<script src="/static/js/cloudmap.js?v=20260722a"></script>
 <script src="/static/js/feedback.js?v=20260713"></script>
-<script src="/static/js/util.js?v=20260721e"></script>
-<script src="/static/js/auth.js?v=20260721e"></script>
-<script src="/static/js/shell.js?v=20260721h"></script>
 </body>
 </html>

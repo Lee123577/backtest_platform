@@ -1,25 +1,49 @@
-/* 大盘云图 —— ECharts treemap，基于自家 stock_kline 数据 */
+/* 大盘云图 —— ECharts treemap + 沉浸式深色布局（数据来自本站 stock_kline，UI 视觉对齐参考站） */
 (() => {
   const $ = (id) => document.getElementById(id);
   let chart = null;
   let autoTimer = null;
   let lastLoadAt = 0;   // 节流 visibilitychange 抢跑用
+  let latestData = null; // 最近一次 /api/cloudmap/data 响应，切换板块按钮时纯前端重渲染
+  let activeCat = 'all';
   const AUTO_INTERVAL_MS = 60_000;   // 60s (后端 60s 缓存对齐)
 
-  // ── 涨跌色阶（A 股红涨绿跌）──────────────────────────────────────────────
-  // 8 级渐变，0 居中灰
+  const OVERVIEW_INDICES = [
+    { code: '000001', name: '上证指数' },
+    { code: '399006', name: '创业板指' },
+    { code: '000300', name: '沪深300' },
+    { code: '000905', name: '中证500' },
+    { code: '000852', name: '中证1000' },
+    { code: '000016', name: '上证50' },
+  ];
+
+  // ── 涨跌色阶 —— 在 -4%~+4% 之间做线性插值，超出区间钳位到端点色 ────────
+  const COLOR_STOPS = [
+    [-4, [48, 204, 90]],   // #30cc5a
+    [-3, [47, 170, 81]],   // #2faa51
+    [-2, [49, 137, 78]],   // #31894e
+    [-1, [56, 105, 79]],   // #38694f
+    [0, [65, 69, 84]],     // #414554
+    [1, [120, 69, 81]],    // #784551
+    [2, [165, 66, 74]],    // #a5424a
+    [3, [206, 61, 65]],    // #ce3d41
+    [4, [246, 53, 56]],    // #f63538
+  ];
   function gradeColor(pct) {
-    if (pct >= 9.8) return '#cf0000';   // 涨停级
-    if (pct >= 5) return '#cf222e';
-    if (pct >= 3) return '#e84343';
-    if (pct >= 1) return '#f08585';
-    if (pct >= 0.2) return '#f4b9b9';
-    if (pct > -0.2) return '#888';
-    if (pct > -1) return '#9bc89a';
-    if (pct > -3) return '#6cb069';
-    if (pct > -5) return '#3d9038';
-    if (pct > -9.8) return '#1a7f37';
-    return '#005c0c';                   // 跌停级
+    if (pct == null || isNaN(pct)) return 'rgb(65,69,84)';
+    const p = Math.max(-4, Math.min(4, pct));
+    for (let i = 0; i < COLOR_STOPS.length - 1; i++) {
+      const [p0, c0] = COLOR_STOPS[i];
+      const [p1, c1] = COLOR_STOPS[i + 1];
+      if (p >= p0 && p <= p1) {
+        const t = (p - p0) / (p1 - p0);
+        const r = Math.round(c0[0] + (c1[0] - c0[0]) * t);
+        const g = Math.round(c0[1] + (c1[1] - c0[1]) * t);
+        const b = Math.round(c0[2] + (c1[2] - c0[2]) * t);
+        return `rgb(${r},${g},${b})`;
+      }
+    }
+    return 'rgb(65,69,84)';
   }
 
   // ── 数据请求 ────────────────────────────────────────────────────────────
@@ -36,8 +60,8 @@
         const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
         throw new Error(err.detail || `HTTP ${res.status}`);
       }
-      const data = await res.json();
-      render(data);
+      latestData = await res.json();
+      render();
     } catch (e) {
       $('error').textContent = `加载失败：${e.message}`;
       $('error').style.display = '';
@@ -54,55 +78,69 @@
     if (v >= 1e4) return (v / 1e4).toFixed(0) + ' 万';
     return Math.round(v).toString();
   }
+  function pctSpan(pct) {
+    if (pct == null || isNaN(pct)) return '<span class="cm-flat">—</span>';
+    const cls = pct > 0 ? 'cm-up' : pct < 0 ? 'cm-down' : 'cm-flat';
+    const sign = pct > 0 ? '+' : '';
+    return `<span class="${cls}">${sign}${pct.toFixed(2)}%</span>`;
+  }
+
+  // ── 左侧栏板块按钮：各板块平均涨跌幅 ────────────────────────────────────
+  function renderBoardPcts(items) {
+    const CATS = ['沪市主板', '深市主板', '科创板', '创业板', '中小板', '北交所'];
+    const sums = {}; const counts = {};
+    let allSum = 0, allCount = 0;
+    for (const it of items) {
+      const cat = it.category;
+      sums[cat] = (sums[cat] || 0) + it.pct_change;
+      counts[cat] = (counts[cat] || 0) + 1;
+      allSum += it.pct_change; allCount++;
+    }
+    const allEl = $('cmBoardPctAll');
+    if (allEl) allEl.innerHTML = allCount ? pctSpan(allSum / allCount) : '—';
+    CATS.forEach((cat) => {
+      const el = $('cmBoardPct-' + cat);
+      if (!el) return;
+      el.innerHTML = counts[cat] ? pctSpan(sums[cat] / counts[cat]) : '—';
+    });
+  }
 
   // ── 渲染 ────────────────────────────────────────────────────────────────
-  function render(data) {
-    $('dateBadge').textContent = `📅 ${data.trade_date}`;
+  function render() {
+    const data = latestData;
+    if (!data) return;
+    $('cmDateBadge').textContent = `数据日期：${data.trade_date}`;
 
-    // 顶部统计卡（对齐 52etf：上涨/平盘/下跌 + 全市场成交额 + 缩放量）
     const s = data.summary || {};
     const totalAmt = s.total_amount || 0;
     const prevAmt = s.prev_amount || 0;
-    let volDelta = '—';
+    let volText = '0';
     let volCls = '';
     if (prevAmt > 0) {
       const diff = totalAmt - prevAmt;
-      volDelta = (diff >= 0 ? '放量 ' : '缩量 ') + fmtAmount(Math.abs(diff));
+      volText = (diff >= 0 ? '放量 ' : '缩量 ') + fmtAmount(Math.abs(diff));
       volCls = diff >= 0 ? 'up' : 'down';
     }
+    $('cmUp').textContent = s.up || 0;
+    $('cmFlat').textContent = s.flat || 0;
+    $('cmDown').textContent = s.down || 0;
+    $('cmAmount').textContent = fmtAmount(totalAmt);
+    const volEl = $('cmVolDelta');
+    volEl.textContent = volText;
+    volEl.className = 'cm-stats-val' + (volCls === 'up' ? ' cm-up' : volCls === 'down' ? ' cm-down' : '');
 
-    const cards = [
-      { label: '股票总数', val: data.total, cls: '' },
-      { label: '上涨', val: s.up || 0, cls: 'up' },
-      { label: '下跌', val: s.down || 0, cls: 'down' },
-      { label: '平盘', val: s.flat || 0, cls: '' },
-      { label: '平均涨跌',
-        val: (s.avg_pct >= 0 ? '+' : '') + (s.avg_pct || 0).toFixed(2) + '%',
-        cls: s.avg_pct > 0 ? 'up' : s.avg_pct < 0 ? 'down' : '' },
-      { label: '全市场成交额', val: fmtAmount(totalAmt), cls: '' },
-      { label: '比昨日', val: volDelta, cls: volCls },
-    ];
-    $('summaryRow').innerHTML = cards.map(c => `
-      <div class="cm-stat ${c.cls}">
-        <div class="label">${c.label}</div>
-        <div class="val">${c.val}</div>
-      </div>
-    `).join('');
+    renderBoardPcts(data.items);
 
-    // 色阶图例
-    $('legend').innerHTML = [
-      ['#005c0c', '≤ -9.8%'], ['#1a7f37', '-5 ~ -9.8%'], ['#3d9038', '-3 ~ -5%'],
-      ['#6cb069', '-1 ~ -3%'], ['#9bc89a', '0 ~ -1%'], ['#888', '0%'],
-      ['#f4b9b9', '0 ~ 1%'], ['#f08585', '1 ~ 3%'], ['#e84343', '3 ~ 5%'],
-      ['#cf222e', '5 ~ 9.8%'], ['#cf0000', '≥ 9.8%'],
-    ].map(([c, t]) => `<span class="swatch" style="background:${c};"></span><span>${t}</span>`)
-     .join('  ');
+    // 色阶图例（对齐参考站的 9 档 -4%~+4%）
+    $('legend').innerHTML = COLOR_STOPS.map(([pct, rgb]) => {
+      const label = (pct > 0 ? '+' : '') + pct + '%';
+      return `<div class="cm-legend-swatch" style="background:rgb(${rgb.join(',')});">${label}</div>`;
+    }).join('');
 
     // 板块过滤（客户端做，避免反复打 API）
-    const catFilter = $('categoryFilter').value;
-    const filteredItems = (catFilter === 'all')
+    const filteredItems = (activeCat === 'all')
       ? data.items
-      : data.items.filter(it => it.category === catFilter);
+      : data.items.filter(it => it.category === activeCat);
 
     // 按 category 聚合成 treemap 数据
     const groups = {};
@@ -113,7 +151,6 @@
         name: `${item.code}\n${item.name}`,
         value: item.market_cap,
         itemStyle: { color: gradeColor(item.pct_change) },
-        // 自定义字段供 tooltip 用
         _code: item.code,
         _stockName: item.name,
         _pct: item.pct_change,
@@ -121,7 +158,6 @@
         _amount: item.amount,
       });
     }
-    // 大分类按总市值排序
     const treeData = Object.entries(groups)
       .map(([name, children]) => ({
         name,
@@ -132,16 +168,20 @@
 
     if (!chart) chart = echarts.init($('treemap'));
     chart.setOption({
+      backgroundColor: '#262931',
       tooltip: {
         confine: true,
+        backgroundColor: '#1e2026',
+        borderColor: '#4a4f5d',
+        textStyle: { color: '#fefefe' },
         formatter: (info) => {
           const d = info.data;
           if (d._code) {
-            const pctColor = d._pct > 0 ? '#cf222e' : d._pct < 0 ? '#1a7f37' : '#888';
+            const pctColor = d._pct > 0 ? '#f63538' : d._pct < 0 ? '#30cc5a' : '#cfd2da';
             const pctSign = d._pct > 0 ? '+' : '';
             return `
               <div style="font-size:13px;">
-                <b>${d._stockName}</b> <span style="color:#888;">${d._code}</span><br/>
+                <b>${d._stockName}</b> <span style="color:#8a8f9c;">${d._code}</span><br/>
                 市值: <b>${d.value.toFixed(1)} 亿</b><br/>
                 收盘: ${d._close != null ? d._close : '—'}<br/>
                 涨跌: <b style="color:${pctColor};">${pctSign}${d._pct.toFixed(2)}%</b><br/>
@@ -149,7 +189,6 @@
               </div>
             `;
           }
-          // 大分类节点
           return `<b>${d.name}</b><br/>总市值: ${d.value.toFixed(0)} 亿`;
         },
       },
@@ -163,12 +202,10 @@
           height: 24,
           left: 'center',
           top: 'top',
-          itemStyle: { color: '#444', borderColor: '#666', textStyle: { color: '#fff' } },
-          emphasis: { itemStyle: { textStyle: { color: '#ffd700' } } },
+          itemStyle: { color: '#3f414b', borderColor: '#4a4f5d', textStyle: { color: '#fefefe' } },
+          emphasis: { itemStyle: { textStyle: { color: '#f63538' } } },
         },
         visibleMin: 200,
-        // 全局 label：叶节点显示「名字\n涨跌幅」（不显示代码）
-        // 用矩形面积自适应字号：大盘股大字、小票小字、太小不显示
         label: {
           show: true,
           color: '#fff',
@@ -177,40 +214,80 @@
           textShadowBlur: 2,
           formatter: (params) => {
             const d = params.data;
-            // 大分类节点（无 _code）由 upperLabel 渲染，这里返回空
             if (!d._code) return '';
             const sign = d._pct > 0 ? '+' : '';
             return `${d._stockName}\n${sign}${d._pct.toFixed(2)}%`;
           },
         },
-        // 大分类块顶部条（显示"沪市主板"等）
         upperLabel: {
           show: true, height: 22, color: '#fff',
           fontSize: 13, fontWeight: 700,
-          backgroundColor: 'rgba(0,0,0,.25)',
+          backgroundColor: 'rgba(0,0,0,.35)',
         },
         levels: [
-          {
-            // 大分类层
-            itemStyle: { borderColor: '#111', borderWidth: 1, gapWidth: 2 },
-          },
-          {
-            // 叶节点层（股票）
-            itemStyle: { borderColor: '#222', borderWidth: 0.5, gapWidth: 1 },
-          },
+          { itemStyle: { borderColor: '#262931', borderWidth: 1, gapWidth: 2 } },
+          { itemStyle: { borderColor: '#1e2026', borderWidth: 0.5, gapWidth: 1 } },
         ],
       }],
     }, true);
 
-    // resultZone 高度可能在 init 时还没 layout，等下一帧 resize 一次
     requestAnimationFrame(() => chart.resize());
+  }
+
+  // ── 头部指数行情条 ──────────────────────────────────────────────────────
+  function renderIndices(results) {
+    $('cmIndices').innerHTML = OVERVIEW_INDICES.map((ix, i) => {
+      const rows = results[i] || [];
+      if (rows.length < 2) {
+        return `<div class="cm-idx-tile"><div class="cm-idx-name">${ix.name}</div><div class="cm-idx-val">—</div></div>`;
+      }
+      const last = rows[rows.length - 1];
+      const prev = rows[rows.length - 2];
+      const chg = prev.close ? (last.close - prev.close) / prev.close * 100 : null;
+      const cls = chg == null ? 'cm-flat' : (chg > 0 ? 'cm-up' : chg < 0 ? 'cm-down' : 'cm-flat');
+      const sign = chg != null && chg > 0 ? '+' : '';
+      return `<div class="cm-idx-tile">
+        <div class="cm-idx-name">${ix.name}</div>
+        <div class="cm-idx-val ${cls}">${Number(last.close).toFixed(2)}</div>
+        <div class="cm-idx-pct ${cls}">${chg == null ? '—' : sign + chg.toFixed(2) + '%'}</div>
+      </div>`;
+    }).join('');
+  }
+  function loadIndices() {
+    const end = new Date();
+    const start = new Date(end.getTime() - 15 * 86400000);
+    const fmt = (d) => d.toISOString().slice(0, 10);
+    const qs = `?start_date=${fmt(start)}&end_date=${fmt(end)}`;
+    Promise.all(OVERVIEW_INDICES.map((ix) =>
+      fetch(`/api/index/${encodeURIComponent(ix.code)}/kline${qs}`)
+        .then((r) => (r.ok ? r.json() : { data: [] }))
+        .then((j) => j.data || [])
+        .catch(() => [])
+    )).then(renderIndices);
+  }
+
+  // ── 头部时钟 ────────────────────────────────────────────────────────────
+  function tickClock() {
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    $('cmTime').textContent =
+      `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ` +
+      `${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  }
+
+  // ── 全屏 ────────────────────────────────────────────────────────────────
+  function toggleFullscreen() {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch(() => {});
+    } else {
+      document.exitFullscreen().catch(() => {});
+    }
   }
 
   // ── 自动刷新 ────────────────────────────────────────────────────────────
   function startAutoRefresh() {
     if (autoTimer) clearInterval(autoTimer);
     autoTimer = setInterval(() => {
-      // 后台 tab 不刷新
       if (document.visibilityState === 'visible') load();
     }, AUTO_INTERVAL_MS);
   }
@@ -221,10 +298,13 @@
   // ── 事件 ────────────────────────────────────────────────────────────────
   $('marketFilter').addEventListener('change', load);
   $('minCapFilter').addEventListener('change', load);
-  // category 切换是纯客户端过滤，不打 API
-  $('categoryFilter').addEventListener('change', () => {
-    // 取出缓存的 data 重新 render（简单做：直接 load 一次，命中后端缓存秒回）
-    load();
+  document.querySelectorAll('.cm-board-item').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.cm-board-item').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      activeCat = btn.getAttribute('data-cat');
+      render();
+    });
   });
   $('refreshBtn').addEventListener('click', load);
   $('autoRefresh').addEventListener('change', (e) => {
@@ -236,10 +316,9 @@
       $('autoRefreshHint').textContent = '自动刷新已关闭';
     }
   });
+  $('cmFullscreenBtn').addEventListener('click', toggleFullscreen);
   window.addEventListener('resize', () => chart && chart.resize());
 
-  // 回前台时刷新，但数据没到该刷新的时间点就跳过 —— 避免频繁切标签页时
-  // 每次回前台都打一次 API（后端有 60s 缓存，短时间内重复请求没有意义）
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && $('autoRefresh').checked
         && Date.now() - lastLoadAt >= AUTO_INTERVAL_MS) {
@@ -248,5 +327,9 @@
   });
 
   load();
+  loadIndices();
+  tickClock();
+  setInterval(tickClock, 30_000);
+  setInterval(loadIndices, AUTO_INTERVAL_MS);
   startAutoRefresh();
 })();
