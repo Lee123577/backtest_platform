@@ -594,15 +594,16 @@
   function specialHtml(data) {
     var html = data.special.map(function (s, i) {
       var members = (s.members || []).map(function (m) {
-        return m.name + " " + (m.pct_change > 0 ? "+" : "") + m.pct_change + "%";
+        var p = m.pct_change;
+        return m.name + " " + (p == null ? "—" : (p > 0 ? "+" : "") + p + "%");
       }).join(" / ");
       var src = s.source === "local"
         ? '<span class="rk-src">本站行情库</span>'
         : '<span class="rk-src">东财</span>';
       return row(i, s.name, s.pct_change, members || s.note || "", src);
     }).join("");
-    return html + '<div class="rk-note">权重蓝筹/中小成长取成分指数均值、ST 板块取全部 ST 个股均值 —— ' +
-      "均来自本站行情库；红利板块本地无股息率数据，用东财红利/高股息概念板块近似。</div>";
+    return html + '<div class="rk-note">数据均来自本站行情库：蓝筹/成长取成分指数、' +
+      "ST 取全部 ST 个股、红利取高股息蓝筹，各自等权取均值。</div>";
   }
 
   // 排行榜卡片的固定类目全集(名称 + 渲染函数),这份表决定了"添加卡片"
@@ -800,24 +801,27 @@
       "</div>";
   }
 
-  function renderIndicesCard(cardId, resultsList) {
+  function renderIndicesCard(cardId, quotes) {
     var body = $("mbIxBody_" + cardId);
     if (!body) return;   // 请求还没回来卡片就被删了
     var dateEl = $("mbIxDate_" + cardId);
+    // 批量报价按代码建索引;涨跌幅直接用后端 index_daily 存好的 pct_change
+    var byCode = {};
     var latestDate = "";
-    var html = OVERVIEW_INDICES.map(function (ix, i) {
-      var rows = resultsList[i] || [];
-      if (!rows.length) {
+    (quotes || []).forEach(function (q) {
+      byCode[q.index_code] = q;
+      if (q.date && q.date > latestDate) latestDate = q.date;
+    });
+    var html = OVERVIEW_INDICES.map(function (ix) {
+      var q = byCode[ix.code];
+      if (!q || q.close == null) {
         return '<div class="mb-ix-tile"><div class="mb-ix-name">' + esc(ix.name) + '</div><div class="mb-ix-val">—</div></div>';
       }
-      var last = rows[rows.length - 1];
-      var prev = rows.length > 1 ? rows[rows.length - 2] : null;
-      if (last.date && last.date > latestDate) latestDate = last.date;
-      var chg = prev && prev.close ? (last.close - prev.close) / prev.close * 100 : null;
+      var chg = q.pct_change;
       var cls = chg == null ? "mb-flat" : (chg > 0 ? "mb-up" : (chg < 0 ? "mb-down" : "mb-flat"));
       var sign = chg != null && chg > 0 ? "+" : "";
       return '<div class="mb-ix-tile"><div class="mb-ix-name">' + esc(ix.name) + '</div>' +
-        '<div class="mb-ix-val ' + cls + '">' + num(last.close) + "</div>" +
+        '<div class="mb-ix-val ' + cls + '">' + num(q.close) + "</div>" +
         '<div class="mb-ix-chg ' + cls + '">' + (chg == null ? "—" : sign + num(chg) + "%") + "</div></div>";
     }).join("");
     if (dateEl) dateEl.textContent = latestDate;
@@ -825,18 +829,12 @@
   }
 
   function loadIndicesCard(card) {
-    var end = new Date();
-    var start = new Date(end.getTime() - 15 * 86400000);
-    var qs = "?start_date=" + fmtDate(start) + "&end_date=" + fmtDate(end);
-    Promise.all(OVERVIEW_INDICES.map(function (ix) {
-      return fetch("/api/index/" + encodeURIComponent(ix.code) + "/kline" + qs)
-        .then(function (r) { return r.ok ? r.json() : { data: [] }; })
-        .then(function (j) { return j.data || []; })
-        .catch(function () { return []; });
-    })).then(function (results) {
-      renderIndicesCard(card.id, results);
-      refreshCanvas();
-    });
+    // 一次批量请求取全部指数最新报价,替代过去每个指数一条 /kline(6 请求 → 1)
+    var codes = OVERVIEW_INDICES.map(function (ix) { return ix.code; }).join(",");
+    fetch("/api/index/quotes?codes=" + encodeURIComponent(codes))
+      .then(function (r) { return r.ok ? r.json() : { data: [] }; })
+      .then(function (j) { renderIndicesCard(card.id, j.data || []); refreshCanvas(); })
+      .catch(function () { renderIndicesCard(card.id, []); refreshCanvas(); });
   }
 
   function loadSingleton(card) {

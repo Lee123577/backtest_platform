@@ -38,6 +38,7 @@ from .data.market_data import (
     download_universe_history,
     get_historical_universe,
     get_index_history,
+    get_index_latest_quotes,
     get_universe_stats,
     get_universe_stocks,
 )
@@ -765,6 +766,21 @@ def api_index_kline(response: Response, index_code: str,
 
     records = _kline_records(df)
     return {"index_code": index_code, "total": len(records), "data": records}
+
+
+@app.get("/api/index/quotes")
+def api_index_quotes(response: Response, codes: str):
+    """批量指数最新报价(收盘 + 涨跌幅)。codes 为逗号分隔的指数代码。
+
+    指数速览卡用一次请求替代过去"每指数一条 /kline",且直接用 index_daily 里
+    存好的 pct_change,不在客户端拿两根收盘价自算。
+    """
+    code_list = [c.strip() for c in codes.split(",") if c.strip()][:20]
+    if not code_list:
+        return {"data": []}
+    rows = get_index_latest_quotes(code_list)
+    response.headers["Cache-Control"] = "public, max-age=60"
+    return {"data": _json_safe(rows)}
 
 
 class StrategyConfig(BaseModel):

@@ -7,7 +7,8 @@ snapshot() —— 每交易日收盘后跑一次：抓新浪行业+概念板块 
 
 ranking()  —— 看板读的排行榜。数据可靠性分两类，接口里用 source 如实标注：
   · 6 大分组 / 行业 / 题材概念 —— 新浪快照(外部源，抓失败当天就没有)
-  · 权重蓝筹 / 中小成长 / ST —— 本地 index_daily / stock_kline，完全可靠
+  · 权重蓝筹 / 中小成长 / ST / 红利 —— 本地 index_daily / stock_kline /
+    stock_dividend，完全可靠(红利用本地分红表自算股息率，见 db.dividend_group)
 """
 from __future__ import annotations
 
@@ -143,11 +144,21 @@ def ranking(trade_date: Optional[_Date] = None, top_n: int = 10) -> Dict[str, An
         "name": "ST板块", "pct_change": st["avg_pct"] if st else None,
         "members": [], "note": f"{st['n']} 只" if st else None, "source": "local",
     })
-    # 红利板块暂不提供:本地无股息率数据;原打算用"红利/高股息"概念板块近似,
-    # 但东财(有该板块)封锁云机房 IP 拿不到,新浪(能拿到)的 175 个概念里根本
-    # 没有红利/高股息板块 —— 拿"民营银行/保险重仓"顶替是错的口径。与其挂一个
-    # 永远为空的条目,不如不给。项目已有分红数据(backfill_dividend),将来可以
-    # 用股息率自己算高股息低波组合,那才是自控口径。
+    # 红利(高股息)板块:用本地 stock_dividend 表自算 —— 近12月每股分红/当日收盘
+    # 取股息率最高的一批蓝筹等权(口径见 db.dividend_group)。不走东财板块接口
+    # (那对云机房 IP 是封锁的),完全本地自控。表未回填(fresh install)时返回
+    # None,此时不挂空条目,保持原"不挂永远为空条目"的原则。
+    div = db.dividend_group(trade_date)
+    if div:
+        names = "、".join(m["name"] for m in div["top"])
+        special.append({
+            "name": "红利(高股息)",
+            "pct_change": div["avg_pct"],
+            "members": [],
+            "note": f"{div['n']} 只 · 平均股息率 {div['avg_yield']}%"
+                    + (f" · 如 {names}" if names else ""),
+            "source": "local",
+        })
 
     return {
         "trade_date": str(trade_date),

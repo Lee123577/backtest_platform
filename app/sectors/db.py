@@ -14,6 +14,8 @@ import logging
 from datetime import date as _Date
 from typing import Any, Dict, List, Optional
 
+import pymysql
+
 from ..data.data_loader import _get_pool
 
 logger = logging.getLogger(__name__)
@@ -110,6 +112,76 @@ def st_avg_pct(trade_date: _Date) -> Optional[Dict[str, Any]]:
     if not row or row.get("avg_pct") is None:
         return None
     return {"avg_pct": round(float(row["avg_pct"]), 2), "n": int(row["n"])}
+
+
+def dividend_group(
+    trade_date: _Date,
+    top_n: int = 50,
+    min_yield: float = 2.0,
+    max_yield: float = 8.0,
+    min_market_cap: float = 50.0,
+) -> Optional[Dict[str, Any]]:
+    """红利(高股息)板块 —— 完全用本地分红表自算,不依赖被封 IP 的东财板块接口。
+
+    口径:近 12 个月每股现金分红 ÷ 当日收盘价 = 股息率。筛选:
+      · 股息率 ∈ [min_yield, max_yield] —— 上限剔除一次性特别分红/数据异常
+        (A 股真·高股息蓝筹一般 3%~8%,>8% 多半是一次性大额派现或送转错配);
+      · 近 12 月送转 < 3 股/10股 —— 剔除高送转题材股(那是炒作不是红利);
+      · 市值 ≥ min_market_cap 亿 —— 取蓝筹,滤掉小盘"高息陷阱";
+      · 非 ST。
+    按股息率降序取 Top N,等权平均当日涨跌幅。cash_dividend 是名义历史派息、
+    close 是 qfq 前复权(最新价即真实价),二者同处最新时点,股息率口径正确。
+
+    返回 {avg_pct, n, avg_yield, top:[{name,yield,pct_change}]};表不存在
+    (fresh install 未回填分红)或无满足条件个股 → None,上层按"暂缺"处理、
+    不挂空条目。
+    """
+    conn = _get_pool()
+    if conn is None:
+        return None
+    sql = """
+        SELECT k.code, i.name, k.pct_change,
+               (d.cash12 / 10.0) / k.close * 100 AS yield_pct
+        FROM (
+            SELECT code,
+                   SUM(cash_dividend) AS cash12,
+                   SUM(bonus_shares) + SUM(converted_shares) AS songzhuan
+            FROM stock_dividend
+            WHERE ex_date > DATE_SUB(%s, INTERVAL 1 YEAR) AND ex_date <= %s
+            GROUP BY code
+        ) d
+        JOIN stock_kline k ON k.code = d.code AND k.trade_date = %s
+        JOIN stock_info  i ON i.code = d.code
+        WHERE k.close > 0 AND k.pct_change IS NOT NULL
+          AND i.name NOT LIKE %s
+          AND d.songzhuan < 3
+          AND k.market_cap >= %s
+          AND (d.cash12 / 10.0) / k.close * 100 BETWEEN %s AND %s
+        ORDER BY yield_pct DESC
+        LIMIT %s
+    """
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, (trade_date, trade_date, trade_date, "%ST%",
+                              min_market_cap, min_yield, max_yield,
+                              max(1, min(top_n, 200))))
+            rows = cur.fetchall()
+    except pymysql.err.ProgrammingError as e:
+        # 1146 = 表不存在(fresh install 尚未回填分红)。只吞这一种,按"无红利
+        # 板块"处理,不让排行榜整体挂掉;其他错误照常抛。
+        if e.args and e.args[0] == 1146:
+            logger.warning("stock_dividend 表不存在,红利板块跳过: %s", e)
+            return None
+        raise
+    if not rows:
+        return None
+    avg_pct = round(sum(float(r["pct_change"]) for r in rows) / len(rows), 2)
+    avg_yield = round(sum(float(r["yield_pct"]) for r in rows) / len(rows), 2)
+    top = [{"name": r["name"],
+            "yield": round(float(r["yield_pct"]), 2),
+            "pct_change": round(float(r["pct_change"]), 2)}
+           for r in rows[:3]]
+    return {"avg_pct": avg_pct, "n": len(rows), "avg_yield": avg_yield, "top": top}
 
 
 def upsert_boards(trade_date: _Date, board_type: str, rows: List[Dict[str, Any]]) -> int:

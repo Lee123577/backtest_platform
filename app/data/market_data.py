@@ -749,6 +749,41 @@ def _query_index_from_db(
         return None
 
 
+def get_index_latest_quotes(codes: List[str]) -> List[Dict[str, Any]]:
+    """批量取多个指数各自最新交易日的收盘价 + 涨跌幅。
+
+    index_daily 已存 pct_change(百分数),指数速览卡直接用,不必再拉一段 K 线
+    在客户端用两根收盘价自算 —— 一次查询替代过去"每个指数一条 /kline 请求"。
+    返回 [{index_code, date, close, pct_change}];无数据/连接不可用 → 空列表。
+    """
+    codes = [c.strip() for c in codes if c and c.strip()]
+    if not codes:
+        return []
+    conn = _get_pool()
+    if conn is None:
+        return []
+    placeholders = ",".join(["%s"] * len(codes))
+    try:
+        conn.ping(reconnect=True)
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT d.index_code, d.trade_date AS date, d.close, d.pct_change
+                FROM index_daily d
+                JOIN (
+                    SELECT index_code, MAX(trade_date) AS mx
+                    FROM index_daily
+                    WHERE index_code IN ({placeholders})
+                    GROUP BY index_code
+                ) m ON m.index_code = d.index_code AND m.mx = d.trade_date
+                """,
+                tuple(codes),
+            )
+            return cur.fetchall()
+    except Exception:
+        return []
+
+
 def get_index_history(
     symbol: str, start_date: str, end_date: str
 ) -> Optional[pd.DataFrame]:
