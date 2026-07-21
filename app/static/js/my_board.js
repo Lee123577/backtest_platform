@@ -487,7 +487,7 @@
   function addToCompare(card, code, type, name) {
     var list = compareState[card.id] = compareState[card.id] || [];
     if (list.some(function (it) { return it.code === code && it.type === type; })) return;
-    if (list.length >= MAX_COMPARE_STOCKS) return;
+    if (list.length >= MAX_COMPARE_STOCKS) { showToast("最多同时对比 " + MAX_COMPARE_STOCKS + " 支股票/指数"); return; }
     list.push({ code: code, type: type, name: name });
     var input = $("mbSearchInput_" + card.id);
     if (input) input.value = "";
@@ -899,19 +899,28 @@
       .catch(function () { return {}; });
   }
 
+  // 通用底部提示条(保存失败/操作到达上限等一次性反馈),同一时刻只留一条,
+  // 避免连续触发时堆叠出一排。
+  var toastTimer = null, toastEl = null;
+  function showToast(text, ms) {
+    if (toastEl) { toastEl.remove(); clearTimeout(toastTimer); }
+    toastEl = document.createElement("div");
+    toastEl.className = "mb-save-error";
+    toastEl.textContent = text;
+    document.body.appendChild(toastEl);
+    toastTimer = setTimeout(function () {
+      toastTimer = null;
+      if (toastEl) { toastEl.remove(); toastEl = null; }
+    }, ms || 3000);
+  }
+
   // 保存被服务端拒绝(校验 400 之类)是持续性的:用户继续拖半天,其实一笔
   // 都没存上,必须让他知道。节流 8s 提示一次,别每次防抖保存都弹。
   var saveErrTimer = null;
   function notifySaveError() {
     if (saveErrTimer) return;
-    var el = document.createElement("div");
-    el.className = "mb-save-error";
-    el.textContent = "布局保存失败，最近的改动可能不会保留";
-    document.body.appendChild(el);
-    saveErrTimer = setTimeout(function () {
-      saveErrTimer = null;
-      el.remove();
-    }, 8000);
+    showToast("布局保存失败，最近的改动可能不会保留", 8000);
+    saveErrTimer = setTimeout(function () { saveErrTimer = null; }, 8000);
   }
 
   function doSaveBoard() {
