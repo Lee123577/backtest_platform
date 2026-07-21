@@ -15,11 +15,6 @@ window.SPAuth = (function () {
   var pending = null;       // requireLogin 的 resolve，登录成功后回调
   var cooldownTimer = null;
 
-  function esc(s) {
-    return String(s == null ? "" : s)
-      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  }
-
   function postJson(url, body) {
     return fetch(url, {
       method: "POST",

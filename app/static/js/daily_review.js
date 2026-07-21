@@ -14,13 +14,7 @@
   var subscribed = false; // 当前用户是否会员(付费墙用)
   var latestDate = null;  // 最新一篇复盘日期(对所有人免费,不加锁)
 
-  // ── 工具 ──────────────────────────────────────────────────────────────
-  function esc(s) {
-    return String(s)
-      .replace(/&/g, "&amp;").replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-  }
-
+  // ── 工具(esc() 用 util.js 里全站共用的实现)──────────────────────────────
   function fetchJson(url) {
     return fetch(url).then(function (r) {
       if (!r.ok) throw new Error("HTTP " + r.status);

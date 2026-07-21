@@ -9,10 +9,6 @@
 (function () {
   "use strict";
 
-  function esc(s) {
-    return String(s == null ? "" : s)
-      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  }
   function getJson(url) {
     return fetch(url).then(function (r) {
       return r.ok ? r.json() : Promise.reject(r.status);

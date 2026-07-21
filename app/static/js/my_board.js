@@ -33,11 +33,7 @@
   var COMPARE_COLORS = ["#0969da", "#cf222e", "#1a7f37", "#9a6700", "#8250df", "#bf3989"];
 
   var $ = function (id) { return document.getElementById(id); };
-  function esc(s) {
-    return String(s == null ? "" : s)
-      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-  }
+  // esc() 用 util.js 里全站共用的实现(必须比本文件先加载)
   function fmtDate(d) {
     return d.getFullYear() + "-" +
       String(d.getMonth() + 1).padStart(2, "0") + "-" +

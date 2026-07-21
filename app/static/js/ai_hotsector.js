@@ -17,17 +17,9 @@ function fmtPrice(v) {
   return Number(v).toFixed(3);
 }
 
+// esc() 现在是 util.js 里的全站共用实现(必须比本文件先加载)。
 // DeepSeek 返回的板块名/股票名/理由是模型生成的自由文本，插入 innerHTML 前必须转义，
 // 否则模型输出里一旦带 HTML 就是存储型 XSS
-function esc(s) {
-  if (s === null || s === undefined) return '';
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
 
 document.addEventListener('DOMContentLoaded', () => {
   loadStats();

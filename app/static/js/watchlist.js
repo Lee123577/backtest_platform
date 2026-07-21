@@ -9,10 +9,6 @@
 
   var cfg = null; // 最近一次 /config 结果
 
-  function esc(s) {
-    return String(s == null ? "" : s)
-      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  }
   function getJson(url) {
     return fetch(url).then(function (r) {
       if (r.status === 401) throw { unauth: true };

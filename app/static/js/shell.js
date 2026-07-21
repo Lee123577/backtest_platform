@@ -34,11 +34,6 @@
 
   var BRAND = "📈 量化平台";
 
-  function esc(s) {
-    return String(s == null ? "" : s)
-      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  }
-
   // 当前路径匹配(处理 /?mode=portfolio 与 / 的区分)
   function isActive(href) {
     var path = location.pathname.replace(/\/$/, "") || "/";
