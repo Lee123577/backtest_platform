@@ -15,16 +15,16 @@
 (function () {
   "use strict";
 
-  // 首次访问(或重置布局后)展示的默认卡片集合;新增卡片没有默认股票,
-  // 需要用户自己搜索选择。
+  // 首次访问(或重置布局后)展示的默认卡片集合 —— 只放数据全部来自本站
+  // 行情库、保证有内容的卡片,新用户第一屏不该出现空卡或"数据缺失"。
+  // 依赖外部行情源的板块排行(rk_groups/rk_industry/rk_concept)不进默认,
+  // 想看的用户从"添加卡片"菜单自己加。
   var DEFAULT_CARDS = [
     { id: "idx_overview", kind: "indices" },
+    { id: "dr_summary", kind: "review" },
+    { id: "hs_today", kind: "hotsector" },
     { id: "slot1", kind: "stock", code: "603993", type: "stock", name: "洛阳钼业" },
     { id: "slot2", kind: "stock", code: "000001", type: "index", name: "上证综合指数" },
-    { id: "slot3", kind: "stock", code: null, type: null, name: null },
-    { id: "rk_groups", kind: "rank" },
-    { id: "rk_industry", kind: "rank" },
-    { id: "rk_concept", kind: "rank" },
     { id: "rk_special", kind: "rank" },
   ];
   var DAYS_BACK = 180;   // 拉近半年(自然日),图表下方滑块可再拖出子区间

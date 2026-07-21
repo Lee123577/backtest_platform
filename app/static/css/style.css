@@ -218,6 +218,8 @@ input[type=text]:focus, input[type=date]:focus, input[type=number]:focus, select
 .sc-name { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px; color: var(--txt); }
 .sc-desc { font-size: 11px; color: var(--txt2); line-height: 1.4; }
 .sc-add { margin-top: 8px; font-size: 12px; padding: 4px 10px; }
+.sc-btn-row { display: flex; gap: 6px; }
+.sc-btn-row .sc-add { flex: 1; white-space: nowrap; }
 .sc-count-badge {
   display: inline-flex;
   align-items: center;

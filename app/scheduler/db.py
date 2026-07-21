@@ -152,6 +152,27 @@ def count_failures_today(task_name: str, today: _Date) -> int:
     return int(row["n"]) if row else 0
 
 
+def last_failure_today(task_name: str, today: _Date) -> Optional[_DT]:
+    """今日最近一次 failed/timeout 的 started_at —— run_due 用它实现
+    "隔一段时间再重试"(retry_gap_minutes),避免行情源限流没恢复时
+    每 5 分钟唤醒就把当日重试额度连着烧光。"""
+    conn = _get_pool()
+    if conn is None:
+        return None
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT started_at FROM task_run_log
+            WHERE task_name=%s AND DATE(started_at)=%s
+              AND status IN ('failed','timeout')
+            ORDER BY started_at DESC LIMIT 1
+            """,
+            (task_name, today),
+        )
+        row = cur.fetchone()
+    return row["started_at"] if row else None
+
+
 def has_running(task_name: str, within_minutes: int = 120) -> Optional[Dict[str, Any]]:
     """
     检查同名任务是否还有 status='running' 的记录（在 within_minutes 分钟内）。

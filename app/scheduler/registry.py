@@ -126,6 +126,10 @@ TASKS: Dict[str, TaskDef] = {
         "cmd": ["python", "scripts/sector_snapshot.py"],
         "schedule": "weekday:15:10",
         "timeout_sec": 5 * 60,
+        # 新浪限流恢复要几十分钟:失败后隔 40 分钟再试,最多 5 次
+        # (15:10 → 约 18 点前都有机会),而不是 5 分钟连撞 3 次烧光额度
+        "max_retries_per_day": 5,
+        "retry_gap_minutes": 40,
         "description": "板块涨跌快照(新浪行业/概念,15:10 收盘后)",
     },
     # 自选盯盘:17:20 对订阅用户的自选股×盯盘策略跑当日信号,命中落站内提醒。

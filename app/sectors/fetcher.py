@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any, Dict, List
 
 import requests
@@ -75,16 +76,28 @@ def _parse(text: str) -> List[Dict[str, Any]]:
     return out
 
 
+# 进程内重试:限流/网络抖动往往几秒内就能恢复,先在本进程重试 3 次
+# (间隔 3s/8s)再放弃;仍失败则交给 scheduler 的隔段重试(registry 配置)。
+_RETRY_SLEEPS = (3, 8)
+
+
 def _fetch(url: str, params: Dict[str, Any] | None, label: str) -> List[Dict[str, Any]]:
-    try:
-        r = _session().get(url, params=params, timeout=15)
-        r.encoding = "gbk"   # 新浪这两个接口是 GBK,不设会乱码
-        rows = _parse(r.text)
-    except Exception as e:
-        logger.warning("%s板块抓取失败(排行榜将显示数据缺失): %s", label, e)
-        return []
-    logger.info("%s板块抓取 ok: %d 个", label, len(rows))
-    return rows
+    for attempt in range(len(_RETRY_SLEEPS) + 1):
+        try:
+            r = _session().get(url, params=params, timeout=15)
+            r.encoding = "gbk"   # 新浪这两个接口是 GBK,不设会乱码
+            rows = _parse(r.text)
+        except Exception as e:
+            logger.warning("%s板块第 %d 次抓取失败: %s", label, attempt + 1, e)
+            rows = []
+        if rows:
+            logger.info("%s板块抓取 ok: %d 个", label, len(rows))
+            return rows
+        if attempt < len(_RETRY_SLEEPS):
+            time.sleep(_RETRY_SLEEPS[attempt])
+    logger.warning("%s板块重试 %d 次仍失败(排行榜将显示数据缺失)",
+                   label, len(_RETRY_SLEEPS) + 1)
+    return []
 
 
 def fetch_industry() -> List[Dict[str, Any]]:

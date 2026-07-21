@@ -35,6 +35,25 @@
     }).join("");
   }
 
+  // hero 里的 AI 战绩数据条：拿 AI 热门板块的累计战绩当信任背书。
+  // 样本太少(结算<30只)或接口失败就保持隐藏，不给空壳。
+  function renderHeroStats(st) {
+    var el = $("dashHeroStats");
+    if (!st || !st.total_count || st.total_count < 30 || st.win_rate == null) return;
+    var pills = [];
+    pills.push('<span class="dash-hero-stat">AI 选股累计胜率 <b>' +
+      (st.win_rate * 100).toFixed(1) + "%</b>（" + st.win_count + "/" + st.total_count + "）</span>");
+    if (st.cum_return_after_fee != null && st.benchmark_cum_return != null) {
+      var diff = (st.cum_return_after_fee - st.benchmark_cum_return) * 100;
+      var word = diff >= 0 ? "跑赢" : "跑输";
+      pills.push('<span class="dash-hero-stat">扣费后 ' + word + "中证1000 <b>" +
+        Math.abs(diff).toFixed(1) + "</b> 个百分点</span>");
+    }
+    pills.push('<a class="dash-hero-stat" href="/ai_hotsector">完整战绩公开可查 →</a>');
+    el.innerHTML = pills.join("");
+    el.hidden = false;
+  }
+
   function renderHero(user) {
     if (user) {
       $("dashHello").textContent = "欢迎回来，" + maskPhone(user.phone);
@@ -116,6 +135,7 @@
     getJson("/api/auth/me").catch(function () { return { user: null }; }),
     getJson("/api/subscription/status").catch(function () { return null; }),
     getJson("/api/daily_review/latest").catch(function () { return { review: null }; }),
+    getJson("/api/ai_hotsector/stats").catch(function () { return null; }),
   ]).then(function (res) {
     var user = (res[0] && res[0].user) || null;
     var sub = res[1];
@@ -123,6 +143,7 @@
     var loggedIn = !!user;
 
     renderHero(user);
+    renderHeroStats(res[3]);
     renderMember(sub, loggedIn);
     renderReview(review);
 

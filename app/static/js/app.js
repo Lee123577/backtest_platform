@@ -75,10 +75,24 @@ function renderSignalStrategyGrid() {
           ${hasAdded ? `<span class="sc-count-badge">${count}</span>` : ''}
         </div>
         <div class="sc-desc">${escHtml(s.description)}</div>
-        <button class="btn btn-ghost sc-add">${hasAdded ? `＋ 再添加（已选 ${count}）` : '＋ 添加'}</button>
+        <div class="sc-btn-row">
+          <button class="btn btn-ghost sc-add">${hasAdded ? `＋ 再添加（已选 ${count}）` : '＋ 添加'}</button>
+          <button class="btn btn-outline sc-add" title="用推荐参数直接跑一遍示例回测，看看这个策略长什么样"
+                  onclick="event.stopPropagation(); quickRun('${s.id}')">⚡ 一键试跑</button>
+        </div>
       </div>
     `;
   }).join('');
+}
+
+// 「一键试跑」：不懂参数的新用户点一下就能看到完整回测结果。
+// 股票代码没填(或不合法)时自动用示例股 000001 平安银行 —— 低价、流动性好，
+// 10 万初始资金一定买得起；已填了合法代码则尊重用户的选择。
+function quickRun(strategyId) {
+  const codeEl = document.getElementById('stockCode');
+  if (validateStockCode(codeEl.value.trim())) codeEl.value = '000001';
+  if (!instances.some(i => i.id === strategyId)) addInstance(strategyId);
+  runBacktest();
 }
 
 function renderPortfolioStrategyGrid() {

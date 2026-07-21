@@ -217,6 +217,18 @@ def run_due() -> List[dict]:
                         name, fail_count, max_retries)
             continue
 
+        # 重试间隔:外部源限流通常要几十分钟才恢复,支持按任务配置
+        # retry_gap_minutes,失败后等够间隔再重试,而不是下个 5 分钟唤醒就撞上去
+        retry_gap = spec.get("retry_gap_minutes", 0)
+        if fail_count > 0 and retry_gap > 0:
+            last_fail = db.last_failure_today(name, today)
+            if last_fail is not None:
+                waited_min = (now - last_fail).total_seconds() / 60
+                if waited_min < retry_gap:
+                    logger.info("[%s] 距上次失败 %.0f 分钟(< 重试间隔 %d),等下次唤醒",
+                                name, waited_min, retry_gap)
+                    continue
+
         # 同名任务还在跑 → 跳过（避免 cron 5 分钟唤醒时撞上仍在执行的长任务，
         # 子进程会被 _acquire_lock 挡掉、记成 exit=2 的失败记录）
         running = db.has_running(name, within_minutes=spec.get("timeout_sec", 600) // 60 + 5)
