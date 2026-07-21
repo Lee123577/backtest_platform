@@ -1,5 +1,17 @@
 /* Paper trading 页专属样式（继承 style.css 的变量） */
 
+.strategy-context-box {
+  margin: 10px 0 14px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--txt2);
+}
+.strategy-context-box b { color: var(--txt); }
+
 .summary-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));

@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="/static/css/style.css?v=20260709">
   <link rel="stylesheet" href="/static/css/auth.css?v=20260714">
   <link rel="stylesheet" href="/static/css/feedback.css?v=20260713">
-  <link rel="stylesheet" href="/static/css/watchlist.css?v=20260713">
+  <link rel="stylesheet" href="/static/css/watchlist.css?v=20260721g">
   <link rel="stylesheet" href="/static/css/shell.css?v=20260714">
 </head>
 <body>
@@ -25,12 +25,31 @@
 </header>
 
 <main>
-  <!-- 未登录挡板 -->
+  <!-- 未登录挡板：不只是一句"请登录"，把盯盘规则和提醒长什么样先亮出来，
+       让人知道登录后具体能拿到什么，而不是凭空相信一句空话 -->
   <div class="panel" id="wlLoginGate" style="display:none;">
-    <div class="no-data">
-      登录后即可添加自选股、设置盯盘策略。
-      <button class="nav-btn" id="wlLoginBtn" style="margin-left:8px;">登录</button>
+    <div class="panel-title">登录后即可自选盯盘</div>
+    <div class="wl-rule-hint">
+      每个交易日收盘数据入库后（约 17:20），系统按你勾选的策略扫描你的自选股，
+      命中当日买/卖信号就在这里提醒——不用自己盯盘面。
     </div>
+
+    <div class="wl-gate-example">
+      <div class="wl-gate-example-label">提醒长这样：</div>
+      <div class="wl-alert-demo">
+        <span class="wl-alert-demo-tag buy">买入信号</span>
+        <span class="wl-alert-demo-stock">贵州茅台 <span class="wl-alert-demo-code">600519</span></span>
+        <span class="wl-alert-demo-rule">RSI超买超卖：RSI 从超卖区域反弹</span>
+        <span class="wl-alert-demo-date">2026-07-20</span>
+      </div>
+    </div>
+
+    <div class="wl-gate-example">
+      <div class="wl-gate-example-label">可选的盯盘策略：</div>
+      <div id="wlGateStrategies"><div class="no-data">加载中…</div></div>
+    </div>
+
+    <button class="nav-btn wl-gate-login-btn" id="wlLoginBtn">登录 / 注册</button>
   </div>
 
   <div id="wlBody" style="display:none;">
@@ -75,7 +94,7 @@
 <script src="/static/js/util.js?v=20260721e"></script>
 <script src="/static/js/auth.js?v=20260721e"></script>
 <script src="/static/js/feedback.js?v=20260713"></script>
-<script src="/static/js/watchlist.js?v=20260721e"></script>
+<script src="/static/js/watchlist.js?v=20260721g"></script>
 <script src="/static/js/shell.js?v=20260721e"></script>
 </body>
 </html>

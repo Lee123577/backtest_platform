@@ -6,6 +6,62 @@
   margin: -4px 0 12px;
 }
 
+/* ── 未登录挡板：让人先看到规则/示例，再决定要不要登录 ──────────── */
+.wl-gate-example { margin-top: 18px; }
+.wl-gate-example-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--txt2, #9aa0aa);
+  margin-bottom: 8px;
+}
+.wl-alert-demo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border, #333);
+  border-radius: 8px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+.wl-alert-demo-tag {
+  flex: none;
+  font-weight: 700;
+  font-size: 12px;
+  border-radius: 6px;
+  padding: 3px 8px;
+}
+.wl-alert-demo-tag.buy  { color: #e05252; border: 1px solid #e05252; }
+.wl-alert-demo-tag.sell { color: #2fa87d; border: 1px solid #2fa87d; }
+.wl-alert-demo-code { color: var(--txt2, #9aa0aa); font-size: 12px; margin-left: 4px; }
+.wl-alert-demo-rule { color: var(--txt2, #9aa0aa); font-size: 12px; }
+.wl-alert-demo-date {
+  flex: none; margin-left: auto;
+  color: var(--txt2, #9aa0aa); font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.wl-gate-strat {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border, #333);
+  font-size: 13px;
+}
+.wl-gate-strat:last-child { border-bottom: none; }
+.wl-gate-strat b { margin-right: 8px; }
+.wl-gate-strat span { color: var(--txt2, #9aa0aa); font-size: 12px; }
+.wl-gate-login-btn {
+  margin-top: 18px;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  border: none;
+  border-radius: 8px;
+  background: #5b8def;
+  color: #fff;
+  font-size: 14px;
+  padding: 10px 24px;
+  cursor: pointer;
+}
+
 /* ── 信号提醒 ─────────────────────────────────────────────── */
 .wl-alert {
   display: flex;

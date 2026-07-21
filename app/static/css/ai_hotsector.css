@@ -22,6 +22,21 @@
 }
 .hs-two-col > .panel { margin: 0; }
 
+/* 数据方法论折叠区(板块同质化 / 提示词版本对比)：默认收起，
+   只给想深挖的人看，不占主视图的认知负担 */
+.hs-methodology { padding: 14px 24px; }
+.hs-methodology-summary {
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--txt2);
+  list-style: none;
+}
+.hs-methodology-summary::-webkit-details-marker { display: none; }
+.hs-methodology[open] .hs-methodology-summary { color: var(--txt); margin-bottom: 14px; }
+.hs-methodology-body { margin-top: 14px; }
+.hs-methodology-body .panel-title { font-size: 14px; }
+
 .sector-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));

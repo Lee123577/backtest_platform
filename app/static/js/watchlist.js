@@ -135,10 +135,29 @@
     });
   }
 
+  // ── 未登录挡板：拉公开的 /api/strategies(首页回测用的同一份策略注册表，
+  // 盯盘策略是它的子集)渲染真实规则说明，而不是空喊"登录后可用" ──────────────
+  var _gateStrategiesLoaded = false;
+  function loadGateStrategies() {
+    if (_gateStrategiesLoaded) return;
+    _gateStrategiesLoaded = true;
+    fetch("/api/strategies").then(function (r) { return r.json(); }).then(function (list) {
+      var signals = (list || []).filter(function (s) { return s.strategy_type === "signal"; });
+      if (!signals.length) throw new Error("empty");
+      $("wlGateStrategies").innerHTML = signals.map(function (s) {
+        return '<div class="wl-gate-strat"><b>' + esc(s.name) + "</b>" +
+          '<span>' + esc(s.description) + "</span></div>";
+      }).join("");
+    }).catch(function () {
+      $("wlGateStrategies").innerHTML = '<div class="no-data">暂时加载不到，登录后仍可正常勾选</div>';
+    });
+  }
+
   // ── 初始化 ──────────────────────────────────────────────────────────────
   function showGate() {
     $("wlLoginGate").style.display = "";
     $("wlBody").style.display = "none";
+    loadGateStrategies();
     var b = $("wlLoginBtn");
     if (b) b.addEventListener("click", function () {
       window.SPAuth.requireLogin().then(function (u) { if (u) init(); });

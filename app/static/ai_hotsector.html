@@ -6,7 +6,7 @@
   <title>AI 热门板块</title>
   <link rel="stylesheet" href="/static/css/style.css?v=20260708">
   <link rel="stylesheet" href="/static/css/paper_trading.css?v=20260703">
-  <link rel="stylesheet" href="/static/css/ai_hotsector.css?v=20260703">
+  <link rel="stylesheet" href="/static/css/ai_hotsector.css?v=20260721g">
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
   <link rel="stylesheet" href="/static/css/feedback.css?v=20260713">
   <link rel="stylesheet" href="/static/css/shell.css?v=20260714">
@@ -63,24 +63,31 @@
     <div class="chart-wrap-sm" id="hsEquityChart"></div>
   </div>
 
-  <!-- 4. 板块表现 + 提示词版本对比 -->
-  <div class="hs-two-col">
-    <div class="panel">
-      <div class="panel-title">
-        板块表现 <span>出现天数越多，说明 AI 越倾向反复推荐同一板块(同质化信号)</span>
+  <!-- 4. 板块表现 + 提示词版本对比 —— 收进折叠区:这两张是给想验证"AI
+       是不是在同质化推荐/提示词迭代到底有没有用"的人看的方法论细节,
+       对大多数只想看"跑得怎么样"的用户是认知负担,默认收起、想看自己展开 -->
+  <details class="panel hs-methodology">
+    <summary class="hs-methodology-summary">
+      📎 数据方法论：板块同质化 & 提示词版本对比（点击展开）
+    </summary>
+    <div class="hs-two-col hs-methodology-body">
+      <div>
+        <div class="panel-title">
+          板块表现 <span>出现天数越多，说明 AI 越倾向反复推荐同一板块(同质化信号)</span>
+        </div>
+        <div id="hsSectorStatsWrap">
+          <div class="no-data">加载中…</div>
+        </div>
       </div>
-      <div id="hsSectorStatsWrap">
-        <div class="no-data">加载中…</div>
-      </div>
-    </div>
 
-    <div class="panel">
-      <div class="panel-title">提示词版本对比 <span>迭代提示词后，用胜率验证是否真的变好了</span></div>
-      <div id="hsPromptStatsWrap">
-        <div class="no-data">加载中…</div>
+      <div>
+        <div class="panel-title">提示词版本对比 <span>迭代提示词后，用胜率验证是否真的变好了</span></div>
+        <div id="hsPromptStatsWrap">
+          <div class="no-data">加载中…</div>
+        </div>
       </div>
     </div>
-  </div>
+  </details>
 
   <!-- 5. 历史批次 -->
   <div class="panel">

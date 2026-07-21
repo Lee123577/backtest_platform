@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>小市值策略 · 实盘观察</title>
   <link rel="stylesheet" href="/static/css/style.css?v=20260708">
-  <link rel="stylesheet" href="/static/css/paper_trading.css?v=20260703">
+  <link rel="stylesheet" href="/static/css/paper_trading.css?v=20260721g">
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
   <link rel="stylesheet" href="/static/css/feedback.css?v=20260713">
   <link rel="stylesheet" href="/static/css/shell.css?v=20260714">
@@ -37,6 +37,16 @@
       <span class="admin-chip admin-chip-loading" id="adminChip" title="权限状态">检测中…</span>
       <button class="params-toggle" id="adminMgmtBtn" onclick="openAdminModal()" style="display:none;margin-left:8px">🔑 管理白名单</button>
       <button class="params-toggle" onclick="toggleParamsEditor()" id="paramsToggleBtn">⚙ 调整策略参数</button>
+    </div>
+
+    <!-- 定位说明：诚实交代这是验证用的模拟盘，不是"精选出来的赚钱策略" ——
+         累计收益为负时如实展示，比藏起来更符合本站"不筛选好看结果"的原则 -->
+    <div class="strategy-context-box" id="strategyContextBox">
+      <b>为什么展示这个策略：</b>
+      这是用真实滑点/手续费跑的<b>验证用</b>模拟盘，用来观察"小市值因子"在
+      A 股实盘约束（9 万本金只能开主板、5 天调仓、10% 止损）下到底会长什么样——
+      不是本站精选出来推荐买的策略。涨跌都按真实运行结果公开，累计为负也如实展示，
+      不会因为好看才留、不好看就撤。
     </div>
 
     <!-- 策略参数编辑器（默认收起）-->
