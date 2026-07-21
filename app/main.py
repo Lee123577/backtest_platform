@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 from fastapi import Depends, FastAPI, HTTPException, Response
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel
@@ -599,9 +599,16 @@ def _iso(v):
     return str(v)
 
 
-@app.get("/tasks", include_in_schema=False)
+@app.get("/admin/tasks", include_in_schema=False)
 async def page_tasks():
     return FileResponse(STATIC_DIR / "tasks.html")
+
+
+@app.get("/tasks", include_in_schema=False)
+async def page_tasks_legacy_redirect():
+    """旧路径重定向：运维监控页不该跟用户功能挂在同一层级，迁到 /admin/tasks。
+    保留 307 跳转只是防旧书签失效，新链接不应再指向这里。"""
+    return RedirectResponse("/admin/tasks", status_code=307)
 
 
 # ── 管理员 IP 白名单 ──────────────────────────────────────────────────────────

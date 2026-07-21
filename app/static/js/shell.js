@@ -26,9 +26,11 @@
       { label: "自选盯盘", href: "/watchlist", ico: "⭐" },
     ]},
     // 购买订阅页先隐藏入口(产品要求暂缓上线,页面/接口都还在,只是不导流量进去)
-    // 运维页:仅管理员 IP 可见(默认 hidden,确认身份后才显示,避免闪现)
+    // 运维页:仅管理员 IP 可见(默认 hidden,确认身份后才显示,避免闪现)。
+    // 路径特意用 /admin/tasks 而不是 /tasks —— 这是内部运维监控,不该跟
+    // 单股回测/看板等用户功能同层级挂在一起(旧路径 /tasks 307 跳转过来)。
     { title: "系统", adminOnly: true, items: [
-      { label: "定时任务", href: "/tasks", ico: "⏱️" },
+      { label: "定时任务", href: "/admin/tasks", ico: "⏱️" },
     ]},
   ];
 
