@@ -3,112 +3,63 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>大盘云图 · A股量化回测平台</title>
-  <script src="/static/js/vendor/echarts.min.js?v=20260722a"></script>
-  <link rel="stylesheet" href="/static/css/cloudmap.css?v=20260722a">
+  <title>大盘云图</title>
+  <link rel="stylesheet" href="/static/css/style.css?v=20260709">
+  <link rel="stylesheet" href="/static/css/auth.css?v=20260714">
+  <link rel="stylesheet" href="/static/css/feedback.css?v=20260713">
+  <link rel="stylesheet" href="/static/css/shell.css?v=20260714">
+  <link rel="stylesheet" href="/static/css/cloudmap.css?v=20260721canvas">
 </head>
-<body class="cm-body">
+<body>
 
-<div class="cm-app">
-  <header class="cm-header">
-    <div class="cm-header-left">
-      <a href="/dashboard" class="cm-brand" title="返回仪表盘">大盘云图</a>
+<header>
+  <h1>📈 A股量化回测平台</h1>
+  <nav class="header-nav">
+    <a class="nav-btn" href="/">单股策略</a>
+    <a class="nav-btn" href="/daily_review">每日复盘</a>
+  </nav>
+</header>
+
+<main>
+  <div class="cm-toolbar">
+    <div class="cm-toolbar-left">
+      <h2 class="cm-title">大盘云图</h2>
+      <span class="cm-date" id="cmDate">—</span>
+      <span class="cm-date" id="cmCount"></span>
     </div>
-    <div class="cm-header-center" id="cmIndices">
-      <!-- 指数行情条：JS 渲染 -->
+    <div class="cm-toolbar-right">
+      <select id="minCapFilter" class="cm-select" title="按流通市值下限过滤，避免小盘挤爆云图">
+        <option value="0">无市值下限</option>
+        <option value="50" selected>市值 ≥ 50 亿</option>
+        <option value="100">市值 ≥ 100 亿</option>
+        <option value="500">市值 ≥ 500 亿</option>
+        <option value="1000">市值 ≥ 1000 亿</option>
+      </select>
+      <button type="button" class="cm-btn" id="refreshBtn">⟳ 刷新</button>
     </div>
-    <div class="cm-header-right">
-      <span class="cm-time" id="cmTime">—</span>
-      <button class="cm-fullscreen-btn" id="cmFullscreenBtn" title="全屏">⛶</button>
-    </div>
-  </header>
-
-  <div class="cm-shell">
-    <aside class="cm-sidebar">
-      <div class="cm-board-box">
-        <button type="button" class="cm-board-item active" data-cat="all">
-          <span>全部板块</span><span class="cm-board-pct" id="cmBoardPctAll">—</span>
-        </button>
-        <button type="button" class="cm-board-item" data-cat="沪市主板">
-          <span>沪市主板</span><span class="cm-board-pct" id="cmBoardPct-沪市主板">—</span>
-        </button>
-        <button type="button" class="cm-board-item" data-cat="深市主板">
-          <span>深市主板</span><span class="cm-board-pct" id="cmBoardPct-深市主板">—</span>
-        </button>
-        <button type="button" class="cm-board-item" data-cat="科创板">
-          <span>科创板</span><span class="cm-board-pct" id="cmBoardPct-科创板">—</span>
-        </button>
-        <button type="button" class="cm-board-item" data-cat="创业板">
-          <span>创业板</span><span class="cm-board-pct" id="cmBoardPct-创业板">—</span>
-        </button>
-        <button type="button" class="cm-board-item" data-cat="中小板">
-          <span>中小板</span><span class="cm-board-pct" id="cmBoardPct-中小板">—</span>
-        </button>
-        <button type="button" class="cm-board-item" data-cat="北交所">
-          <span>北交所</span><span class="cm-board-pct" id="cmBoardPct-北交所">—</span>
-        </button>
-      </div>
-
-      <div class="cm-select-row">
-        <select id="marketFilter" class="cm-select">
-          <option value="all">全部 A 股</option>
-          <option value="SH">仅沪市</option>
-          <option value="SZ">仅深市</option>
-          <option value="BJ">仅北交所</option>
-        </select>
-        <select id="minCapFilter" class="cm-select">
-          <option value="0">无市值下限</option>
-          <option value="50" selected>市值 ≥ 50 亿</option>
-          <option value="100">市值 ≥ 100 亿</option>
-          <option value="500">市值 ≥ 500 亿</option>
-          <option value="1000">市值 ≥ 1000 亿</option>
-        </select>
-      </div>
-
-      <div class="cm-stats">
-        <div class="cm-stats-row3">
-          <div class="cm-stats-col up"><div class="cm-stats-label">上涨</div><div class="cm-stats-val" id="cmUp">0</div></div>
-          <div class="cm-stats-col"><div class="cm-stats-label">平盘</div><div class="cm-stats-val" id="cmFlat">0</div></div>
-          <div class="cm-stats-col down"><div class="cm-stats-label">下跌</div><div class="cm-stats-val" id="cmDown">0</div></div>
-        </div>
-        <div class="cm-stats-row2">
-          <div class="cm-stats-col"><div class="cm-stats-label">成交额</div><div class="cm-stats-val" id="cmAmount">0亿</div></div>
-          <div class="cm-stats-col"><div class="cm-stats-label">比昨日</div><div class="cm-stats-val" id="cmVolDelta">0</div></div>
-        </div>
-      </div>
-
-      <div class="cm-refresh-row">
-        <button type="button" class="cm-refresh-btn" id="refreshBtn">⟳ 刷新</button>
-        <label class="cm-auto-refresh">
-          <input type="checkbox" id="autoRefresh" checked> 自动刷新
-        </label>
-      </div>
-
-      <div class="cm-tips">
-        <div class="cm-tips-title">操作提示：</div>
-        <div>· 面积代表流通市值</div>
-        <div>· 颜色代表涨跌幅度</div>
-        <div>· <span id="autoRefreshHint">自动刷新 60 秒</span></div>
-        <div>· hover 查看个股详情</div>
-        <div>· 点击色块下钻板块</div>
-        <div>· 全屏观看效果更好</div>
-      </div>
-    </aside>
-
-    <main class="cm-main">
-      <div id="treemap" class="cm-treemap"></div>
-      <div id="loading" class="cm-loading" style="display:none;">加载中…</div>
-      <div id="error" class="cm-error" style="display:none;"></div>
-    </main>
   </div>
 
-  <footer class="cm-footer">
-    <div class="cm-footer-left" id="cmDateBadge">—</div>
-    <div class="cm-footer-legend" id="legend"></div>
-  </footer>
-</div>
+  <div class="cm-legend" id="legend"></div>
 
-<script src="/static/js/cloudmap.js?v=20260722a"></script>
+  <div class="cm-canvas-wrap" id="cmCanvasWrap">
+    <canvas id="treemap"></canvas>
+    <div class="cm-tooltip" id="cmTooltip" hidden></div>
+    <div class="cm-loading" id="loading" hidden>加载中…</div>
+    <div class="cm-error" id="error" hidden></div>
+  </div>
+
+  <div class="cm-hint">面积代表流通市值，颜色代表当日涨跌幅（绿跌红涨），hover 查看个股详情 · 数据来自本站行情库，仅供研究，不构成投资建议。</div>
+</main>
+
+<footer class="site-footer">
+  💡 需要定制策略 / 接入实盘？只提供代码，服务器需自行购买 · 第一单免费（目前限时全免）·
+  <a href="mailto:lihaichuan393@gmail.com">lihaichuan393@gmail.com</a>
+</footer>
+
+<script src="/static/js/util.js?v=20260721e"></script>
+<script src="/static/js/auth.js?v=20260721e"></script>
 <script src="/static/js/feedback.js?v=20260713"></script>
+<script src="/static/js/cloudmap.js?v=20260721canvas6"></script>
+<script src="/static/js/shell.js?v=20260721h"></script>
 </body>
 </html>
