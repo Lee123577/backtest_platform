@@ -76,9 +76,9 @@ function renderSignalStrategyGrid() {
         </div>
         <div class="sc-desc">${escHtml(s.description)}</div>
         <div class="sc-btn-row">
-          <button class="btn btn-ghost sc-add">${hasAdded ? `＋ 再添加（已选 ${count}）` : '＋ 添加'}</button>
-          <button class="btn btn-outline sc-add" title="用推荐参数直接跑一遍示例回测，看看这个策略长什么样"
-                  onclick="event.stopPropagation(); quickRun('${s.id}')">⚡ 一键试跑</button>
+          <button class="btn btn-ghost sc-add sc-add-primary">${hasAdded ? `＋ 再添加（已选 ${count}）` : '＋ 添加'}</button>
+          <button class="btn sc-quickrun" title="用推荐参数直接跑一遍示例回测，看看这个策略长什么样"
+                  onclick="event.stopPropagation(); quickRun('${s.id}')">⚡ 试跑</button>
         </div>
       </div>
     `;
@@ -232,7 +232,7 @@ function renderInstances() {
   const list = document.getElementById('instancesList');
 
   if (instances.length === 0) {
-    list.innerHTML = '<div class="empty-hint" id="emptyHint">请从上方选择策略并添加</div>';
+    list.innerHTML = '<div class="empty-hint" id="emptyHint"><span class="empty-hint-icon" aria-hidden="true">🗂️</span><span>暂无已选策略，点击上方策略卡片即可添加</span></div>';
     return;
   }
 

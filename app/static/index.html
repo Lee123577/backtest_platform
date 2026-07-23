@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>A股量化回测平台</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=20260721f">
+  <link rel="stylesheet" href="/static/css/style.css?v=20260723a">
   <script src="/static/js/vendor/echarts.min.js?v=20260722a"></script>
   <link rel="stylesheet" href="/static/css/feedback.css?v=20260713">
   <link rel="stylesheet" href="/static/css/shell.css?v=20260714">
@@ -51,7 +51,7 @@
         </div>
         <div class="form-group">
           <label>初始资金（元）</label>
-          <input type="number" id="capital" value="100000" min="10000" step="10000" style="width:140px">
+          <input type="number" id="capital" value="100000" min="10000" step="10000">
         </div>
         <div class="form-group">
           <label>复权方式</label>
@@ -63,15 +63,15 @@
         </div>
         <div class="form-group">
           <label>滑点（%）</label>
-          <input type="number" id="slippage" value="0.01" min="0" max="1" step="0.01" style="width:90px">
+          <input type="number" id="slippage" value="0.01" min="0" max="1" step="0.01">
         </div>
         <div class="form-group">
           <label>止损（%，0=关闭）</label>
-          <input type="number" id="stopLoss" value="0" min="0" max="50" step="1" style="width:90px">
+          <input type="number" id="stopLoss" value="0" min="0" max="50" step="1">
         </div>
         <div class="form-group">
           <label>止盈（%，0=关闭）</label>
-          <input type="number" id="takeProfit" value="0" min="0" max="200" step="1" style="width:90px">
+          <input type="number" id="takeProfit" value="0" min="0" max="200" step="1">
         </div>
       </div>
 
@@ -81,7 +81,7 @@
 
       <div class="strategy-section-label">已选策略实例</div>
       <div class="instances-list" id="instancesList">
-        <div class="empty-hint" id="emptyHint">请从上方选择策略并添加</div>
+        <div class="empty-hint" id="emptyHint"><span class="empty-hint-icon" aria-hidden="true">🗂️</span><span>暂无已选策略，点击上方策略卡片即可添加</span></div>
       </div>
 
       <div id="settingsError"></div>
@@ -109,11 +109,11 @@
         </div>
         <div class="form-group">
           <label>初始资金（元）</label>
-          <input type="number" id="pCapital" value="100000" min="10000" step="10000" style="width:140px">
+          <input type="number" id="pCapital" value="100000" min="10000" step="10000">
         </div>
         <div class="form-group">
           <label>基准指数</label>
-          <select id="pBenchmark" style="width:130px">
+          <select id="pBenchmark">
             <option value="">策略默认</option>
             <option value="000300">沪深300</option>
             <option value="000905">中证500</option>
@@ -207,7 +207,7 @@
   <a href="mailto:lihaichuan393@gmail.com">lihaichuan393@gmail.com</a>
 </footer>
 
-<script src="/static/js/app.js?v=20260721f"></script>
+<script src="/static/js/app.js?v=20260723a"></script>
 <script src="/static/js/feedback.js?v=20260713"></script>
 <script src="/static/js/util.js?v=20260721e"></script>
 <script src="/static/js/auth.js?v=20260721e"></script>
