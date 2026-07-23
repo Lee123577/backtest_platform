@@ -3,8 +3,8 @@
 :root {
   /* 复用站点全局强调色(style.css --accent),避免这里另起一个色号导致
      跟其他页面的蓝色对不上。 */
-  --mb-accent: var(--accent, #0969da);
-  --mb-accent-rgb: 9, 105, 218;
+  --mb-accent: var(--accent, #185FA5);
+  --mb-accent-rgb: 24, 95, 165;
 }
 
 .mb-hint-row {

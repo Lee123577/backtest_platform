@@ -24,20 +24,20 @@
   outline: none;
   transition: border-color 120ms ease-out;
 }
-.cm-select:hover, .cm-select:focus { border-color: var(--accent, #0969da); }
+.cm-select:hover, .cm-select:focus { border-color: var(--accent, #185FA5); }
 
 .cm-btn {
   font-size: 13px;
   font-weight: 600;
-  color: var(--accent, #0969da);
-  background: rgba(9, 105, 218, .08);
-  border: 1px solid rgba(9, 105, 218, .25);
+  color: var(--accent, #185FA5);
+  background: rgba(24, 95, 165, .08);
+  border: 1px solid rgba(24, 95, 165, .25);
   border-radius: 6px;
   padding: 5px 12px;
   cursor: pointer;
   transition: background-color 120ms ease-out;
 }
-.cm-btn:hover { background: rgba(9, 105, 218, .16); }
+.cm-btn:hover { background: rgba(24, 95, 165, .16); }
 
 /* 色阶图例 */
 .cm-legend { display: flex; align-items: center; gap: 0; flex-wrap: wrap; margin-bottom: 10px; }

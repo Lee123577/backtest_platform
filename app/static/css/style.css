@@ -7,7 +7,16 @@
   --border: #d0d7de;
   --txt:    #24292f;
   --txt2:   #57606a;
-  --accent: #0969da;
+  /* 品牌主色 —— 收盘 shoupan */
+  --accent:       #185FA5;
+  --accent-rgb:   24, 95, 165;
+  --accent-light: #E6F1FB;
+  --accent-dark:  #0C447C;
+  /* 品牌辅色 —— CTA / 强调用，节制使用 */
+  --brand-2:       #EF9F27;
+  --brand-2-rgb:   239, 159, 39;
+  --brand-2-light: #FAEEDA;
+  --brand-2-dark:  #BA7517;
   --green:  #1a7f37;
   --red:    #cf222e;
   --warn:   #9a6700;
@@ -63,7 +72,7 @@ header h1 { font-size: 18px; font-weight: 700; color: var(--accent); letter-spac
   flex-shrink: 0;
 }
 .nav-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 700; }
-.nav-btn:not(.active):hover { border-color: var(--accent); color: var(--accent); background: rgba(9,105,218,.06); }
+.nav-btn:not(.active):hover { border-color: var(--accent); color: var(--accent); background: rgba(24,95,165,.06); }
 
 .tip-badge {
   font-size: 11px;
@@ -92,14 +101,26 @@ main {
   margin: 8px auto 20px;
   padding: 14px 24px;
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 6px 10px;
+  gap: 6px;
   text-align: center;
   color: var(--txt2);
   font-size: 12.5px;
   border-top: 1px solid var(--border);
+}
+.site-footer-brand {
+  font-weight: 700;
+  color: var(--accent);
+  font-size: 13px;
+  letter-spacing: .3px;
+}
+.site-footer-contact {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px 10px;
 }
 .site-footer a {
   color: var(--accent);
@@ -159,7 +180,7 @@ input[type=text], input[type=date], input[type=number], select {
 }
 input[type=text]:focus, input[type=date]:focus, input[type=number]:focus, select:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(9,105,218,.12);
+  box-shadow: 0 0 0 3px rgba(24,95,165,.12);
 }
 .inline-group { display: flex; gap: 6px; align-items: flex-end; }
 .inline-group input { flex: 1; min-width: 0; }
@@ -176,11 +197,11 @@ input[type=text]:focus, input[type=date]:focus, input[type=number]:focus, select
 .btn { border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600; padding: 7px 14px; transition: opacity .15s, background .15s, box-shadow .15s; }
 .btn:disabled { opacity: .4; cursor: not-allowed; }
 .btn-accent { background: var(--accent); color: #fff; }
-.btn-accent:not(:disabled):hover { background: #0860ca; box-shadow: 0 2px 6px rgba(9,105,218,.3); }
+.btn-accent:not(:disabled):hover { background: #0C447C; box-shadow: 0 2px 6px rgba(24,95,165,.3); }
 .btn-outline { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
-.btn-outline:hover { background: rgba(9,105,218,.06); }
-.btn-ghost { background: rgba(9,105,218,.06); color: var(--accent); border: 1px solid rgba(9,105,218,.2); }
-.btn-ghost:hover { background: rgba(9,105,218,.12); }
+.btn-outline:hover { background: rgba(24,95,165,.06); }
+.btn-ghost { background: rgba(24,95,165,.06); color: var(--accent); border: 1px solid rgba(24,95,165,.2); }
+.btn-ghost:hover { background: rgba(24,95,165,.12); }
 .btn-danger { background: transparent; color: var(--red); border: 1px solid rgba(207,34,46,.25); }
 .btn-danger:hover { background: rgba(207,34,46,.06); }
 .btn-run {
@@ -219,11 +240,11 @@ input[type=text]:focus, input[type=date]:focus, input[type=number]:focus, select
   flex-direction: column;
   gap: 4px;
 }
-.strategy-card:hover { border-color: var(--accent); transform: translateY(-1px); box-shadow: 0 3px 8px rgba(9,105,218,.1); }
+.strategy-card:hover { border-color: var(--accent); transform: translateY(-1px); box-shadow: 0 3px 8px rgba(24,95,165,.1); }
 .strategy-card.selected-card {
   border-color: var(--accent);
-  background: rgba(9,105,218,.05);
-  box-shadow: 0 0 0 2px rgba(9,105,218,.2);
+  background: rgba(24,95,165,.05);
+  box-shadow: 0 0 0 2px rgba(24,95,165,.2);
 }
 .sc-name { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px; color: var(--txt); }
 .sc-desc {
@@ -248,7 +269,7 @@ input[type=text]:focus, input[type=date]:focus, input[type=number]:focus, select
   font-weight: 500;
   white-space: nowrap;
 }
-.sc-quickrun:hover { color: var(--accent); background: rgba(9,105,218,.08); border-radius: 6px; }
+.sc-quickrun:hover { color: var(--accent); background: rgba(24,95,165,.08); border-radius: 6px; }
 .sc-count-badge {
   display: inline-flex;
   align-items: center;
@@ -292,7 +313,7 @@ input[type=text]:focus, input[type=date]:focus, input[type=number]:focus, select
   gap: 8px;
   padding: 9px 12px;
   border-bottom: 1px solid var(--border);
-  background: rgba(9,105,218,.04);
+  background: rgba(24,95,165,.04);
 }
 .instance-label-input {
   flex: 1;
@@ -381,7 +402,7 @@ table.metrics-tbl {
   cursor: pointer;
   transition: all .15s;
 }
-.tab-btn.active { border-color: var(--accent); color: var(--accent); background: rgba(9,105,218,.07); }
+.tab-btn.active { border-color: var(--accent); color: var(--accent); background: rgba(24,95,165,.07); }
 .trade-panel { display: none; }
 .trade-panel.active { display: block; }
 .trades-scroll { overflow-x: auto; max-height: 360px; overflow-y: auto; }
@@ -426,7 +447,7 @@ table.trades-tbl {
 .loader-box { text-align: center; }
 .spinner {
   width: 44px; height: 44px;
-  border: 4px solid rgba(9,105,218,.15);
+  border: 4px solid rgba(24,95,165,.15);
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin .7s linear infinite;
@@ -438,7 +459,7 @@ table.trades-tbl {
 #progressBar { margin-top: 14px; width: 260px; text-align: center; }
 .pb-track {
   width: 100%; height: 6px;
-  background: rgba(9,105,218,.12);
+  background: rgba(24,95,165,.12);
   border-radius: 3px;
   overflow: hidden;
   margin-bottom: 6px;
@@ -489,7 +510,7 @@ hr.divider { border: none; border-top: 1px solid var(--border); margin: 22px 0; 
   align-items: center;
   gap: 8px;
   padding: 9px 12px;
-  background: rgba(9,105,218,.05);
+  background: rgba(24,95,165,.05);
   border-bottom: 1px solid var(--border);
 }
 .portfolio-instance-title { flex: 1; font-size: 13px; font-weight: 600; color: var(--accent); }
@@ -510,7 +531,7 @@ table.holdings-tbl { width: 100%; border-collapse: collapse; font-size: 12px; mi
 .holdings-tbl td { padding: 5px 10px; border: 1px solid var(--border); font-size: 12px; background: var(--bg); }
 .stock-chip {
   display: inline-block;
-  background: rgba(9,105,218,.08);
+  background: rgba(24,95,165,.08);
   color: var(--accent);
   border-radius: 4px;
   padding: 1px 6px; margin: 1px; font-size: 11px;

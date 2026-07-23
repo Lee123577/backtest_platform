@@ -7,9 +7,9 @@
   gap: 16px;
   padding: 22px 26px;
   border-radius: 14px;
-  background: linear-gradient(120deg, #2b6fe0, #4f8cf0);
+  background: linear-gradient(120deg, #185FA5, #4A8FD1);
   color: #fff;
-  box-shadow: 0 8px 24px rgba(43, 111, 224, .25);
+  box-shadow: 0 8px 24px rgba(24, 95, 165, .25);
 }
 .dash-hello { font-size: 20px; font-weight: 700; }
 .dash-sub { font-size: 13px; opacity: .9; margin-top: 4px; }
@@ -17,7 +17,7 @@
   border: none;
   border-radius: 10px;
   background: #fff;
-  color: #2b6fe0;
+  color: #185FA5;
   font-size: 14px;
   font-weight: 600;
   padding: 10px 22px;
@@ -84,7 +84,7 @@ a.dash-hero-stat:hover { background: rgba(255, 255, 255, .22); }
   margin-top: 4px;
   border: none;
   border-radius: 8px;
-  background: #2b6fe0;
+  background: #185FA5;
   color: #fff;
   font-size: 13px;
   font-weight: 500;
@@ -93,11 +93,11 @@ a.dash-hero-stat:hover { background: rgba(255, 255, 255, .22); }
   text-decoration: none;
 }
 .dash-cta:hover { filter: brightness(1.05); }
-.dash-cta.ghost { background: rgba(43, 111, 224, .08); color: #2b6fe0; }
+.dash-cta.ghost { background: rgba(24, 95, 165, .08); color: #185FA5; }
 
 .dash-link {
   font-size: 13px;
-  color: #2b6fe0;
+  color: #185FA5;
   text-decoration: none;
 }
 .dash-link:hover { text-decoration: underline; }
@@ -136,9 +136,9 @@ a.dash-hero-stat:hover { background: rgba(255, 255, 255, .22); }
   transition: border-color .15s, transform .1s, box-shadow .15s;
 }
 .dash-shortcut:hover {
-  border-color: #2b6fe0;
+  border-color: #185FA5;
   transform: translateY(-2px);
-  box-shadow: 0 6px 16px rgba(43, 111, 224, .12);
+  box-shadow: 0 6px 16px rgba(24, 95, 165, .12);
 }
 .dash-shortcut .sc-ico { font-size: 22px; flex: none; }
 .dash-shortcut .sc-label { font-size: 14px; font-weight: 500; }

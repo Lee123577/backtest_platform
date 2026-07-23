@@ -5,8 +5,8 @@
 
 :root {
   --spx-sidebar-w: 220px;
-  --spx-topbar-h: 56px;
-  --spx-brand: #2b6fe0;
+  --spx-topbar-h: 64px;
+  --spx-brand: #185FA5;
 }
 
 body.spx-shell {
@@ -47,16 +47,16 @@ body.spx-shell .site-footer {
   height: var(--spx-topbar-h);
   flex: none;
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  justify-content: center;
   padding: 0 20px;
   background: var(--spx-brand);
   color: #fff;
-  font-size: 17px;
-  font-weight: 700;
-  letter-spacing: .5px;
   text-decoration: none;
 }
 .spx-brand:hover { color: #fff; filter: brightness(1.05); }
+.spx-brand-name { font-size: 16px; font-weight: 700; letter-spacing: .5px; line-height: 1.3; }
+.spx-brand-slogan { font-size: 10.5px; font-weight: 400; color: rgba(255,255,255,.78); letter-spacing: .2px; line-height: 1.3; }
 .spx-nav {
   flex: 1;
   overflow-y: auto;
@@ -78,10 +78,10 @@ body.spx-shell .site-footer {
   font-size: 14px;
   border-left: 3px solid transparent;
 }
-.spx-link:hover { background: rgba(43, 111, 224, .06); }
+.spx-link:hover { background: rgba(24, 95, 165, .06); }
 .spx-link.active {
   color: var(--spx-brand);
-  background: rgba(43, 111, 224, .10);
+  background: rgba(24, 95, 165, .10);
   border-left-color: var(--spx-brand);
   font-weight: 600;
 }

@@ -22,13 +22,13 @@
   cursor: pointer;
   transition: border-color .15s, transform .1s;
 }
-.plan-card:hover { border-color: #5b8def; transform: translateY(-2px); }
+.plan-card:hover { border-color: var(--brand-2, #EF9F27); transform: translateY(-2px); }
 .plan-label { font-size: 15px; font-weight: 600; margin-bottom: 8px; }
-.plan-price { font-size: 26px; color: #5b8def; font-weight: 700; }
+.plan-price { font-size: 26px; color: var(--brand-2, #EF9F27); font-weight: 700; }
 .plan-price small { font-size: 13px; color: var(--txt2, #9aa0aa); font-weight: 400; }
 .plan-days { font-size: 12px; color: var(--txt2, #9aa0aa); margin-top: 6px; }
 
-.sub-msg { min-height: 20px; font-size: 13px; margin: 12px 0 0; color: #5b8def; }
+.sub-msg { min-height: 20px; font-size: 13px; margin: 12px 0 0; color: var(--accent, #185FA5); }
 .sub-hint {
   margin-top: 14px;
   font-size: 12px;

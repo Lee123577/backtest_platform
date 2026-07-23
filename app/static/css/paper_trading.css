@@ -112,7 +112,7 @@ table.pt-tbl {
   color: var(--accent);
 }
 .pt-tbl tr.row-link { cursor: pointer; }
-.pt-tbl tr.row-link:hover td { background: rgba(9, 105, 218, .04); }
+.pt-tbl tr.row-link:hover td { background: rgba(24, 95, 165, .04); }
 
 /* 合计行：略加粗 + 浅底色，让用户一眼能区分 */
 .pt-tbl tfoot tr.pt-foot td {
@@ -123,7 +123,7 @@ table.pt-tbl {
 }
 
 .tag-rebal {
-  background: rgba(9, 105, 218, .1);
+  background: rgba(24, 95, 165, .1);
   color: var(--accent);
   border-radius: 4px;
   padding: 2px 8px;
@@ -243,7 +243,7 @@ table.pt-tbl {
   font-size: 13px;
   background: #fff;
 }
-.admin-list-row.is-me { background: rgba(9,105,218,.04); border-color: var(--accent); }
+.admin-list-row.is-me { background: rgba(24,95,165,.04); border-color: var(--accent); }
 .admin-list-row .ip { font-family: monospace; font-weight: 600; min-width: 130px; }
 .admin-list-row .note { flex: 1; color: var(--txt2); font-size: 12px; }
 .admin-list-row .meta { color: #8c959f; font-size: 11px; }
@@ -319,7 +319,7 @@ table.pt-tbl {
 .params-field input[type="number"]:focus {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px rgba(9, 105, 218, .15);
+  box-shadow: 0 0 0 2px rgba(24, 95, 165, .15);
 }
 .board-checkboxes {
   display: flex;
@@ -428,7 +428,7 @@ table.pt-tbl {
 }
 .scan-chip-loading { background: #f6f8fa; color: #57606a; }
 .scan-chip-success { background: #dafbe1; color: #1a7f37; }
-.scan-chip-pending { background: #ddf4ff; color: #0969da; }
+.scan-chip-pending { background: #E6F1FB; color: #185FA5; }
 .scan-chip-weekend { background: #f6f8fa; color: #57606a; }
 .scan-chip-failed  { background: #ffebe9; color: #cf222e; }
 .scan-chip-skipped { background: #fff8c5; color: #9a6700; }

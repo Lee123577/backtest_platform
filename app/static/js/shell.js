@@ -34,7 +34,8 @@
     ]},
   ];
 
-  var BRAND = "📈 量化平台";
+  var BRAND_NAME = "🕐 收盘 shoupan";
+  var BRAND_SLOGAN = "用数据验证策略，让判断有据可依";
 
   // 当前路径匹配(处理 /?mode=portfolio 与 / 的区分)
   function isActive(href) {
@@ -49,7 +50,10 @@
   function buildSidebar() {
     var aside = document.createElement("aside");
     aside.className = "spx-sidebar";
-    var html = '<a class="spx-brand" href="/dashboard">' + esc(BRAND) + "</a>" +
+    var html = '<a class="spx-brand" href="/dashboard" title="' + esc(BRAND_SLOGAN) + '">' +
+      '<span class="spx-brand-name">' + esc(BRAND_NAME) + '</span>' +
+      '<span class="spx-brand-slogan">' + esc(BRAND_SLOGAN) + '</span>' +
+      "</a>" +
       '<nav class="spx-nav">';
     NAV.forEach(function (g) {
       // adminOnly 组默认 hidden,身份确认后才 reveal(见 revealAdminNav)
