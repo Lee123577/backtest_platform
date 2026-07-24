@@ -130,6 +130,7 @@ main {
 .site-footer a:hover { text-decoration: underline; }
 .site-footer-legal { font-size: 11px; }
 .site-footer-legal a { font-weight: 400; }
+.site-footer-beian { font-size: 12px; }
 
 .panel {
   background: var(--bg);
