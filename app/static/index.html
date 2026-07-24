@@ -12,7 +12,7 @@
   <meta property="og:description" content="收盘 shoupan · 用数据验证策略，让判断有据可依 —— A股单股回测与多策略验证平台">
   <meta property="og:url" content="https://shoupan.asia/">
   <meta name="twitter:card" content="summary">
-  <link rel="stylesheet" href="/static/css/style.css?v=20260724a">
+  <link rel="stylesheet" href="/static/css/style.css?v=20260724b">
   <script src="/static/js/vendor/echarts.min.js?v=20260722a"></script>
   <link rel="stylesheet" href="/static/css/feedback.css?v=20260713">
   <link rel="stylesheet" href="/static/css/shell.css?v=20260723b">
@@ -91,6 +91,12 @@
       <div class="instances-list" id="instancesList">
         <div class="empty-hint" id="emptyHint"><span class="empty-hint-icon" aria-hidden="true">🗂️</span><span>暂无已选策略，点击上方策略卡片即可添加</span></div>
       </div>
+
+      <label class="method-check" style="margin-top:14px">
+        <input type="checkbox" id="robustnessCheck">
+        <span>运行防过拟合检查 <em>（参数敏感性 + 样本内/外拆分）</em></span>
+        <small>把每个参数各自 ±20% 扰动重跑，观察结果跳动幅度；并把回测区间切成前 70% / 后 30% 独立验证。跳动越大、样本外表现掉得越多，说明结果越可能是"调"出来的偶然，而非真实规律。会多跑几组回测，速度稍慢。</small>
+      </label>
 
       <div id="settingsError"></div>
       <button class="btn btn-accent btn-run" id="runBtn" disabled>开始单股回测</button>
@@ -193,6 +199,10 @@
     <div class="chart-wrap-sm" id="equityChart"></div>
     <div class="section-title">逐年收益拆解</div>
     <div id="yearlyWrap"></div>
+    <div id="robustnessSection" style="display:none">
+      <div class="section-title">防过拟合检查</div>
+      <div id="robustnessWrap"></div>
+    </div>
     <div class="section-title">交易记录</div>
     <div id="tradesWrap"></div>
   </div>
@@ -221,7 +231,7 @@
   <div class="site-footer-legal"><a href="/legal">隐私政策</a> · <a href="/legal#terms">用户协议</a></div>
 </footer>
 
-<script src="/static/js/app.js?v=20260724a"></script>
+<script src="/static/js/app.js?v=20260724b"></script>
 <script src="/static/js/feedback.js?v=20260713"></script>
 <script src="/static/js/util.js?v=20260721e"></script>
 <script src="/static/js/auth.js?v=20260721e"></script>

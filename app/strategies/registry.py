@@ -59,6 +59,12 @@ def get_strategy(strategy_id: str, params: Optional[dict] = None) -> BaseStrateg
     return STRATEGY_REGISTRY[strategy_id](params=params or {})
 
 
+def get_strategy_class(strategy_id: str) -> Type[BaseStrategy]:
+    if strategy_id not in STRATEGY_REGISTRY:
+        raise ValueError(f"未知策略ID: {strategy_id}，可用: {list(STRATEGY_REGISTRY)}")
+    return STRATEGY_REGISTRY[strategy_id]
+
+
 def get_portfolio_strategy(
     strategy_id: str, params: Optional[dict] = None
 ) -> PortfolioBaseStrategy:

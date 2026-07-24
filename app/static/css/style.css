@@ -565,6 +565,13 @@ table.holdings-tbl { width: 100%; border-collapse: collapse; font-size: 12px; mi
 .trades-tbl td.code-cell { font-family: monospace; color: var(--accent); }
 .no-data { color: var(--txt2); font-size: 13px; padding: 20px; text-align: center; }
 
+/* ── Robustness check ── */
+.robustness-block { margin-bottom: 18px; }
+.robustness-block:last-child { margin-bottom: 0; }
+.robustness-strategy-name { font-size: 13px; font-weight: 700; color: var(--txt); margin-bottom: 8px; }
+.robustness-subtitle { font-size: 12px; font-weight: 600; color: var(--txt2); margin: 10px 0 6px; }
+.oos-hint { font-size: 11.5px; color: var(--txt2); margin-bottom: 6px; }
+
 /* ── 选股策略：策略说明 + 回测口径(2026 优化) ───────────────────────────── */
 .strategy-detail-box {
   margin: 12px 0 4px;

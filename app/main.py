@@ -1,5 +1,7 @@
 import asyncio
 import json
+import threading
+import time
 from datetime import date as _date
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -11,6 +13,8 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel
 from starlette.requests import Request
+
+from .config import settings
 
 
 _MAX_RANGE_DAYS = 15 * 366  # 15 年(含闰年余量),防 DoS:全市场×长跨度抓崩后端
@@ -45,6 +49,7 @@ from .data.market_data import (
 from .data.realtime import get_realtime_prices
 from .engine.backtest import calc_benchmark, run_backtest
 from .engine.portfolio_backtest import run_portfolio_backtest
+from .engine.robustness import compute_oos_split, compute_param_sensitivity
 from .paper_trading import admin_ip as paper_admin_ip
 from .paper_trading import db as paper_db
 from .scheduler import db as scheduler_db
@@ -53,6 +58,7 @@ from .scheduler import runner as scheduler_runner
 from .strategies.registry import (
     get_portfolio_strategy,
     get_strategy,
+    get_strategy_class,
     list_strategies,
 )
 
@@ -62,10 +68,102 @@ app = FastAPI(title="A股量化回测平台", version="1.2.0")
 from .visit_log import VisitLogMiddleware  # noqa: E402
 app.add_middleware(VisitLogMiddleware)
 
+# 安全辅助:取真实客户端 IP、判定可信反代
+from .visit_log import _client_ip, _is_from_trusted_proxy  # noqa: E402
+
 # GZip —— K线/回测等大 JSON 可压到 ~1/5,移动端收益最明显。
 # starlette 内置排除 text/event-stream,portfolio_backtest 的 SSE 不受影响;
 # level=6 而非默认 9:小内存生产机上压缩比接近但 CPU 省一半
 app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
+
+
+# ── 安全响应头(防御性,不影响 SSE/业务)──────────────────────────────────────
+class SecurityHeadersMiddleware:
+    _SEC_HEADERS = {
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
+        "Referrer-Policy": "strict-origin-when-cross-origin",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=()",
+        "Content-Security-Policy": (
+            "default-src 'self'; "
+            "img-src 'self' data: https:; "
+            "style-src 'self' 'unsafe-inline'; "
+            "script-src 'self' 'unsafe-inline'; "
+            "connect-src 'self'; "
+            "frame-ancestors 'none'; "
+            "base-uri 'self'; "
+            "form-action 'self'"
+        ),
+    }
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_wrapper(message):
+            if message["type"] == "http.response.start":
+                existing = {k.decode().lower(): k for k, _ in message.get("headers", [])}
+                new_headers = list(message.get("headers", []))
+                for h, v in self._SEC_HEADERS.items():
+                    if h.lower() not in existing:
+                        new_headers.append((h.encode(), v.encode()))
+                if _is_https_request(scope) and "strict-transport-security" not in existing:
+                    new_headers.append(
+                        (b"strict-transport-security",
+                         b"max-age=31536000; includeSubDomains")
+                    )
+                message["headers"] = new_headers
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)
+
+
+def _is_https_request(scope) -> bool:
+    """请求经 https 才下发 HSTS:直连 https,或受信反代下 X-Forwarded-Proto=https。"""
+    if scope.get("scheme") == "https":
+        return True
+    headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
+    peer = scope.get("client")
+    peer_ip = peer[0] if peer else None
+    if peer_ip and _is_from_trusted_proxy(peer_ip):
+        return headers.get("x-forwarded-proto", "").lower() == "https"
+    return False
+
+
+def _safe_detail(msg: str, exc: Exception | None = None) -> str:
+    """对外错误信息:默认不泄露内部异常细节,DEBUG=1 才带原始错误(仅本地排障)。"""
+    if settings.DEBUG and exc is not None:
+        return f"{msg}：{exc}"
+    return msg
+
+
+# ── 轻量速率限制(防重型计算接口被滥用/DoS)──────────────────────────────────
+_BACKTEST_HITS: dict = {}
+_BACKTEST_LIMIT = 6        # 每窗口最多请求数
+_BACKTEST_WINDOW = 60.0    # 秒
+_BACKTEST_LOCK = threading.Lock()
+
+
+def _rate_limit_backtest(request: Request) -> None:
+    ip = _client_ip(request)
+    now = time.time()
+    with _BACKTEST_LOCK:
+        hits = _BACKTEST_HITS.setdefault(ip, [])
+        while hits and now - hits[0] > _BACKTEST_WINDOW:
+            hits.pop(0)
+        if len(hits) >= _BACKTEST_LIMIT:
+            raise HTTPException(
+                429,
+                detail="请求过于频繁,请稍后再试(回测接口每分钟最多 %d 次)" % _BACKTEST_LIMIT,
+            )
+        hits.append(now)
+
+
+app.add_middleware(SecurityHeadersMiddleware)
 
 # 今日数据入库状态 API
 from .data_status.api import router as data_status_router  # noqa: E402
@@ -766,7 +864,10 @@ async def api_list_strategies(response: Response):
 
 @app.get("/api/stock/{code}/info")
 def api_stock_info(code: str):
-    code = normalize_code(code)
+    try:
+        code = normalize_code(code)
+    except ValueError as e:
+        raise HTTPException(400, _safe_detail("股票代码格式不合法", e))
     name = get_stock_name(code)
     return {"code": code, "name": name}
 
@@ -775,11 +876,14 @@ def api_stock_info(code: str):
 def api_kline(response: Response, code: str, start_date: str,
               end_date: str, adjust: str = "qfq"):
     _validate_date_range(start_date, end_date)
-    code = normalize_code(code)
+    try:
+        code = normalize_code(code)
+    except ValueError as e:
+        raise HTTPException(400, _safe_detail("股票代码格式不合法", e))
     try:
         df = get_kline_data(code, start_date, end_date, adjust)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=_safe_detail("获取行情数据失败，请检查股票代码与日期范围", e))
 
     # 纯历史区间允许浏览器缓存 1 小时:同一股票反复调参回测时省掉重复请求。
     # 不敢给更长 —— qfq 在除权日会整体重算,历史值并非严格不可变;
@@ -847,22 +951,29 @@ class BacktestRequest(BaseModel):
     slippage_rate: float = 0.0001
     stop_loss: Optional[float] = None    # e.g. 0.05 for 5% stop-loss
     take_profit: Optional[float] = None  # e.g. 0.20 for 20% take-profit
+    # 防过拟合检查(参数敏感性 + 样本内/外拆分)——默认关,勾选才多跑几组回测
+    robustness_check: bool = False
 
 
 @app.post("/api/backtest")
-def api_backtest(req: BacktestRequest):
+def api_backtest(req: BacktestRequest,
+                 request: Request,
+                 _rl: None = Depends(_rate_limit_backtest)):
     # 普通 def:数据加载(DB/akshare) + 回测计算都是同步重活,
     # 让 FastAPI 丢 anyio 线程池,不阻塞事件循环
     _validate_date_range(req.start_date, req.end_date)
     if req.initial_capital <= 0:
         raise HTTPException(400, "初始资金必须大于 0")
 
-    code = normalize_code(req.stock_code)
+    try:
+        code = normalize_code(req.stock_code)
+    except ValueError as e:
+        raise HTTPException(400, _safe_detail("股票代码格式不合法", e))
 
     try:
         df = get_kline_data(code, req.start_date, req.end_date, req.adjust)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"获取行情数据失败：{e}")
+        raise HTTPException(status_code=400, detail=_safe_detail("获取行情数据失败，请检查股票代码与日期范围", e))
 
     if df.empty:
         raise HTTPException(status_code=400, detail="数据为空，请检查股票代码和日期范围")
@@ -884,24 +995,35 @@ def api_backtest(req: BacktestRequest):
                 f"建议把初始资金调到 ¥{recommended:,} 以上再回测。"
             )
 
+    bt_kwargs = dict(
+        slippage_rate=req.slippage_rate,
+        stop_loss=req.stop_loss,
+        take_profit=req.take_profit,
+    )
+
     results = []
     for cfg in req.strategies:
         try:
             strategy = get_strategy(cfg.strategy_id, cfg.params)
-            result = run_backtest(
-                df, strategy, req.initial_capital,
-                slippage_rate=req.slippage_rate,
-                stop_loss=req.stop_loss,
-                take_profit=req.take_profit,
-            )
+            result = run_backtest(df, strategy, req.initial_capital, **bt_kwargs)
             result["strategy_id"] = cfg.strategy_id
             result["strategy_name"] = cfg.label or strategy.name
+
+            if req.robustness_check:
+                strategy_cls = get_strategy_class(cfg.strategy_id)
+                result["sensitivity"] = compute_param_sensitivity(
+                    df, strategy_cls, strategy.params, req.initial_capital, **bt_kwargs
+                )
+                result["oos_split"] = compute_oos_split(
+                    df, strategy, req.initial_capital, **bt_kwargs
+                )
+
             results.append(result)
         except Exception as e:
             results.append({
                 "strategy_id": cfg.strategy_id,
                 "strategy_name": cfg.label or cfg.strategy_id,
-                "error": str(e),
+                "error": _safe_detail("回测执行出错，请检查参数后重试", e),
             })
 
     benchmark = calc_benchmark(df, req.initial_capital, slippage_rate=req.slippage_rate)
@@ -957,7 +1079,11 @@ class PortfolioBacktestRequest(BaseModel):
 
 
 @app.post("/api/portfolio_backtest")
-async def api_portfolio_backtest(req: PortfolioBacktestRequest):
+async def api_portfolio_backtest(
+    req: PortfolioBacktestRequest,
+    request: Request,
+    _rl: None = Depends(_rate_limit_backtest),
+):
     """
     Streams SSE progress events then a final result event.
     Event format:  data: <json>\n\n
@@ -1010,7 +1136,7 @@ async def api_portfolio_backtest(req: PortfolioBacktestRequest):
                     None, lambda: get_universe_stocks(cap_min, cap_max)
                 )
         except Exception as e:
-            yield _sse({"type": "error", "msg": f"获取股票池失败：{e}"})
+            yield _sse({"type": "error", "msg": _safe_detail("获取股票池失败，请稍后重试", e)})
             return
 
         if universe_df.empty:
@@ -1037,7 +1163,7 @@ async def api_portfolio_backtest(req: PortfolioBacktestRequest):
             )
         except Exception as e:
             # 加载异常也要回一条 error,前端不会无限转圈(SSE 挂死防护)
-            yield _sse({"type": "error", "msg": f"加载历史行情失败：{e}"})
+            yield _sse({"type": "error", "msg": _safe_detail("加载历史行情失败，请稍后重试", e)})
             return
 
         if not price_data:
@@ -1068,7 +1194,7 @@ async def api_portfolio_backtest(req: PortfolioBacktestRequest):
                 ),
             )
         except Exception as e:
-            yield _sse({"type": "error", "msg": f"回测执行失败：{e}"})
+            yield _sse({"type": "error", "msg": _safe_detail("回测执行失败，请稍后重试", e)})
             return
 
         # ── Step 4: 基准指数(按策略选默认,前端可 benchmark_code 覆盖)────

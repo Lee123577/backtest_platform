@@ -1,4 +1,5 @@
 import logging
+import re
 import threading
 from contextlib import contextmanager
 
@@ -208,6 +209,9 @@ def _query_kline_from_db(
         return None
 
 
+_CODE_RE = re.compile(r"^\d{6}$")
+
+
 def normalize_code(code: str) -> str:
     code = code.strip().upper()
     for prefix in ["SH", "SZ", "BJ"]:
@@ -215,7 +219,10 @@ def normalize_code(code: str) -> str:
             code = code[len(prefix):]
     if "." in code:
         code = code.split(".")[0]
-    return code.zfill(6)
+    code = code.zfill(6)
+    if not _CODE_RE.match(code):
+        raise ValueError(f"非法股票代码: {code!r}")
+    return code
 
 
 def get_stock_name(code: str) -> str:

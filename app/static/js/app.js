@@ -353,11 +353,12 @@ async function runBacktest() {
     slippage_rate: slippagePct / 100,
     stop_loss: stopLossPct > 0 ? stopLossPct / 100 : null,
     take_profit: takeProfitPct > 0 ? takeProfitPct / 100 : null,
+    robustness_check: document.getElementById('robustnessCheck').checked,
   };
 
   const runBtn = document.getElementById('runBtn');
   runBtn.disabled = true;
-  showLoading('正在回测，请稍候…');
+  showLoading(payload.robustness_check ? '正在回测并跑防过拟合检查，稍候…' : '正在回测，请稍候…');
 
   try {
     const res = await fetch('/api/backtest', {
@@ -580,6 +581,7 @@ function renderResults(results, benchmark, subtitle, isPortfolio = false) {
   renderMetrics(results, benchmark);
   renderEquityChart(results, benchmark);
   renderYearlyBreakdown(results, benchmark);
+  renderRobustness(results);
   renderTrades(results, isPortfolio);
 }
 
@@ -737,6 +739,88 @@ function renderYearlyBreakdown(results, benchmark) {
   });
 
   html += '</tbody></table></div>';
+  wrap.innerHTML = html;
+}
+
+// ── Robustness check (parameter sensitivity + in/out-of-sample split) ──────────
+function round1(n) { return Math.round(n * 10) / 10; }
+
+const OOS_METRIC_DEFS = [
+  { key: 'total_return',  label: '总收益率',   unit: '%' },
+  { key: 'annual_return', label: '年化收益率', unit: '%' },
+  { key: 'max_drawdown',  label: '最大回撤',   unit: '%' },
+  { key: 'sharpe_ratio',  label: '夏普比率',   unit: '' },
+];
+
+function renderRobustness(results) {
+  const section = document.getElementById('robustnessSection');
+  const wrap = document.getElementById('robustnessWrap');
+  const withRobustness = results.filter(r => !r.error && r.sensitivity);
+
+  if (!withRobustness.length) { section.style.display = 'none'; wrap.innerHTML = ''; return; }
+  section.style.display = '';
+
+  let html = '';
+  withRobustness.forEach(r => {
+    html += `<div class="robustness-block">`;
+    html += `<div class="robustness-strategy-name">${escHtml(r.strategy_name)}</div>`;
+
+    if (r.sensitivity.length) {
+      const baseAnnual = r.metrics?.annual_return;
+      html += '<div class="robustness-subtitle">参数敏感性（单参数 ±20% 扰动，其余不变）</div>';
+      html += '<div class="metrics-scroll"><table class="metrics-tbl"><thead><tr>' +
+        '<th style="text-align:left">参数</th><th>基准值</th><th>基准年化</th>' +
+        '<th>扰动值</th><th>扰动后年化</th><th>变化</th></tr></thead><tbody>';
+      r.sensitivity.forEach(row => {
+        const n = row.variants.length || 1;
+        row.variants.forEach((v, vi) => {
+          html += '<tr>';
+          if (vi === 0) {
+            html += `<td class="row-label" rowspan="${n}">${escHtml(row.param_label)}</td>`;
+            html += `<td rowspan="${n}">${row.base_value}</td>`;
+            html += `<td rowspan="${n}">${baseAnnual != null ? baseAnnual + '%' : '—'}</td>`;
+          }
+          if (v.error) {
+            html += `<td>${v.value}</td><td colspan="2" class="val-neg">运行失败</td>`;
+          } else {
+            const delta = (baseAnnual != null && v.annual_return != null)
+              ? round1(v.annual_return - baseAnnual) : null;
+            const cls = delta == null ? 'val-neutral'
+              : Math.abs(delta) > 10 ? 'val-neg' : Math.abs(delta) > 5 ? 'val-warn' : 'val-pos';
+            html += `<td>${v.value}</td><td>${v.annual_return != null ? v.annual_return + '%' : '—'}</td>`;
+            html += `<td class="${cls}">${delta != null ? (delta > 0 ? '+' : '') + delta + 'pp' : '—'}</td>`;
+          }
+          html += '</tr>';
+        });
+      });
+      html += '</tbody></table></div>';
+    }
+
+    if (r.oos_split) {
+      const { in_sample, out_of_sample } = r.oos_split;
+      html += '<div class="robustness-subtitle">样本内 / 样本外拆分</div>';
+      html += `<div class="oos-hint">样本内 ${in_sample.date_range[0]} ~ ${in_sample.date_range[1]}` +
+        ` ・ 样本外 ${out_of_sample.date_range[0]} ~ ${out_of_sample.date_range[1]}` +
+        `（两段各自从初始资金独立起跑，收益率可直接对比）</div>`;
+      html += '<div class="metrics-scroll"><table class="metrics-tbl"><thead><tr>' +
+        '<th style="text-align:left">指标</th><th>样本内</th><th>样本外</th></tr></thead><tbody>';
+      OOS_METRIC_DEFS.forEach(def => {
+        html += `<tr><td class="row-label">${def.label}</td>`;
+        [in_sample.metrics[def.key], out_of_sample.metrics[def.key]].forEach(val => {
+          if (val === null || val === undefined) { html += '<td class="val-neutral">—</td>'; return; }
+          const cls = val > 0 ? 'val-pos' : val < 0 ? 'val-neg' : 'val-neutral';
+          html += `<td class="${cls}">${val}${def.unit}</td>`;
+        });
+        html += '</tr>';
+      });
+      html += '</tbody></table></div>';
+    } else {
+      html += '<div class="no-data">回测跨度不足（建议半年以上），无法拆分样本内/外验证</div>';
+    }
+
+    html += '</div>';
+  });
+
   wrap.innerHTML = html;
 }
 

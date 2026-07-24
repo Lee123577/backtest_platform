@@ -14,7 +14,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel
 
-from ..visit_log import _client_ip
+from ..visit_log import _client_ip, _is_from_trusted_proxy
 from . import service
 from .deps import get_current_user
 from .sms import SmsError
@@ -43,7 +43,10 @@ def _cookie_secure(request: Request) -> bool:
     本地 http 调试时不置 Secure，否则浏览器不回传 cookie 无法测。"""
     if request.url.scheme == "https":
         return True
-    return request.headers.get("x-forwarded-proto", "").lower() == "https"
+    peer = request.client.host if request.client else None
+    if peer and _is_from_trusted_proxy(peer):
+        return request.headers.get("x-forwarded-proto", "").lower() == "https"
+    return False
 
 
 @router.post("/send_code")

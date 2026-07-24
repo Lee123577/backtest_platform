@@ -30,7 +30,7 @@ from fastapi import HTTPException
 from starlette.requests import Request
 
 from ..data.data_loader import _get_pool
-from ..visit_log import _client_ip
+from ..visit_log import _client_ip, _is_private_ip
 
 logger = logging.getLogger(__name__)
 
@@ -295,16 +295,26 @@ def require_admin_ip(request: Request) -> str:
             if not _first_run_checked:
                 _first_run_checked = True
                 if count_ips() == 0:
-                    try:
-                        add_ip(ip, "first-run bootstrap", "system")
-                        logger.warning(
-                            "⚠ First-run bootstrap：IP %s 已自动加入白名单。"
-                            "如部署在公网，请尽快通过 UI 或 SQL 检查并清理意外的 IP。",
-                            ip,
-                        )
-                        return ip
-                    except Exception as e:
-                        logger.error("First-run bootstrap 失败：%s", e)
+                    # 安全加固：仅在来自内网/本机的首个写请求上自动自举，
+                    # 公网首个访问者无法借此成为管理员。反代部署必须配置
+                    # TRUSTED_PROXIES，否则直连 IP 为代理地址，需由内网访问初始化。
+                    if _is_private_ip(ip):
+                        try:
+                            add_ip(ip, "first-run bootstrap", "system")
+                            logger.warning(
+                                "⚠ First-run bootstrap：内网 IP %s 已自动加入白名单。"
+                                "如非预期，请通过 UI 或 SQL 清理。",
+                                ip,
+                            )
+                            return ip
+                        except Exception as e:
+                            logger.error("First-run bootstrap 失败：%s", e)
+                    raise HTTPException(
+                        403,
+                        detail="管理白名单为空且未配置 PAPER_ADMIN_INITIAL_IPS。"
+                               "请从内网/本机访问完成初始化，或在 .env 设置"
+                               " PAPER_ADMIN_INITIAL_IPS 后再试。",
+                    )
 
     if not is_admin(ip):
         raise HTTPException(

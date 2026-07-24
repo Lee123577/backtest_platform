@@ -1,0 +1,57 @@
+# 安全扫描流水线 — 任何 PR 合并前必须通过这些检查
+# 适配 GitHub Actions；GitLab/Buddy 可平移为对应 CI 配置。
+name: Security Scan
+
+on:
+  pull_request:
+    branches: [main, master]
+  push:
+    branches: [main, master]
+  schedule:
+    - cron: "17 4 * * 1"   # 每周一凌晨跑一次，捕捉新出现的依赖漏洞
+
+jobs:
+  sast:
+    name: Static Analysis (Semgrep)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Run Semgrep
+        uses: semgrep/semgrep-action@v1
+        with:
+          config: >-
+            p/owasp-top-ten
+            p/cwe-top-25
+            p/python
+          # 仅扫描应用代码，忽略测试与第三方
+          options: "--exclude tests/ --exclude '**/vendor/**'"
+
+  dependency-scan:
+    name: Dependency & Image Scan (Trivy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Trivy filesystem scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: "fs"
+          scan-ref: "."
+          severity: "CRITICAL,HIGH"
+          exit-code: "1"
+          ignore-unfixed: true
+
+  secrets-scan:
+    name: Secrets Detection (Gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 允许扫描到历史提交，防止历史密钥泄露
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "true"
