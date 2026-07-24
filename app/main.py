@@ -181,6 +181,54 @@ async def page_my_board():
     return FileResponse(str(STATIC_DIR / "my_board.html"))
 
 
+@app.get("/legal", include_in_schema=False)
+async def page_legal():
+    return FileResponse(str(STATIC_DIR / "legal.html"))
+
+
+_SITE_ORIGIN = "https://shoupan.asia"
+
+# (路径, 更新频率, 优先级) —— 仅收录面向用户的功能页；/admin/tasks、/tasks 是运维监控页不收录
+_SITEMAP_PAGES = [
+    ("/", "daily", "1.0"),
+    ("/paper_trading", "daily", "0.8"),
+    ("/cloudmap", "daily", "0.7"),
+    ("/ai_hotsector", "daily", "0.7"),
+    ("/daily_review", "daily", "0.7"),
+    ("/watchlist", "daily", "0.6"),
+    ("/my_board", "weekly", "0.5"),
+    ("/subscribe", "weekly", "0.5"),
+]
+
+
+@app.get("/robots.txt", include_in_schema=False)
+async def robots_txt():
+    body = (
+        "User-agent: *\n"
+        "Allow: /\n"
+        "Disallow: /admin/\n"
+        "Disallow: /api/\n"
+        f"Sitemap: {_SITE_ORIGIN}/sitemap.xml\n"
+    )
+    return Response(body, media_type="text/plain")
+
+
+@app.get("/sitemap.xml", include_in_schema=False)
+async def sitemap_xml():
+    urls = "".join(
+        f"  <url><loc>{_SITE_ORIGIN}{path}</loc>"
+        f"<changefreq>{freq}</changefreq><priority>{prio}</priority></url>\n"
+        for path, freq, prio in _SITEMAP_PAGES
+    )
+    body = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+        f"{urls}"
+        "</urlset>\n"
+    )
+    return Response(body, media_type="application/xml")
+
+
 # ── Paper trading (实盘信号观察) ──────────────────────────────────────────────
 
 from .json_safe import json_safe as _json_safe  # noqa: E402
