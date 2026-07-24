@@ -18,7 +18,7 @@ Sharpe / Sortino / Calmar / 最大回撤 / 年化 等"从净值序列算出来"�
 """
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import numpy as np
 import pandas as pd
@@ -98,3 +98,42 @@ def compute_risk_metrics(
         "calmar_ratio": round(calmar, 3) if calmar is not None else None,
         "final_value": round(float(equity.iloc[-1]), 2),
     }
+
+
+def compute_yearly_returns(
+    equity_curve: List[Dict[str, Any]],
+    initial_capital: float,
+) -> List[Dict[str, Any]]:
+    """按自然年拆分净值曲线,算每年收益率。
+
+    单看总收益/年化会被单个大涨年掩盖亏损年(例:全局年化 58%,但某年实际
+    亏 26%,是大涨年填的坑)。equity_curve 里每条 {"date","value"} 按年分组,
+    每年的起始净值取"上一年末的净值"(第一年取 initial_capital)。
+    """
+    if not equity_curve:
+        return []
+
+    def _row(year: str, start_value: float, end_value: float) -> Dict[str, Any]:
+        return {
+            "year": year,
+            "start_value": round(start_value, 2),
+            "end_value": round(end_value, 2),
+            "return_pct": (
+                round((end_value - start_value) / start_value * 100, 2)
+                if start_value else None
+            ),
+        }
+
+    result: List[Dict[str, Any]] = []
+    year = equity_curve[0]["date"][:4]
+    year_start = initial_capital
+    prev_value = initial_capital
+    for pt in equity_curve:
+        y = pt["date"][:4]
+        if y != year:
+            result.append(_row(year, year_start, prev_value))
+            year = y
+            year_start = prev_value
+        prev_value = pt["value"]
+    result.append(_row(year, year_start, prev_value))
+    return result

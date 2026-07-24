@@ -579,6 +579,7 @@ function renderResults(results, benchmark, subtitle, isPortfolio = false) {
   document.getElementById('resultSubtitle').textContent = subtitle;
   renderMetrics(results, benchmark);
   renderEquityChart(results, benchmark);
+  renderYearlyBreakdown(results, benchmark);
   renderTrades(results, isPortfolio);
 }
 
@@ -702,6 +703,43 @@ function renderEquityChart(results, benchmark) {
   }, true);
 }
 
+// ── Yearly return breakdown ─────────────────────────────────────────────────────
+function renderYearlyBreakdown(results, benchmark) {
+  const wrap = document.getElementById('yearlyWrap');
+  const cols = [
+    ...(benchmark?.yearly_returns?.length ? [{ ...benchmark, isBm: true }] : []),
+    ...results.filter(r => !r.error && r.yearly_returns?.length),
+  ];
+
+  if (!cols.length) { wrap.innerHTML = '<div class="no-data">暂无逐年数据</div>'; return; }
+
+  const years = [...new Set(cols.flatMap(c => c.yearly_returns.map(y => y.year)))].sort();
+  if (years.length < 2) {
+    wrap.innerHTML = '<div class="no-data">回测跨度不足两个自然年，无需逐年拆解</div>';
+    return;
+  }
+
+  let html = '<div class="metrics-scroll"><table class="metrics-tbl"><thead><tr>';
+  html += '<th style="text-align:left">年份</th>';
+  cols.forEach(c => { html += `<th class="${c.isBm ? 'bm-col' : ''}">${escHtml(c.strategy_name)}</th>`; });
+  html += '</tr></thead><tbody>';
+
+  years.forEach(y => {
+    html += `<tr><td class="row-label">${y}</td>`;
+    cols.forEach(c => {
+      const row = c.yearly_returns.find(yr => yr.year === y);
+      const val = row?.return_pct;
+      if (val === null || val === undefined) { html += '<td class="val-neutral">—</td>'; return; }
+      const cls = val > 0 ? 'val-pos' : val < 0 ? 'val-neg' : 'val-neutral';
+      html += `<td class="${cls}">${val > 0 ? '+' : ''}${val}%</td>`;
+    });
+    html += '</tr>';
+  });
+
+  html += '</tbody></table></div>';
+  wrap.innerHTML = html;
+}
+
 // ── Trade history ─────────────────────────────────────────────────────────────
 function renderTrades(results, isPortfolio) {
   const wrap = document.getElementById('tradesWrap');
@@ -721,8 +759,11 @@ function renderTrades(results, isPortfolio) {
     tabs += `<button class="tab-btn${i === 0 ? ' active' : ''}" onclick="switchTab(${i}, this)">
       ${escHtml(r.strategy_name)}</button>`;
 
+    const buyCount = r.trades.filter(t => t.type === '买入').length;
+    const sellCount = r.trades.length - buyCount;
+
     const rows = r.trades.map(t => `
-      <tr class="${t.type === '买入' ? 'buy-row' : 'sell-row'}">
+      <tr class="${t.type === '买入' ? 'buy-row' : 'sell-row'}" data-ttype="${t.type === '买入' ? 'buy' : 'sell'}" data-code="${t.code || ''}">
         <td>${t.date}</td>
         ${showCode ? `<td class="code-cell">${t.code || ''}</td>` : ''}
         <td><span class="${t.type === '买入' ? 'badge-buy' : 'badge-sell'}">${t.type}</span></td>
@@ -736,8 +777,16 @@ function renderTrades(results, isPortfolio) {
 
     panels += `
       <div class="trade-panel${i === 0 ? ' active' : ''}" id="tp-${i}">
+        <div class="trades-toolbar">
+          <div class="trades-filter" role="group">
+            <button class="tf-btn active" onclick="filterTrades(${i}, 'all', this)">全部 ${r.trades.length}</button>
+            <button class="tf-btn" onclick="filterTrades(${i}, 'buy', this)">买入 ${buyCount}</button>
+            <button class="tf-btn" onclick="filterTrades(${i}, 'sell', this)">卖出 ${sellCount}</button>
+          </div>
+          ${showCode ? `<input class="trades-code-filter" placeholder="按代码筛选" oninput="filterTradesByCode(${i}, this.value)">` : ''}
+        </div>
         <div class="trades-scroll">
-          <table class="trades-tbl">
+          <table class="trades-tbl" id="tt-${i}">
             <thead><tr>
               <th>日期</th>
               ${showCode ? '<th>代码</th>' : ''}
@@ -757,6 +806,29 @@ function renderTrades(results, isPortfolio) {
 function switchTab(idx, btn) {
   document.querySelectorAll('.trade-panel').forEach((el, i) => el.classList.toggle('active', i === idx));
   document.querySelectorAll('.tab-btn').forEach((el, i) => el.classList.toggle('active', i === idx));
+}
+
+function filterTrades(idx, type, btn) {
+  const table = document.getElementById(`tt-${idx}`);
+  table.dataset.typeFilter = type;
+  btn.parentElement.querySelectorAll('.tf-btn').forEach(b => b.classList.toggle('active', b === btn));
+  _applyTradeFilters(table);
+}
+
+function filterTradesByCode(idx, code) {
+  const table = document.getElementById(`tt-${idx}`);
+  table.dataset.codeFilter = code.trim().toLowerCase();
+  _applyTradeFilters(table);
+}
+
+function _applyTradeFilters(table) {
+  const type = table.dataset.typeFilter || 'all';
+  const code = table.dataset.codeFilter || '';
+  table.querySelectorAll('tbody tr').forEach(tr => {
+    const typeOk = type === 'all' || tr.dataset.ttype === type;
+    const codeOk = !code || (tr.dataset.code || '').toLowerCase().includes(code);
+    tr.style.display = (typeOk && codeOk) ? '' : 'none';
+  });
 }
 
 // ── Holdings log (portfolio mode only) ───────────────────────────────────────

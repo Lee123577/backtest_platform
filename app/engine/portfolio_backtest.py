@@ -28,7 +28,7 @@ from ..data.filters import board_of
 from ..data.universe import load_listing_dates
 from ..strategies.portfolio_base import PortfolioBaseStrategy
 from .fees import COMMISSION_RATE, MIN_COMMISSION, SLIPPAGE_RATE, STAMP_TAX_RATE
-from .metrics import compute_risk_metrics
+from .metrics import compute_risk_metrics, compute_yearly_returns
 from .money import D, ONE, ZERO, round_cent, to_float_cent
 
 logger = logging.getLogger(__name__)
@@ -433,6 +433,7 @@ def run_portfolio_backtest(
         "strategy_name": strategy.name,
         "metrics": metrics,
         "equity_curve": equity_curve,
+        "yearly_returns": compute_yearly_returns(equity_curve, initial_capital),
         "trades": trades,
         "holdings_log": holdings_log,
     }

@@ -5,7 +5,7 @@ import pandas as pd
 
 from ..strategies.base import BaseStrategy
 from .fees import COMMISSION_RATE, MIN_COMMISSION, SLIPPAGE_RATE, STAMP_TAX_RATE
-from .metrics import compute_risk_metrics
+from .metrics import compute_risk_metrics, compute_yearly_returns
 from .money import D, ONE, ZERO, round_cent, to_float_cent
 
 
@@ -178,6 +178,7 @@ def run_backtest(
     return {
         "metrics": _calc_metrics(equity, initial_capital, trades),
         "equity_curve": equity_curve,
+        "yearly_returns": compute_yearly_returns(equity_curve, initial_capital),
         "trades": trades,
     }
 
@@ -230,5 +231,6 @@ def calc_benchmark(
         "strategy_name": "买入持有（基准）",
         "metrics": {**risk, "win_rate": None, "final_value": round(final_capital_f, 2)},
         "equity_curve": equity_curve,
+        "yearly_returns": compute_yearly_returns(equity_curve, initial_capital),
         "trades": [],
     }

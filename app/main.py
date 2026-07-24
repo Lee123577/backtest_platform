@@ -1122,7 +1122,7 @@ def _build_index_benchmark(
     ]
 
     # 风险指标走共用实现(engine/metrics.py);基准是买入持有,无 win_rate
-    from .engine.metrics import compute_risk_metrics
+    from .engine.metrics import compute_risk_metrics, compute_yearly_returns
     vals = [e["value"] for e in equity_curve]
     metrics = compute_risk_metrics(pd.Series(vals), initial_capital)
     metrics["win_rate"] = None
@@ -1133,5 +1133,6 @@ def _build_index_benchmark(
         "strategy_name": name,
         "metrics": metrics,
         "equity_curve": equity_curve,
+        "yearly_returns": compute_yearly_returns(equity_curve, initial_capital),
         "trades": [],
     }
