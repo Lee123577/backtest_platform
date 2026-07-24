@@ -25,6 +25,7 @@ from typing import Any, Dict, List, Optional
 from ..data import calendar
 from ..data.data_loader import normalize_code
 from ..engine.fees import COMMISSION_RATE, MIN_COMMISSION, STAMP_TAX_RATE
+from ..sectors.fetcher import fetch_concept, fetch_industry
 from . import db
 from .deepseek_client import DeepSeekError, chat_json
 from .prompts import (
@@ -68,6 +69,31 @@ def _round_trip_cost_rate(position_value: float) -> float:
     return (buy_comm + sell_comm + stamp) / position_value
 
 
+BOARD_SNAPSHOT_TOP_N = 20
+
+
+def _fetch_board_snapshot(top_n: int = BOARD_SNAPSHOT_TOP_N) -> List[Dict[str, Any]]:
+    """今日概念+行业板块真实涨跌幅快照，按涨幅降序取前 top_n，喂给选板块的
+    prompt 打真实底数据(见 prompts.py v3 说明)。两个接口都是新浪实时行情，
+    收盘后立即可取，不依赖 daily_update 的当日 K 线入库(那个要等晚些)。
+    """
+    rows = fetch_concept() + fetch_industry()
+    ranked = sorted(
+        (r for r in rows if r.get("pct_change") is not None),
+        key=lambda r: r["pct_change"], reverse=True,
+    )
+    seen: set = set()
+    out: List[Dict[str, Any]] = []
+    for r in ranked:
+        if r["name"] in seen:
+            continue
+        seen.add(r["name"])
+        out.append(r)
+        if len(out) >= top_n:
+            break
+    return out
+
+
 @dataclass
 class PredictResult:
     pick_date: _Date
@@ -105,15 +131,26 @@ async def predict_once(pick_date: Optional[_Date] = None) -> PredictResult:
         logger.warning(msg)
         return PredictResult(pick_date=pick_date, status="skipped", error_msg=msg)
 
+    board_snapshot = _fetch_board_snapshot()
+    if not board_snapshot:
+        msg = "板块涨跌幅快照获取失败(新浪接口无数据)，无法基于真实行情选板块"
+        logger.error("[%s] %s", pick_date, msg)
+        db.upsert_pick(
+            pick_date, "deepseek-chat", SECTOR_PROMPT_VERSION, STOCK_PROMPT_VERSION,
+            None, None, "failed", msg,
+        )
+        return PredictResult(pick_date=pick_date, status="failed", error_msg=msg)
+    board_lookup = {b["name"]: b for b in board_snapshot}
+
     try:
-        sectors_json, sectors_raw = await chat_json(sector_messages(pick_date))
+        sectors_json, sectors_raw = await chat_json(sector_messages(pick_date, board_snapshot))
         sectors_resp = (sectors_json.get("sectors") or [])[:3]
         if len(sectors_resp) < 3:
             raise DeepSeekError(f"板块返回数量不足(需要3个): {sectors_json}")
         sector_names = [str(s.get("name") or "").strip() for s in sectors_resp]
 
         stocks_json, stocks_raw = await chat_json(
-            stock_messages(pick_date, sector_names)
+            stock_messages(pick_date, sector_names, board_lookup)
         )
         stocks_resp = stocks_json.get("sectors") or []
 
