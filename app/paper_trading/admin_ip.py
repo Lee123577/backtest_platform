@@ -293,7 +293,6 @@ def require_admin_ip(request: Request) -> str:
     if not _first_run_checked:
         with _first_run_lock:   # 双检:并发的两个首个写请求不能都走 bootstrap
             if not _first_run_checked:
-                _first_run_checked = True
                 if count_ips() == 0:
                     # 安全加固：仅在来自内网/本机的首个写请求上自动自举，
                     # 公网首个访问者无法借此成为管理员。反代部署必须配置
@@ -301,6 +300,7 @@ def require_admin_ip(request: Request) -> str:
                     if _is_private_ip(ip):
                         try:
                             add_ip(ip, "first-run bootstrap", "system")
+                            _first_run_checked = True
                             logger.warning(
                                 "⚠ First-run bootstrap：内网 IP %s 已自动加入白名单。"
                                 "如非预期，请通过 UI 或 SQL 清理。",
@@ -309,12 +309,16 @@ def require_admin_ip(request: Request) -> str:
                             return ip
                         except Exception as e:
                             logger.error("First-run bootstrap 失败：%s", e)
+                    # 注意：这里不能把 _first_run_checked 设为 True——公网 IP
+                    # (或内网自举失败)不代表白名单已初始化完成，必须留给后续
+                    # 内网请求重试自举的机会，否则白名单会永久卡在空表状态。
                     raise HTTPException(
                         403,
                         detail="管理白名单为空且未配置 PAPER_ADMIN_INITIAL_IPS。"
                                "请从内网/本机访问完成初始化，或在 .env 设置"
                                " PAPER_ADMIN_INITIAL_IPS 后再试。",
                     )
+                _first_run_checked = True
 
     if not is_admin(ip):
         raise HTTPException(

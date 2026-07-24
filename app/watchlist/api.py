@@ -64,7 +64,10 @@ def add(req: CodeReq, user: dict = Depends(require_login)):
 
 @router.post("/remove")
 def remove(req: CodeReq, user: dict = Depends(require_login)):
-    service.remove_watch(int(user["id"]), req.code)
+    try:
+        service.remove_watch(int(user["id"]), req.code)
+    except service.WatchlistError as e:
+        raise HTTPException(400, str(e))
     return {"ok": True}
 
 

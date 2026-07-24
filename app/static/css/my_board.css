@@ -6,6 +6,12 @@
    活动,拖到右侧超出 1180px 的地方会被拖拽逻辑的边界钳制卡住。 */
 body.spx-shell main.mb-main { max-width: none; }
 
+/* shell.css 把 main 和 .site-footer 的 max-width 都锁在 1180px、margin 清零，
+   main 在这页放开成 none 后，页脚还卡在 1180px 且没有上边距，宽屏下页脚比画布
+   窄一截，且贴着最后一排卡片底部只剩 main 的 20px padding，观感上像是被卡片
+   顶到了。这里只在本页把页脚也放开、补回一点呼吸空间，不影响其他页。 */
+body.spx-shell .site-footer.mb-footer { max-width: none; margin-top: 24px; }
+
 :root {
   /* 复用站点全局强调色(style.css --accent),避免这里另起一个色号导致
      跟其他页面的蓝色对不上。 */
