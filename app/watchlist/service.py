@@ -14,7 +14,6 @@ DB 经模块级 db 引用;订阅判定经模块级 is_subscribed —— 测试�
 from __future__ import annotations
 
 import logging
-import re
 from collections import defaultdict
 from datetime import date as _Date
 from typing import Any, Dict, List, Optional
@@ -27,7 +26,6 @@ from . import db
 logger = logging.getLogger(__name__)
 
 MAX_WATCHLIST = 50           # 单用户自选上限(兼顾扫描成本)
-_CODE_RE = re.compile(r"^\d{6}$")
 
 
 class WatchlistError(RuntimeError):
@@ -49,8 +47,9 @@ def _strategy_name(strategy_id: str) -> Optional[str]:
 
 def add_watch(user_id: int, code_raw: str) -> Dict[str, Any]:
     db.ensure_tables()
-    code = normalize_code(code_raw or "")
-    if not _CODE_RE.match(code):
+    try:
+        code = normalize_code(code_raw or "")
+    except ValueError:
         raise WatchlistError("请输入 6 位股票代码")
     name = db.stock_name_or_none(code)
     if name is None:
@@ -65,7 +64,10 @@ def add_watch(user_id: int, code_raw: str) -> Dict[str, Any]:
 
 def remove_watch(user_id: int, code_raw: str) -> None:
     db.ensure_tables()
-    code = normalize_code(code_raw or "")
+    try:
+        code = normalize_code(code_raw or "")
+    except ValueError:
+        raise WatchlistError("请输入 6 位股票代码")
     db.remove_watchlist(user_id, code)
 
 

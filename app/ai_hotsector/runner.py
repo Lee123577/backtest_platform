@@ -18,7 +18,6 @@ app/ai_hotsector/db.py 的 settle_status 状态机注释。
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass, field
 from datetime import date as _Date
 from typing import Any, Dict, List, Optional
@@ -36,10 +35,6 @@ from .prompts import (
 )
 
 logger = logging.getLogger(__name__)
-
-# code 列是 CHAR(6)、生产库 sql_mode=STRICT_TRANS_TABLES:超长/非数字的
-# 畸形代码直接插入会报 "Data too long" 崩掉整批 —— 必须先按格式过滤
-_CODE_RE = re.compile(r"^\d{6}$")
 
 # 停牌/长期无行情的股票如果一直等真实价格，会永久卡住整批结算(资金曲线那一天
 # 永远不出现，且界面上没有任何提示)。超过这么多个交易日仍拿不到价格 →
@@ -135,8 +130,9 @@ async def predict_once(pick_date: Optional[_Date] = None) -> PredictResult:
                 raw_code = str(st.get("code") or "").strip()
                 if not raw_code:
                     continue
-                code = normalize_code(raw_code)
-                if not _CODE_RE.match(code):
+                try:
+                    code = normalize_code(raw_code)
+                except ValueError:
                     # 畸形代码塞不进 CHAR(6)(严格模式直接报错),丢弃该行;
                     # 原始内容在 stocks_raw 里仍可审计
                     logger.warning("[%s] 丢弃畸形股票代码 %r (板块 %s)",
