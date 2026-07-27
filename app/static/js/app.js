@@ -28,10 +28,55 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('stockCode').addEventListener('keydown', e => {
     if (e.key === 'Enter') loadKline();
   });
+  document.getElementById('navSignal').addEventListener('click', () => switchMode('signal'));
+  document.getElementById('navPortfolio').addEventListener('click', () => switchMode('portfolio'));
 
   window.addEventListener('resize', () => {
     klineChart?.resize();
     equityChart?.resize();
+  });
+
+  // ── 动态渲染内容的事件委托(容器本身是静态的，内容随策略/回测结果重绘)──────
+  document.getElementById('signalStrategyGrid').addEventListener('click', e => {
+    const quickBtn = e.target.closest('.sc-quickrun');
+    if (quickBtn) { quickRun(quickBtn.dataset.id); return; }
+    const card = e.target.closest('.strategy-card');
+    if (card) addInstance(card.dataset.id);
+  });
+
+  document.getElementById('portfolioStrategyGrid').addEventListener('click', e => {
+    const card = e.target.closest('.strategy-card');
+    if (card) selectPortfolioStrategy(card.dataset.id);
+  });
+
+  document.getElementById('portfolioInstanceCard').addEventListener('change', e => {
+    const input = e.target.closest('input[data-key]');
+    if (input) updatePortfolioParam(input.dataset.key, input.value, input.dataset.type);
+  });
+  document.getElementById('portfolioInstanceCard').addEventListener('click', e => {
+    if (e.target.closest('.portfolio-clear-btn')) clearPortfolioStrategy();
+  });
+
+  document.getElementById('instancesList').addEventListener('change', e => {
+    const paramInput = e.target.closest('input[data-idx][data-key]');
+    if (paramInput) { updateParam(+paramInput.dataset.idx, paramInput.dataset.key, paramInput.value); return; }
+    const labelInput = e.target.closest('.instance-label-input');
+    if (labelInput) updateLabel(+labelInput.dataset.idx, labelInput.value);
+  });
+  document.getElementById('instancesList').addEventListener('click', e => {
+    const btn = e.target.closest('.instance-remove-btn');
+    if (btn) removeInstance(+btn.dataset.idx);
+  });
+
+  document.getElementById('tradesWrap').addEventListener('click', e => {
+    const tab = e.target.closest('.tab-btn');
+    if (tab) { switchTab(+tab.dataset.idx, tab); return; }
+    const filterBtn = e.target.closest('.tf-btn');
+    if (filterBtn) filterTrades(+filterBtn.dataset.idx, filterBtn.dataset.type, filterBtn);
+  });
+  document.getElementById('tradesWrap').addEventListener('input', e => {
+    const codeFilter = e.target.closest('.trades-code-filter');
+    if (codeFilter) filterTradesByCode(+codeFilter.dataset.idx, codeFilter.value);
   });
 });
 
@@ -69,7 +114,7 @@ function renderSignalStrategyGrid() {
     const count = instances.filter(i => i.id === s.id).length;
     const hasAdded = count > 0;
     return `
-      <div class="strategy-card${hasAdded ? ' selected-card' : ''}" onclick="addInstance('${s.id}')">
+      <div class="strategy-card${hasAdded ? ' selected-card' : ''}" data-id="${s.id}">
         <div class="sc-name">
           ${escHtml(s.name)}
           ${hasAdded ? `<span class="sc-count-badge">${count}</span>` : ''}
@@ -78,7 +123,7 @@ function renderSignalStrategyGrid() {
         <div class="sc-btn-row">
           <button class="btn btn-ghost sc-add sc-add-primary">${hasAdded ? `＋ 再添加（已选 ${count}）` : '＋ 添加'}</button>
           <button class="btn sc-quickrun" title="用推荐参数直接跑一遍示例回测，看看这个策略长什么样"
-                  onclick="event.stopPropagation(); quickRun('${s.id}')">⚡ 试跑</button>
+                  data-id="${s.id}">⚡ 试跑</button>
         </div>
       </div>
     `;
@@ -100,7 +145,7 @@ function renderPortfolioStrategyGrid() {
     const isSelected = selectedPortfolio?.id === s.id;
     return `
       <div class="strategy-card${isSelected ? ' selected-card' : ''}"
-           onclick="selectPortfolioStrategy('${s.id}')">
+           data-id="${s.id}">
         <div class="sc-name">
           ${escHtml(s.name)}
           ${isSelected ? '<span class="sc-count-badge">✓</span>' : ''}
@@ -162,7 +207,7 @@ function renderPortfolioInstanceCard() {
         value="${inst.params[key]}"
         min="${schema.min}" max="${schema.max}"
         step="${schema.type === 'float' ? 0.1 : 1}"
-        onchange="updatePortfolioParam('${key}', this.value, '${schema.type}')"
+        data-key="${key}" data-type="${schema.type}"
       >
     </div>
   `).join('');
@@ -171,8 +216,7 @@ function renderPortfolioInstanceCard() {
     <div class="portfolio-instance-card">
       <div class="portfolio-instance-header">
         <span class="portfolio-instance-title">${escHtml(inst.strategy.name)}</span>
-        <button class="btn btn-danger" style="font-size:12px;padding:3px 8px"
-                onclick="clearPortfolioStrategy()">✕ 取消</button>
+        <button class="btn btn-danger portfolio-clear-btn" style="font-size:12px;padding:3px 8px">✕ 取消</button>
       </div>
       <div class="portfolio-instance-params">${paramRows}</div>
     </div>
@@ -243,7 +287,7 @@ function renderInstances() {
         <input type="number" value="${inst.params[key]}"
           min="${schema.min}" max="${schema.max}"
           step="${schema.type === 'float' ? 0.1 : 1}"
-          onchange="updateParam(${idx}, '${key}', this.value)">
+          data-idx="${idx}" data-key="${key}">
       </div>
     `).join('');
 
@@ -252,10 +296,10 @@ function renderInstances() {
         <div class="instance-header">
           <input class="instance-label-input" type="text"
             value="${escHtml(inst.label)}"
-            onchange="updateLabel(${idx}, this.value)">
+            data-idx="${idx}">
           <span class="instance-badge">${escHtml(inst.strategy.name)}</span>
-          <button class="btn btn-danger" style="font-size:12px;padding:3px 8px"
-                  onclick="removeInstance(${idx})">✕ 移除</button>
+          <button class="btn btn-danger instance-remove-btn" style="font-size:12px;padding:3px 8px"
+                  data-idx="${idx}">✕ 移除</button>
         </div>
         <div class="instance-params">
           ${paramRows || '<span class="no-params-hint">无可配置参数</span>'}
@@ -840,7 +884,7 @@ function renderTrades(results, isPortfolio) {
   let panels = '';
 
   withTrades.forEach((r, i) => {
-    tabs += `<button class="tab-btn${i === 0 ? ' active' : ''}" onclick="switchTab(${i}, this)">
+    tabs += `<button class="tab-btn${i === 0 ? ' active' : ''}" data-idx="${i}">
       ${escHtml(r.strategy_name)}</button>`;
 
     const buyCount = r.trades.filter(t => t.type === '买入').length;
@@ -863,11 +907,11 @@ function renderTrades(results, isPortfolio) {
       <div class="trade-panel${i === 0 ? ' active' : ''}" id="tp-${i}">
         <div class="trades-toolbar">
           <div class="trades-filter" role="group">
-            <button class="tf-btn active" onclick="filterTrades(${i}, 'all', this)">全部 ${r.trades.length}</button>
-            <button class="tf-btn" onclick="filterTrades(${i}, 'buy', this)">买入 ${buyCount}</button>
-            <button class="tf-btn" onclick="filterTrades(${i}, 'sell', this)">卖出 ${sellCount}</button>
+            <button class="tf-btn active" data-idx="${i}" data-type="all">全部 ${r.trades.length}</button>
+            <button class="tf-btn" data-idx="${i}" data-type="buy">买入 ${buyCount}</button>
+            <button class="tf-btn" data-idx="${i}" data-type="sell">卖出 ${sellCount}</button>
           </div>
-          ${showCode ? `<input class="trades-code-filter" placeholder="按代码筛选" oninput="filterTradesByCode(${i}, this.value)">` : ''}
+          ${showCode ? `<input class="trades-code-filter" placeholder="按代码筛选" data-idx="${i}">` : ''}
         </div>
         <div class="trades-scroll">
           <table class="trades-tbl" id="tt-${i}">

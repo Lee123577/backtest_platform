@@ -244,10 +244,10 @@
     <div class="panel-title">运行明细 <span id="runsHint"></span></div>
     <div class="filter-bar">
       过滤：
-      <select id="taskFilter" onchange="loadRuns()">
+      <select id="taskFilter">
         <option value="">全部任务</option>
       </select>
-      <select id="statusFilter" onchange="loadRuns()" style="margin-left:8px">
+      <select id="statusFilter" style="margin-left:8px">
         <option value="">全部状态</option>
         <option value="success">仅成功</option>
         <option value="failed">仅失败</option>
@@ -266,7 +266,7 @@
   <div class="modal-box" style="max-width:900px">
     <div class="modal-head">
       <span id="modalTitle">运行详情</span>
-      <button class="modal-close" onclick="closeDetail()">×</button>
+      <button class="modal-close" id="runDetailModalClose">×</button>
     </div>
     <div class="modal-body" id="modalContent">—</div>
   </div>

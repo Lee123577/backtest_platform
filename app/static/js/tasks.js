@@ -156,7 +156,7 @@ function renderSummary(tasks) {
         <div class="kv-line"><span>耗时</span><span class="v">${fmtDur(t.last_duration_ms)}</span></div>
         <div class="kv-line"><span>近 30 天</span><span class="v">${t.recent_success}/${t.recent_total} 成功（${sr}）· 失败 ${t.recent_failed}</span></div>
         ${errLine}
-        <button class="rerun-btn" onclick="triggerRun('${t.task_name}', this)">▶ 立即重跑</button>
+        <button class="rerun-btn" data-name="${escapeHtml(t.task_name)}">▶ 立即重跑</button>
       </div>`;
   }).join('');
 }
@@ -223,7 +223,7 @@ function renderRuns(runs) {
       ? '<span class="tag-stop">手动</span>'
       : '<span class="tag-hold">cron</span>';
     return `
-      <tr class="row-link" onclick="showDetail(${r.id})">
+      <tr class="row-link" data-id="${r.id}">
         <td>${fmtDt(r.started_at)}</td>
         <td>${r.task_name}</td>
         <td>${statusPill(r.status)}</td>
@@ -237,7 +237,7 @@ function renderRuns(runs) {
   }).join('');
   const moreBtn = _runsHasMore
     ? `<div style="text-align:center;margin-top:12px;">
-         <button class="ds-refresh-btn" onclick="loadRuns(false)">加载更多</button>
+         <button class="ds-refresh-btn" id="loadMoreRunsBtn">加载更多</button>
        </div>`
     : '';
   document.getElementById('runsWrap').innerHTML = `
@@ -526,6 +526,21 @@ async function load() {
   loadDataStatus();
   loadTraffic();
   document.getElementById('dsRefreshAll').addEventListener('click', triggerDailyRefresh);
+  document.getElementById('taskFilter').addEventListener('change', loadRuns);
+  document.getElementById('statusFilter').addEventListener('change', loadRuns);
+  document.getElementById('runDetailModalClose').addEventListener('click', closeDetail);
+
+  // ── 动态渲染内容的事件委托(容器本身是静态的，内容随任务/运行记录重绘)────
+  document.getElementById('tasksGrid').addEventListener('click', e => {
+    const btn = e.target.closest('.rerun-btn');
+    if (btn) triggerRun(btn.dataset.name, btn);
+  });
+  document.getElementById('runsWrap').addEventListener('click', e => {
+    const moreBtn = e.target.closest('#loadMoreRunsBtn');
+    if (moreBtn) { loadRuns(false); return; }
+    const row = e.target.closest('.row-link');
+    if (row) showDetail(+row.dataset.id);
+  });
 
   if (_timer) clearInterval(_timer);
   _timer = setInterval(() => {

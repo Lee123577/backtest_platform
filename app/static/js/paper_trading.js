@@ -45,6 +45,42 @@ async function load() {
     loadScanStatus(), loadParams(),
   ]);
   applyAdminGuards();
+
+  document.getElementById('paramsToggleBtn').addEventListener('click', toggleParamsEditor);
+  document.getElementById('adminMgmtBtn').addEventListener('click', openAdminModal);
+  document.getElementById('paramsCancelBtn').addEventListener('click', cancelParamsEdit);
+  document.getElementById('paramsSaveBtn').addEventListener('click', saveParams);
+  document.getElementById('scanBtn').addEventListener('click', () => triggerScan());
+  document.getElementById('tradeActionFilter').addEventListener('change', renderTradesFiltered);
+  document.getElementById('tradeDateFrom').addEventListener('change', renderTradesFiltered);
+  document.getElementById('tradeDateTo').addEventListener('change', renderTradesFiltered);
+  document.getElementById('tradesFilterClearBtn').addEventListener('click', clearTradesFilter);
+  document.getElementById('hideHoldRuns').addEventListener('change', renderRunsFiltered);
+  document.getElementById('runDetailMask').addEventListener('click', closeRunDetail);
+  document.getElementById('runDetailCloseBtn').addEventListener('click', closeRunDetail);
+  document.getElementById('adminModalMask').addEventListener('click', closeAdminModal);
+  document.getElementById('adminModalCloseBtn').addEventListener('click', closeAdminModal);
+  document.getElementById('adminAddBtn').addEventListener('click', addAdminIp);
+
+  // ── 动态渲染内容的事件委托(容器本身是静态的，内容随数据重绘)────────────
+  document.getElementById('runsWrap').addEventListener('click', e => {
+    const row = e.target.closest('.row-link');
+    if (row) showRunDetail(+row.dataset.runId);
+  });
+  document.getElementById('tradesWrap').addEventListener('click', e => {
+    const row = e.target.closest('.row-link');
+    if (row) showRunDetail(+row.dataset.runId);
+  });
+  document.getElementById('scanHint').addEventListener('click', e => {
+    if (e.target.closest('.force-scan-link')) { e.preventDefault(); triggerScan(true); }
+  });
+  document.getElementById('paramsMsg').addEventListener('click', e => {
+    if (e.target.closest('.trigger-scan-link')) { e.preventDefault(); triggerScan(); }
+  });
+  document.getElementById('adminList').addEventListener('click', e => {
+    const btn = e.target.closest('.del-btn');
+    if (btn && !btn.disabled) deleteAdminIp(btn.dataset.ip);
+  });
   // 启动持仓表的轮询刷新；equity / runs / trades 是历史快照，不用频繁刷
   if (_realtimeTimer) clearInterval(_realtimeTimer);
   _realtimeTimer = setInterval(loadAccount, REALTIME_REFRESH_MS);
@@ -393,7 +429,7 @@ function renderRuns(runs) {
                   (Number(cr) >= 0 ? 'val-pos' : 'val-neg');
 
     return `
-      <tr class="row-link" onclick="showRunDetail(${r.run_id})">
+      <tr class="row-link" data-run-id="${r.run_id}">
         <td>${r.run_date}</td>
         <td>${tag}${stopTag}</td>
         <td>${r.universe_size ?? '—'}</td>
@@ -520,7 +556,7 @@ function renderTrades(trades) {
     }
 
     return `
-      <tr class="row-link" onclick="showRunDetail(${t.run_id})">
+      <tr class="row-link" data-run-id="${t.run_id}">
         <td>${t.run_date}</td>
         <td>${tag}</td>
         <td class="code-cell">${t.code}</td>
@@ -643,7 +679,7 @@ async function triggerScan(force = false) {
     if (data.status === 'skipped') {
       // 依赖未满足。给用户一个"强制扫描"出口（绕过依赖检查）
       const reason = data.reason || '依赖未满足';
-      hint.innerHTML = `跳过：${reason}。<a href="#" onclick="triggerScan(true);return false;" style="color:#0969da;font-weight:600;">⚡ 强制扫描（跳过依赖）</a>`;
+      hint.innerHTML = `跳过：${reason}。<a href="#" class="force-scan-link" style="color:#0969da;font-weight:600;">⚡ 强制扫描（跳过依赖）</a>`;
       btn.disabled = false;
       btn.textContent = '重试';
       return;
@@ -862,7 +898,7 @@ async function saveParams() {
     }
     _currentParams = data.params;
     renderParamsBadge(data.params);
-    msg.innerHTML = '✓ 已保存。下次扫描生效，或点 <a href="#" onclick="triggerScan();return false;" style="color:#0969da;">立即扫描</a>';
+    msg.innerHTML = '✓ 已保存。下次扫描生效，或点 <a href="#" class="trigger-scan-link" style="color:#0969da;">立即扫描</a>';
     msg.className = 'params-msg ok';
   } catch (e) {
     msg.textContent = '保存失败：' + (e.message || e);
@@ -985,7 +1021,7 @@ function renderAdminList(data) {
         <span class="ip">${r.ip}${isMe ? ' (本机)' : ''}</span>
         <span class="note">${r.note || '—'}</span>
         <span class="meta">${r.created_by_ip || '—'} · ${(r.created_at || '').slice(0,16).replace('T',' ')}</span>
-        <button class="del-btn" onclick="deleteAdminIp('${r.ip}')"
+        <button class="del-btn" data-ip="${escapeHtml(r.ip)}"
                 ${cantDelete ? 'disabled title="不能删除最后一个白名单 IP"' : ''}>
           删除
         </button>

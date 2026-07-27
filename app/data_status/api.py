@@ -19,6 +19,7 @@ GET /api/data_status/traffic_today
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date as _Date, datetime as _DT, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -213,6 +214,11 @@ def _fmt_dt(v) -> str:
 # 时间列自动探测的缓存
 _visit_time_col: str | None = None
 
+# tcol 会直接拼进 SQL（反引号包裹的标识符不支持参数化占位符）。
+# 即便当前值来自 INFORMATION_SCHEMA、非用户输入，仍加白名单正则兜底，
+# 彻底消除标识符注入面：不匹配一律当作"未探测到"处理。
+_SAFE_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+
 
 def _detect_visit_time_col(conn) -> str | None:
     """
@@ -243,7 +249,7 @@ def _detect_visit_time_col(conn) -> str | None:
             v = r.get("column_name") or r.get("COLUMN_NAME")
         else:
             v = r[0]
-        if v:
+        if v and _SAFE_IDENT_RE.match(str(v)):
             cols.append(str(v).lower())   # 统一小写比较
 
     priority = ["created_at", "visit_time", "access_time", "ts",

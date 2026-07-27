@@ -389,33 +389,40 @@ def get_universe_snapshot() -> pd.DataFrame:
     # NOTE: curl_cffi loads Chromium's network stack. On Windows the C-level
     # PartitionAlloc FATAL crash (partition_address_space.cc) kills the entire
     # process and cannot be caught by Python try/except. Run in a subprocess.
-    import subprocess as _sp, sys as _sys, pickle as _pl, tempfile as _tf
-    with _tf.NamedTemporaryFile(suffix=".pkl", delete=False) as _tmp:
-        _tmp.close()
-        _scr = (
-            "from app.data.market_data import _fetch_via_cffi\n"
-            "import pickle\n"
-            "try:\n"
-            "  df = _fetch_via_cffi()\n"
-            "  pickle.dump(df, open('{}','wb'))\n"
-            "except Exception as e:\n"
-            "  pickle.dump(e, open('{}','wb'))\n"
-        ).format(_tmp.name, _tmp.name)
-        try:
-            _sp.run([_sys.executable, "-c", _scr], capture_output=True, timeout=60)
-            obj = _pl.load(open(_tmp.name, "rb"))
-            if isinstance(obj, pd.DataFrame) and not obj.empty:
+    # IPC 用 CSV 而非 pickle：pickle.load 反序列化不可信/损坏文件时可执行任意
+    # 代码，CSV 是纯文本，子进程结果被污染也不会在父进程触发代码执行。
+    import subprocess as _sp, sys as _sys, tempfile as _tf, os as _os
+    with _tf.NamedTemporaryFile(suffix=".csv", delete=False) as _tmp:
+        _csv_path = _tmp.name
+    _err_path = _csv_path + ".err"
+    _scr = (
+        "from app.data.market_data import _fetch_via_cffi\n"
+        "try:\n"
+        "  df = _fetch_via_cffi()\n"
+        "  df.to_csv(r'{}', index=False)\n"
+        "except Exception as e:\n"
+        "  open(r'{}', 'w', encoding='utf-8').write(str(e))\n"
+    ).format(_csv_path, _err_path)
+    try:
+        _sp.run([_sys.executable, "-c", _scr], capture_output=True, timeout=60)
+        if _os.path.exists(_err_path):
+            with open(_err_path, encoding="utf-8") as _f:
+                errors.append(f"[方式4 curl_cffi] {_f.read()}")
+        elif _os.path.exists(_csv_path) and _os.path.getsize(_csv_path) > 0:
+            obj = pd.read_csv(_csv_path, dtype={"code": str})
+            if not obj.empty:
                 _write_universe_to_db(obj)
                 return obj
-            elif isinstance(obj, Exception):
-                errors.append(f"[方式4 curl_cffi] {obj}")
             else:
-                errors.append("[方式4 curl_cffi] 子进程返回意外数据")
-        except Exception as exc:
-            errors.append(f"[方式4 curl_cffi] {exc}")
-        finally:
-            _os = __import__("os")
-            _os.unlink(_tmp.name)
+                errors.append("[方式4 curl_cffi] 子进程返回空数据")
+        else:
+            errors.append("[方式4 curl_cffi] 子进程无输出（可能超时或崩溃）")
+    except Exception as exc:
+        errors.append(f"[方式4 curl_cffi] {exc}")
+    finally:
+        for _p in (_csv_path, _err_path):
+            if _os.path.exists(_p):
+                _os.unlink(_p)
 
     detail = "\n".join(f"  {e}" for e in errors)
     raise ConnectionError(
