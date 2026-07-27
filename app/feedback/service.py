@@ -23,7 +23,11 @@ IP_MAX_PER_HOUR = 5
 
 
 class FeedbackError(RuntimeError):
-    """校验/限流失败，api 层转 400/429。"""
+    """校验失败，api 层转 400。"""
+
+
+class FeedbackRateLimitError(FeedbackError):
+    """限流触发，api 层转 429。"""
 
 
 _ip_hits: Dict[str, Deque[float]] = {}
@@ -61,7 +65,7 @@ def submit(
         raise FeedbackError("联系方式过长")
 
     if not _ip_allowed(ip):
-        raise FeedbackError("提交过于频繁，请稍后再试")
+        raise FeedbackRateLimitError("提交过于频繁，请稍后再试")
 
     ua = (user_agent or "")[:255] or None
     return db.insert_feedback(user_id, category, content, contact, ip, ua)

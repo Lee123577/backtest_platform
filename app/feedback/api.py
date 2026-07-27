@@ -47,6 +47,8 @@ def submit(req: FeedbackReq, request: Request):
             ip=_client_ip(request),
             user_agent=request.headers.get("user-agent"),
         )
+    except service.FeedbackRateLimitError as e:
+        raise HTTPException(429, str(e))
     except service.FeedbackError as e:
         raise HTTPException(400, str(e))
     return {"ok": True, "id": fid}
