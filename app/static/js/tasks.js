@@ -526,8 +526,9 @@ async function load() {
   loadDataStatus();
   loadTraffic();
   document.getElementById('dsRefreshAll').addEventListener('click', triggerDailyRefresh);
-  document.getElementById('taskFilter').addEventListener('change', loadRuns);
-  document.getElementById('statusFilter').addEventListener('change', loadRuns);
+  // 包一层箭头函数：直接传 loadRuns 会把 Event 对象当成 reset 参数传进去
+  document.getElementById('taskFilter').addEventListener('change', () => loadRuns());
+  document.getElementById('statusFilter').addEventListener('change', () => loadRuns());
   document.getElementById('runDetailModalClose').addEventListener('click', closeDetail);
 
   // ── 动态渲染内容的事件委托(容器本身是静态的，内容随任务/运行记录重绘)────

@@ -92,11 +92,12 @@ TASKS: Dict[str, TaskDef] = {
     # 结算依赖 daily_update 而不是依赖预测本身 —— 即使当天预测失败/跳过，
     # 之前几天挂着待结算的股票也照样能在今天回填/结算。
     # 超时预算:两次串行 DeepSeek 调用各最长 60s + 子进程冷启动联网拉交易日历
-    # (akshare,进程间不共享缓存,慢网络下可能要几十秒) → 3 分钟偏紧,放到 6 分钟
+    # (akshare,进程间不共享缓存,慢网络下可能要几十秒) + 板块快照两个新浪接口
+    # (各 3 次重试,最坏 15s 超时 + 3s/8s 退避 ≈ 56s,两个共 ~112s) → 放到 8 分钟
     "ai_hotsector_predict": {
         "cmd": ["python", "scripts/ai_hotsector_predict.py"],
         "schedule": "weekday:15:05",
-        "timeout_sec": 6 * 60,
+        "timeout_sec": 8 * 60,
         "depends_on": None,
         "description": "AI 热门板块+强势股每日预测(15:05 收盘后)",
     },

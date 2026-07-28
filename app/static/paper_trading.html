@@ -42,7 +42,8 @@
       <!-- 权限徽章：绿=admin，灰=只读 -->
       <span class="admin-chip admin-chip-loading" id="adminChip" title="权限状态">检测中…</span>
       <button class="params-toggle" id="adminMgmtBtn" style="display:none;margin-left:8px">🔑 管理白名单</button>
-      <button class="params-toggle" id="paramsToggleBtn">⚙ 调整策略参数</button>
+      <!-- 初始 disabled：事件绑定已提前到数据加载前，靠 applyAdminGuards() 拉起，避免守卫生效前被点开 -->
+      <button class="params-toggle" id="paramsToggleBtn" disabled>⚙ 调整策略参数</button>
     </div>
 
     <!-- 定位说明：诚实交代这是验证用的模拟盘，不是"精选出来的赚钱策略" ——
@@ -236,7 +237,7 @@
   <div class="site-footer-beian"><a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener">苏ICP备2026049395号-1</a></div>
 </footer>
 
-<script src="/static/js/paper_trading.js"></script>
+<script src="/static/js/paper_trading.js?v=20260728a"></script>
 <script src="/static/js/feedback.js?v=20260713"></script>
 <script src="/static/js/util.js?v=20260721e"></script>
 <script src="/static/js/auth.js?v=20260721e"></script>

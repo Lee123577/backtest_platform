@@ -410,6 +410,10 @@ def get_universe_snapshot() -> pd.DataFrame:
                 errors.append(f"[方式4 curl_cffi] {_f.read()}")
         elif _os.path.exists(_csv_path) and _os.path.getsize(_csv_path) > 0:
             obj = pd.read_csv(_csv_path, dtype={"code": str})
+            # 空股票名经 CSV 往返会被 pandas 读成 NaN，还原成空串；
+            # 不用 keep_default_na=False —— 那会连带把 price/market_cap 变成 object 列
+            if "name" in obj.columns:
+                obj["name"] = obj["name"].fillna("").astype(str)
             if not obj.empty:
                 _write_universe_to_db(obj)
                 return obj

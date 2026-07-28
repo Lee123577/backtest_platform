@@ -38,14 +38,9 @@ let _lastScanLoadAt = 0;      // loadScanStatus 同上
 let _adminInfo = { ip: '—', is_admin: false, whitelist_empty: false };
 
 async function load() {
-  // 先拉权限，再并行加载其它数据 —— 让 UI 一开始就能正确禁用按钮
-  await loadAdminStatus();
-  await Promise.all([
-    loadAccount(), loadEquity(), loadRuns(), loadTrades(),
-    loadScanStatus(), loadParams(),
-  ]);
-  applyAdminGuards();
-
+  // 事件绑定必须排在所有 await 之前：CSP 收紧后页面已无内联 onclick，
+  // 若等数据加载完再绑，慢网络下这段时间全页按钮都是死的；且 applyAdminGuards()
+  // 一旦抛异常会跳过后面所有绑定，整页永久失效。绑定不依赖任何数据。
   document.getElementById('paramsToggleBtn').addEventListener('click', toggleParamsEditor);
   document.getElementById('adminMgmtBtn').addEventListener('click', openAdminModal);
   document.getElementById('paramsCancelBtn').addEventListener('click', cancelParamsEdit);
@@ -81,6 +76,16 @@ async function load() {
     const btn = e.target.closest('.del-btn');
     if (btn && !btn.disabled) deleteAdminIp(btn.dataset.ip);
   });
+
+  // 先拉权限，再并行加载其它数据 —— 让 UI 尽早正确禁用按钮
+  await loadAdminStatus();
+  applyAdminGuards();   // 只依赖 _adminInfo，紧跟其后执行；别压在下面的批量加载之后，
+                        // 否则任一 loader 出问题就会把 paramsToggleBtn 永久锁死
+  await Promise.all([
+    loadAccount(), loadEquity(), loadRuns(), loadTrades(),
+    loadScanStatus(), loadParams(),
+  ]);
+
   // 启动持仓表的轮询刷新；equity / runs / trades 是历史快照，不用频繁刷
   if (_realtimeTimer) clearInterval(_realtimeTimer);
   _realtimeTimer = setInterval(loadAccount, REALTIME_REFRESH_MS);
