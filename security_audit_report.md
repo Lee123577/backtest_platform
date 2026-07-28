@@ -117,6 +117,48 @@
 - 同机的宝塔面板 `:8888`、phpMyAdmin 转发 `:888` 亦对公网监听，不在本仓库范围，
   建议至少做 IP 限制。
 
+### 3.8 服务进程降权 —— ✅ 已于 2026-07-28 处理
+
+原先 `backtest.service` 是 `User=root`、`WorkingDirectory=/backtest_platform`，
+任何一个 RCE 直接等于拿到整机。已改为：
+
+- 新建系统用户 `backtest`（`--system --no-create-home --shell nologin`），
+  `chown -R backtest:backtest /backtest_platform`，`.env` 保持 `600`。
+- `Environment=HOME=/backtest_platform` —— 该用户没有独立家目录，
+  akshare 之类要写缓存时有地方落。
+- 加固指令：`NoNewPrivileges` / `PrivateTmp` / `PrivateDevices` / `ProtectHome` /
+  `ProtectSystem=full` / `ProtectKernelTunables` / `ProtectControlGroups` /
+  `RestrictSUIDSGID`，配 `ReadWritePaths=/backtest_platform`。
+- **同时把调度器的 crontab 一起迁了**：它原本挂在 root crontab
+  （`*/5 * * * * python3 scripts/run_scheduled_tasks.py`），如果只改 systemd
+  不改它，两边生成的日志/缓存文件属主会打架、必有一方写不动。
+  现移到 `/etc/cron.d/backtest`，用户字段填 `backtest`。
+- 顺带补 `/etc/logrotate.d/backtest`：项目自己写的 `scripts/*.log` 此前
+  没有任何轮转（`scheduler.log` 已涨到 ~4MB 只增不减），改为按周切、留 8 份、
+  `copytruncate`（写进程用 `>>` 追加，不会重开 fd）。
+
+回滚材料：`/root/backtest.service.bak.20260728`、`/root/crontab.bak.20260728`、
+`/backtest_platform/.env.bak.20260728`。
+
+---
+
+## 8. 仍然敞开的一项（需产品决策，非技术阻塞）
+
+**管理白名单绑定在动态 IP 上。** `paper_admin_ip` 只认来源 IP，而维护者用的是
+家庭宽带的动态 IP。ISP 回收并重新分配该 IP 后，**下一个拿到它的人自动继承管理员**，
+可以改策略参数、触发 `subprocess` 任务、改全站默认布局。
+
+几个方向，各有代价，需要业务方选：
+
+1. **白名单 + 登录态双因子** —— 写操作要求「IP 在白名单」且「已登录」。最稳，
+   但维护者每次都得先登录，且 `/admin/tasks` 这类页面的使用方式会变。
+2. **条目自动过期** —— 加 `last_used_at`，超过 N 天未使用的条目自动失效。
+   自维护、无需 UI；但维护者长时间不用会被锁在门外，只能靠直连数据库恢复
+   （目前保留了 root@% 远程访问，恢复路径是通的）。
+3. **维持现状** —— 接受风险。前提是维护者的出口 IP 相对稳定，且能及时发现异常。
+
+本轮**未擅自改动**，因为三个方向都会改变维护者日常的操作方式，属于产品决策。
+
 ### 3.5 CI/CD 安全流水线
 - 已随本报告附带 `.github/workflows/security-scan.yml`：SAST（Semgrep OWASP/CWE）、SCA（Trivy）、密钥扫描（Gitleaks）。任何 PR 合并前必须通过这些扫描。
 
