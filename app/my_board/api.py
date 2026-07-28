@@ -47,8 +47,10 @@ def save_layout(req: LayoutReq, request: Request):
     user = get_current_user(request)
     if user is None:
         # 未登录 = 写全站共享的默认布局,只有白名单 IP 能改。
-        # require_admin_ip 顺带做了跨站 Origin/Referer 拦截(CSRF)。
-        paper_admin_ip.require_admin_ip(request)
+        # 顺带做了跨站 Origin/Referer 拦截(CSRF)。
+        # 用 _no_bootstrap 版本:本接口访客拖一下卡片就会 POST,不该成为
+        # 白名单首次自举的入口(见该函数的 docstring)。
+        paper_admin_ip.require_admin_ip_no_bootstrap(request)
     try:
         service.save_layout(user, req.layout)
     except service.LayoutError as e:

@@ -1,10 +1,13 @@
 import asyncio
+import hashlib
 import json
+import re
 import threading
 import time
 from datetime import date as _date
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import parse_qs
 
 import pandas as pd
 from fastapi import Depends, FastAPI, HTTPException, Response
@@ -148,7 +151,7 @@ _BACKTEST_WINDOW = 60.0    # 秒
 _BACKTEST_LOCK = threading.Lock()
 # 单进程常驻服务:_BACKTEST_HITS 按 IP 建条目,窗口外的时间戳会被弹出,但空条目
 # 本身留在 dict 里 —— 公网站点跑久了就是只增不减的慢性内存增长。每隔
-# _SWEEP_INTERVAL 秒顺手清一次已过期的空条目(清理发生在已持锁的路径里,不额外加锁)。
+# _BACKTEST_SWEEP_INTERVAL 秒顺手清一次过期条目(清理在已持锁的路径里,不额外加锁)。
 _BACKTEST_SWEEP_INTERVAL = 300.0
 _backtest_last_sweep = 0.0
 
@@ -237,28 +240,64 @@ STATIC_DIR = Path(__file__).parent / "static"
 # Cache-Control,浏览器于是走"启发式新鲜期"((now - Last-Modified) * 10%)——
 # 一个两周没改的 JS 能被缓存一天多且期间完全不回源。曾因此翻车:HTML 里的
 # 内联 onclick 改成事件委托后忘了 bump ?v=,老用户拿到"新 HTML + 旧 JS",
-# 整页按钮失灵。这里把两端都定死,不再依赖启发式。
+# 整页按钮失灵。
 #
-#   /static?v=xxx  → immutable 一年(URL 带版本号,内容变则 URL 变)
-#   /static 无版本 → 5 分钟 + must-revalidate(漏加 ?v= 时不至于锁死一年)
-#   HTML 文档      → no-cache(仍走 etag 304,便宜;但每次都校验)
+# 光把 Cache-Control 定死还不够 —— 那只是把"漏 bump ?v=" 的惩罚从缓存一两天
+# 放大成缓存一年,失误本身还得靠人不犯。所以版本号改成**服务端按文件内容
+# 自动注入**:HTML 里写什么 ?v= 都无所谓,响应前统一换成该文件当前内容的
+# sha256 前 12 位。内容变 → URL 变 → 浏览器必然重新拉;内容没变 → URL 不变 →
+# 继续吃 immutable 缓存。人不需要再维护 26 个版本号,这类 bug 从根上消失。
+#
+#   /static?v=<hash> → immutable 一年
+#   /static 无版本    → 5 分钟 + must-revalidate
+#   HTML 文档         → no-cache + ETag(内容变才重传)
 _STATIC_IMMUTABLE = "public, max-age=31536000, immutable"
 _STATIC_SHORT = "public, max-age=300, must-revalidate"
 _HTML_CACHE = "no-cache"
 
+# 匹配 HTML 里对本站静态资源的引用,?v=... 可有可无
+_ASSET_REF_RE = re.compile(r'(/static/[A-Za-z0-9_\-./]+\.(?:js|css))(\?v=[^"\']*)?')
+_asset_hash_cache: Dict[str, tuple] = {}   # rel_path  -> ((mtime,size), hash)
+_html_raw_cache: Dict[str, tuple] = {}     # abs_path  -> ((mtime,size), 原始文本)
+
+
+def _asset_hash(rel_path: str) -> Optional[str]:
+    """/static/js/app.js → 该文件内容 sha256 的前 12 位。按 (mtime,size) 缓存。"""
+    fp = STATIC_DIR / rel_path[len("/static/"):]
+    try:
+        st = fp.stat()
+    except OSError:
+        return None            # 引用了不存在的文件:原样放过,别把页面搞挂
+    key = (st.st_mtime_ns, st.st_size)
+    hit = _asset_hash_cache.get(rel_path)
+    if hit and hit[0] == key:
+        return hit[1]
+    digest = hashlib.sha256(fp.read_bytes()).hexdigest()[:12]
+    _asset_hash_cache[rel_path] = (key, digest)
+    return digest
+
+
+def _stamp_asset_versions(html: str) -> str:
+    def sub(m: "re.Match") -> str:
+        ref = m.group(1)
+        h = _asset_hash(ref)
+        return f"{ref}?v={h}" if h else m.group(0)
+    return _ASSET_REF_RE.sub(sub, html)
+
 
 class VersionedStaticFiles(StaticFiles):
-    """带版本号(?v=)的静态资源可以长缓存,没带的只给短缓存。
+    """带版本号(?v=)的静态资源长缓存,没带的只给短缓存。
 
-    刻意按"请求是否带 v 参数"而不是一律 immutable —— 后者会把任何忘了加
-    版本号的资源锁死一年,比现状更糟。
+    判定要解析查询串取 v 这个 key —— 早先写成 `b"v=" in query_string` 的子串
+    匹配,`?rev=1` 也会被当成带版本号而缓存一年。
     """
 
     async def get_response(self, path: str, scope):
         resp = await super().get_response(path, scope)
         # 只给真正命中的文件打缓存头;404/405 之类不缓存
         if resp.status_code in (200, 304):
-            versioned = b"v=" in scope.get("query_string", b"")
+            qs = parse_qs(scope.get("query_string", b"").decode("latin-1"))
+            versioned = bool(qs.get("v", [""])[0])
             resp.headers["Cache-Control"] = (
                 _STATIC_IMMUTABLE if versioned else _STATIC_SHORT
             )
@@ -268,10 +307,35 @@ class VersionedStaticFiles(StaticFiles):
 app.mount("/static", VersionedStaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
-def _html(*parts: str) -> FileResponse:
-    """返回一个页面 HTML,并强制 no-cache —— 页面和它引用的 JS 必须成对更新。"""
-    return FileResponse(str(STATIC_DIR.joinpath(*parts)),
-                        headers={"Cache-Control": _HTML_CACHE})
+def _html(request: Request, *parts: str) -> Response:
+    """返回页面 HTML:自动给静态资源引用打上内容 hash 版本号,并配 no-cache + ETag。
+
+    no-cache 不是"不缓存",是"每次都回源校验" —— 配 ETag 后内容没变就 304,
+    只有几十字节的开销,而页面和它引用的 JS 永远不会出现版本错配。
+    """
+    fp = STATIC_DIR.joinpath(*parts)
+    st = fp.stat()
+    key = (st.st_mtime_ns, st.st_size)
+
+    # 只缓存**原始文本**(省一次磁盘读),戳版本号每次都重算。
+    # 别把戳好的成品也缓存起来按 HTML 的 mtime 失效 —— "只改了 JS、没动 HTML"
+    # 恰恰是最常见的情况,那样戳出来的还是旧 hash,等于把这个 bug 换层再造一遍。
+    # 重算的实际开销是每个被引用文件一次 stat(hash 本身有 _asset_hash_cache)。
+    cached = _html_raw_cache.get(str(fp))
+    if cached and cached[0] == key:
+        text = cached[1]
+    else:
+        text = fp.read_text(encoding="utf-8")
+        _html_raw_cache[str(fp)] = (key, text)
+
+    body = _stamp_asset_versions(text).encode("utf-8")
+    etag = '"%s"' % hashlib.sha256(body).hexdigest()[:16]
+
+    headers = {"Cache-Control": _HTML_CACHE, "ETag": etag}
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=headers)
+    return Response(content=body, media_type="text/html; charset=utf-8",
+                    headers=headers)
 
 
 def _kline_records(df: pd.DataFrame) -> List[Dict[str, Any]]:
@@ -295,54 +359,54 @@ def _kline_records(df: pd.DataFrame) -> List[Dict[str, Any]]:
 
 
 @app.get("/")
-async def root():
-    return _html("index.html")
+async def root(request: Request):
+    return _html(request, "index.html")
 
 
 @app.get("/paper_trading")
-async def paper_trading_page():
-    return _html("paper_trading.html")
+async def paper_trading_page(request: Request):
+    return _html(request, "paper_trading.html")
 
 
 @app.get("/cloudmap", include_in_schema=False)
-async def page_cloudmap():
+async def page_cloudmap(request: Request):
     """大盘云图（D3 Treemap）。资源在 app/static/cloudmap/ 下。"""
-    return _html("cloudmap", "index.html")
+    return _html(request, "cloudmap", "index.html")
 
 
 @app.get("/ai_hotsector", include_in_schema=False)
-async def page_ai_hotsector():
-    return _html("ai_hotsector.html")
+async def page_ai_hotsector(request: Request):
+    return _html(request, "ai_hotsector.html")
 
 
 @app.get("/daily_review", include_in_schema=False)
-async def page_daily_review():
-    return _html("daily_review.html")
+async def page_daily_review(request: Request):
+    return _html(request, "daily_review.html")
 
 
 @app.get("/subscribe", include_in_schema=False)
-async def page_subscribe():
-    return _html("subscribe.html")
+async def page_subscribe(request: Request):
+    return _html(request, "subscribe.html")
 
 
 @app.get("/watchlist", include_in_schema=False)
-async def page_watchlist():
-    return _html("watchlist.html")
+async def page_watchlist(request: Request):
+    return _html(request, "watchlist.html")
 
 
 @app.get("/dashboard", include_in_schema=False)
-async def page_dashboard():
-    return _html("dashboard.html")
+async def page_dashboard(request: Request):
+    return _html(request, "dashboard.html")
 
 
 @app.get("/my_board", include_in_schema=False)
-async def page_my_board():
-    return _html("my_board.html")
+async def page_my_board(request: Request):
+    return _html(request, "my_board.html")
 
 
 @app.get("/legal", include_in_schema=False)
-async def page_legal():
-    return _html("legal.html")
+async def page_legal(request: Request):
+    return _html(request, "legal.html")
 
 
 _SITE_ORIGIN = "https://shoupan.asia"
@@ -808,8 +872,8 @@ def _iso(v):
 
 
 @app.get("/admin/tasks", include_in_schema=False)
-async def page_tasks():
-    return _html("tasks.html")
+async def page_tasks(request: Request):
+    return _html(request, "tasks.html")
 
 
 @app.get("/tasks", include_in_schema=False)

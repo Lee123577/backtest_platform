@@ -327,3 +327,23 @@ def require_admin_ip(request: Request) -> str:
                    f"如果是新设备，请联系已授权的管理员添加。",
         )
     return ip
+
+
+def require_admin_ip_no_bootstrap(request: Request) -> str:
+    """同 require_admin_ip，但**不走首次自举**。
+
+    给那些"普通访客也会打到"的写接口用(如 /api/my_board/layout —— 拖一下
+    卡片就会 POST)。自举分支只该由管理员自觉访问管理端点来触发;挂在访客
+    随手就能碰到的接口上，等于把"白名单为空 + 客户端 IP 看着像内网"这个
+    组合的暴露面无谓地放大了(反代未配 TRUSTED_PROXIES 时,所有请求的
+    直连 IP 都是 127.0.0.1,正好命中 _is_private_ip)。
+    """
+    _reject_cross_site(request)
+    ensure_table()
+    ip = get_request_ip(request)
+    if not is_admin(ip):
+        raise HTTPException(
+            status_code=403,
+            detail=f"IP {ip} 不在管理白名单，无权进行此写操作。",
+        )
+    return ip

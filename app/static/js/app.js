@@ -136,7 +136,9 @@ function renderSignalStrategyGrid() {
 function quickRun(strategyId) {
   const codeEl = document.getElementById('stockCode');
   if (validateStockCode(codeEl.value.trim())) codeEl.value = '000001';
-  if (!instances.some(i => i.id === strategyId)) addInstance(strategyId);
+  // 已在列表里就直接跑;不在则先加 —— 加不进去(已达上限)就停,别跑成一堆
+  // 用户没点的策略还把上面那条上限提示给覆盖掉。
+  if (!instances.some(i => i.id === strategyId) && !addInstance(strategyId)) return;
   runBacktest();
 }
 
@@ -242,13 +244,15 @@ function clearPortfolioStrategy() {
 // 是为了给出人话提示，而不是让用户吃一个 422。
 const MAX_INSTANCES = 20;
 
+// 返回是否真的加进去了 —— quickRun 要据此决定还跑不跑，否则满额时会把
+// 用户没选中的那 20 个跑一遍、结果里根本没有他点的那个策略。
 function addInstance(strategyId) {
   const strategy = signalStrategies.find(s => s.id === strategyId);
-  if (!strategy) return;
+  if (!strategy) return false;
 
   if (instances.length >= MAX_INSTANCES) {
     showError(`最多同时对比 ${MAX_INSTANCES} 个策略实例，请先移除一些再添加。`);
-    return;
+    return false;
   }
 
   const params = {};
@@ -262,6 +266,7 @@ function addInstance(strategyId) {
   renderInstances();
   renderSignalStrategyGrid();
   updateRunBtn();
+  return true;
 }
 
 function removeInstance(idx) {

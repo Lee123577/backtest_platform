@@ -888,10 +888,14 @@
   var saveTimer = null;
   var zCounter = 100;       // 每次拖拽/缩放递增,保证"最后操作的卡片在最上层"
 
+  // 进页面时的登录态。拿它是为了在保存被拒(403)时能说对话:未登录的人写的是
+  // 全站共享布局、本来就该被拦;而进来时是登录状态却被拒,说明会话中途失效了。
+  var wasLoggedIn = false;
+
   function fetchBoard() {
     return fetch("/api/my_board/layout")
       .then(function (r) { return r.ok ? r.json() : { layout: {} }; })
-      .then(function (j) { return j.layout || {}; })
+      .then(function (j) { wasLoggedIn = !!j.logged_in; return j.layout || {}; })
       .catch(function () { return {}; });
   }
 
@@ -934,7 +938,10 @@
     }).then(function (r) {
       if (r.status === 403) {
         saveForbidden = true;
-        showToast("这是访客共享的默认布局，只有维护者能改动。你的调整本次浏览有效，刷新后恢复。", 6000);
+        showToast(wasLoggedIn
+          ? "登录状态已失效，布局无法保存。请重新登录后再调整。"
+          : "这是访客共享的默认布局，只有维护者能改动。你的调整本次浏览有效，刷新后恢复。",
+          6000);
         return;
       }
       if (!r.ok) notifySaveError();
