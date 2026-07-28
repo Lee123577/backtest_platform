@@ -139,7 +139,7 @@ function renderSummary(tasks) {
       ? '<span class="ran-today ran-yes">今天已成功</span>'
       : '<span class="ran-today ran-no">今天未跑</span>';
     const errLine = t.last_status && t.last_status !== 'success' && t.last_error_msg
-      ? `<div class="kv-line"><span>错误</span><span class="v" style="color:#cf222e;font-size:11px;max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(t.last_error_msg)}</span></div>`
+      ? `<div class="kv-line"><span>错误</span><span class="v" style="color:#cf222e;font-size:11px;max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(t.last_error_msg)}</span></div>`
       : '';
     // 下次预计运行：今天已成功则不显示（避免误导用户以为还会再跑一次）
     const nxt = t.ran_today_success ? null : nextRunOf(t.schedule);
@@ -156,7 +156,7 @@ function renderSummary(tasks) {
         <div class="kv-line"><span>耗时</span><span class="v">${fmtDur(t.last_duration_ms)}</span></div>
         <div class="kv-line"><span>近 30 天</span><span class="v">${t.recent_success}/${t.recent_total} 成功（${sr}）· 失败 ${t.recent_failed}</span></div>
         ${errLine}
-        <button class="rerun-btn" data-name="${escapeHtml(t.task_name)}">▶ 立即重跑</button>
+        <button class="rerun-btn" data-name="${esc(t.task_name)}">▶ 立即重跑</button>
       </div>`;
   }).join('');
 }
@@ -231,7 +231,7 @@ function renderRuns(runs) {
         <td>${fmtDur(r.duration_ms)}</td>
         <td>${r.exit_code === null ? '—' : r.exit_code}</td>
         <td style="color:#57606a;font-size:12px;max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
-          ${escapeHtml(r.error_msg || (r.stdout_tail || '').split('\n').slice(-1)[0] || '')}
+          ${esc(r.error_msg || (r.stdout_tail || '').split('\n').slice(-1)[0] || '')}
         </td>
       </tr>`;
   }).join('');
@@ -272,9 +272,9 @@ function showDetail(id) {
       <div class="kv-item"><div class="kv-label">退出码</div><div class="kv-val">${r.exit_code === null ? '—' : r.exit_code}</div></div>
       <div class="kv-item"><div class="kv-label">主机</div><div class="kv-val">${r.host || '—'}</div></div>
     </div>
-    ${r.error_msg ? `<h4 style="margin:14px 0 6px;color:#cf222e">错误</h4><pre class="tail-pre">${escapeHtml(r.error_msg)}</pre>` : ''}
-    ${r.stdout_tail ? `<h4 style="margin:14px 0 6px">stdout（末尾）</h4><pre class="tail-pre">${escapeHtml(r.stdout_tail)}</pre>` : ''}
-    ${r.stderr_tail ? `<h4 style="margin:14px 0 6px">stderr（末尾）</h4><pre class="tail-pre">${escapeHtml(r.stderr_tail)}</pre>` : ''}
+    ${r.error_msg ? `<h4 style="margin:14px 0 6px;color:#cf222e">错误</h4><pre class="tail-pre">${esc(r.error_msg)}</pre>` : ''}
+    ${r.stdout_tail ? `<h4 style="margin:14px 0 6px">stdout（末尾）</h4><pre class="tail-pre">${esc(r.stdout_tail)}</pre>` : ''}
+    ${r.stderr_tail ? `<h4 style="margin:14px 0 6px">stderr（末尾）</h4><pre class="tail-pre">${esc(r.stderr_tail)}</pre>` : ''}
   `;
 }
 
@@ -321,12 +321,6 @@ async function triggerRun(name, btn) {
   }
 }
 
-function escapeHtml(s) {
-  if (s === null || s === undefined) return '';
-  return String(s).replace(/[&<>"']/g, c => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-  }[c]));
-}
 
 // ── 今日数据入库详情 + 访问统计 ─────────────────────────────────────────────
 
@@ -354,7 +348,7 @@ async function loadDataStatus() {
     renderDataStatus(data);
   } catch (e) {
     document.getElementById('dsGrid').innerHTML =
-      `<div class="no-data">加载失败：${escapeHtml(e.message)}</div>`;
+      `<div class="no-data">加载失败：${esc(e.message)}</div>`;
   }
 }
 
@@ -389,20 +383,20 @@ function renderDataStatus(data) {
       <div class="ds-card">
         <div class="ds-card-head">
           <span class="ds-icon">${it.icon || '📊'}</span>
-          <span class="ds-name">${escapeHtml(it.name)}</span>
+          <span class="ds-name">${esc(it.name)}</span>
           <span class="ds-status ${grade}">${statusLabel(grade)}</span>
         </div>
         <div class="ds-numbers">
           <span class="ds-actual">${actualText}</span>
           <span class="ds-slash">/</span>
           <span class="ds-expected">${expectedText}</span>
-          <span class="ds-unit">${escapeHtml(it.unit || '')}</span>
+          <span class="ds-unit">${esc(it.unit || '')}</span>
           ${missingHTML}
         </div>
         <div class="ds-bar">
           <div class="ds-bar-fill ${grade}" style="width:${widthStyle};"></div>
         </div>
-        <div class="ds-note">${escapeHtml(it.note || '')} · ${pctText}</div>
+        <div class="ds-note">${esc(it.note || '')} · ${pctText}</div>
       </div>
     `;
   }).join('');
@@ -418,7 +412,7 @@ async function loadTraffic() {
     document.getElementById('trafficPv').textContent = '—';
     document.getElementById('trafficUv').textContent = '—';
     document.getElementById('trafficDetail').innerHTML =
-      `<div>加载失败：${escapeHtml(e.message)}</div>`;
+      `<div>加载失败：${esc(e.message)}</div>`;
   }
 }
 
@@ -508,7 +502,7 @@ function renderNoPermission() {
       <div class="panel-title">无访问权限</div>
       <div class="no-data" style="padding:32px 0;text-align:center;line-height:1.9;">
         「定时任务」是运维页面，仅限管理员访问。<br>
-        <span style="font-size:12px;color:#8a929c;">你的 IP：${escapeHtml(_adminInfo.ip || '—')}</span>
+        <span style="font-size:12px;color:#8a929c;">你的 IP：${esc(_adminInfo.ip || '—')}</span>
       </div>
     </div>`;
 }

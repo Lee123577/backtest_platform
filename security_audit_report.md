@@ -3,7 +3,9 @@
 > 审计角色：安全工程师（应用安全 / 威胁建模 / 安全加固）
 > 审计对象：`D:\backtest_platform`（FastAPI + MySQL + 前端静态资源）
 > 审计方式：静态代码审计 + 威胁建模（STRIDE）+ 配置/依赖核查
-> 日期：2026-07-24
+> 日期：2026-07-24（原始审计）
+> 最近更新：2026-07-28 —— §3.3 / §3.4 的全部待办项均已完成，新增 §3.7 部署面暴露。
+> **改动本文件的人请同步更新各项状态**，过期的安全文档比没有更危险。
 
 ---
 
@@ -78,14 +80,42 @@
 - 设置 `TRUSTED_PROXIES=127.0.0.1,10.0.0.0/8`（按实际反代网段），否则 2.1/2.2 的防护不成立。
 - 反代层强制 HTTPS + `X-Forwarded-Proto: https`，使 HSTS 与 `Secure` Cookie 生效。
 
-### 3.3 匿名写接口滥用
-- `/api/feedback`（匿名写库）增加频控 + 内容长度上限 + 可选 CAPTCHA。
-- `/api/my_board/layout` 访客可覆盖全站共享默认布局，建议改为需登录或加基础校验，避免内容投毒。
+### 3.3 匿名写接口滥用 —— ✅ 已于 2026-07-28 全部完成
+- ~~`/api/feedback`（匿名写库）增加频控 + 内容长度上限~~ → 已完成（`25d464d`）：
+  `app/feedback/service.py` 加 `IP_MAX_PER_HOUR=5`、`MAX_CONTENT=2000`、`MAX_CONTACT=100`，
+  超限抛 `FeedbackRateLimitError` → HTTP 429。CAPTCHA 暂未加，当前量级不需要。
+- ~~`/api/my_board/layout` 访客可覆盖全站共享默认布局~~ → 已完成：按身份分流 ——
+  已登录写自己那一行、自由保存；未登录写的是共享行（`GUEST_USER_ID=0`），
+  要求来自管理白名单 IP。保留了「维护者未登录摆布局＝新访客默认视图」这一产品行为，
+  同时挡住路人投毒。前端对 403 单独处理，不再误报「保存失败」。
 
-### 3.4 纵深防御（防御性）
-- `app/data_status/api.py` 的 `traffic_today` 用 `INFORMATION_SCHEMA` 探测出的列名拼进 SQL（`{tcol}`）。当前值来自库元数据、非用户输入，但建议对 `tcol` 加白名单（已知列名集合）以彻底消除标识符注入面。
-- `app/data/market_data.py` 用 `subprocess` + `pickle` 做跨进程 IPC（无用户输入触及，风险低），建议改 `parquet`/`feather` 等更安全序列化。
-- CSP 收紧：前端大量使用内联 `onclick=` 处理器，故当前 CSP 保留 `script-src 'unsafe-inline'`。若把内联事件改为 `addEventListener` 绑定，即可升级为 `script-src 'self'`（无 `unsafe-inline`），XSS 防护显著加强。
+### 3.4 纵深防御（防御性）—— ✅ 已于 2026-07-27 全部完成（`9500748`）
+- ~~`traffic_today` 的 `{tcol}` 标识符拼接~~ → 已完成：`app/data_status/api.py` 加
+  `_SAFE_IDENT_RE = ^[A-Za-z_][A-Za-z0-9_]{0,63}$` 白名单校验。
+- ~~`market_data.py` 的 `subprocess` + `pickle` IPC~~ → 已完成：改为 CSV 明文
+  （`to_csv` / `read_csv`），彻底移除反序列化执行面。未用 parquet 是因为生产机
+  没装 pyarrow，CSV 零依赖且此处数据结构简单（4 列扁平表）。
+- ~~CSP 收紧~~ → 已完成：全站 ~37 处内联 `onclick/onchange/oninput` 改为容器级
+  事件委托，CSP 升级为 `script-src 'self'`（已去掉 `unsafe-inline`）。
+  > 教训：该改动使 HTML 与 JS 变成必须成对更新，但当时漏 bump 三个 `?v=`
+  > 缓存版本号，老用户会拿到「新 HTML + 旧 JS」导致整页按钮失灵。
+  > 已在 `a37bb7a` 修复，并在 `app/main.py` 加了显式 Cache-Control 策略从根上消除
+  > 对浏览器启发式缓存的依赖（见 §3.7）。
+
+### 3.7 部署面暴露 —— ✅ 已于 2026-07-28 处理（本轮新发现）
+- ~~uvicorn 绑定 `0.0.0.0:8000`，公网可直连绕过 nginx~~ → 已改为 `--host 127.0.0.1`。
+  nginx 本来就是 `proxy_pass http://127.0.0.1:8000`，不受影响。
+  绕过 nginx 意味着无 TLS、无反代层限流；实测 `X-Forwarded-For` 伪造**无效**
+  （`_client_ip` 从右往左跳过可信代理的写法是对的），故非权限绕过，但仍属明文暴露。
+- ~~`.env` 中 `MYSQL_HOST` 指向自己的公网 IP~~ → 已改为 `127.0.0.1`：
+  此前每条 SQL 都在公网网卡上兜一圈，且 `require_secure_transport=OFF` 全程明文。
+- `.env` 权限从 `644` 收紧为 `600`。
+- **仍未处理（业务方决定保留）**：MySQL `bind_address=*` + `root@%` 账号 + 3306
+  对公网 TCP 可达。维护者需要从本地直连生产库，故保留远程 root。
+  当前唯一屏障是云厂商安全组（仓库外、不可见）。建议后续改为：安全组只放行
+  维护者出口 IP，或改用 SSH 隧道 + `bind-address=127.0.0.1`。
+- 同机的宝塔面板 `:8888`、phpMyAdmin 转发 `:888` 亦对公网监听，不在本仓库范围，
+  建议至少做 IP 限制。
 
 ### 3.5 CI/CD 安全流水线
 - 已随本报告附带 `.github/workflows/security-scan.yml`：SAST（Semgrep OWASP/CWE）、SCA（Trivy）、密钥扫描（Gitleaks）。任何 PR 合并前必须通过这些扫描。

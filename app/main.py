@@ -11,7 +11,7 @@ from fastapi import Depends, FastAPI, HTTPException, Response
 from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.requests import Request
 
 from .config import settings
@@ -146,12 +146,32 @@ _BACKTEST_HITS: dict = {}
 _BACKTEST_LIMIT = 6        # 每窗口最多请求数
 _BACKTEST_WINDOW = 60.0    # 秒
 _BACKTEST_LOCK = threading.Lock()
+# 单进程常驻服务:_BACKTEST_HITS 按 IP 建条目,窗口外的时间戳会被弹出,但空条目
+# 本身留在 dict 里 —— 公网站点跑久了就是只增不减的慢性内存增长。每隔
+# _SWEEP_INTERVAL 秒顺手清一次已过期的空条目(清理发生在已持锁的路径里,不额外加锁)。
+_BACKTEST_SWEEP_INTERVAL = 300.0
+_backtest_last_sweep = 0.0
+
+
+def _sweep_backtest_hits(now: float) -> None:
+    """清掉窗口内已无请求的 IP 条目。调用方必须已持有 _BACKTEST_LOCK。"""
+    global _backtest_last_sweep
+    if now - _backtest_last_sweep < _BACKTEST_SWEEP_INTERVAL:
+        return
+    _backtest_last_sweep = now
+    stale = [
+        ip for ip, ts in _BACKTEST_HITS.items()
+        if not ts or now - ts[-1] > _BACKTEST_WINDOW
+    ]
+    for ip in stale:
+        del _BACKTEST_HITS[ip]
 
 
 def _rate_limit_backtest(request: Request) -> None:
     ip = _client_ip(request)
     now = time.time()
     with _BACKTEST_LOCK:
+        _sweep_backtest_hits(now)
         hits = _BACKTEST_HITS.setdefault(ip, [])
         while hits and now - hits[0] > _BACKTEST_WINDOW:
             hits.pop(0)
@@ -210,7 +230,48 @@ from .my_board.api import router as my_board_router  # noqa: E402
 app.include_router(my_board_router)
 
 STATIC_DIR = Path(__file__).parent / "static"
-app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+# ── 缓存策略 ────────────────────────────────────────────────────────────────
+# 起因:Starlette 的 StaticFiles / FileResponse 只发 etag+last-modified,不发
+# Cache-Control,浏览器于是走"启发式新鲜期"((now - Last-Modified) * 10%)——
+# 一个两周没改的 JS 能被缓存一天多且期间完全不回源。曾因此翻车:HTML 里的
+# 内联 onclick 改成事件委托后忘了 bump ?v=,老用户拿到"新 HTML + 旧 JS",
+# 整页按钮失灵。这里把两端都定死,不再依赖启发式。
+#
+#   /static?v=xxx  → immutable 一年(URL 带版本号,内容变则 URL 变)
+#   /static 无版本 → 5 分钟 + must-revalidate(漏加 ?v= 时不至于锁死一年)
+#   HTML 文档      → no-cache(仍走 etag 304,便宜;但每次都校验)
+_STATIC_IMMUTABLE = "public, max-age=31536000, immutable"
+_STATIC_SHORT = "public, max-age=300, must-revalidate"
+_HTML_CACHE = "no-cache"
+
+
+class VersionedStaticFiles(StaticFiles):
+    """带版本号(?v=)的静态资源可以长缓存,没带的只给短缓存。
+
+    刻意按"请求是否带 v 参数"而不是一律 immutable —— 后者会把任何忘了加
+    版本号的资源锁死一年,比现状更糟。
+    """
+
+    async def get_response(self, path: str, scope):
+        resp = await super().get_response(path, scope)
+        # 只给真正命中的文件打缓存头;404/405 之类不缓存
+        if resp.status_code in (200, 304):
+            versioned = b"v=" in scope.get("query_string", b"")
+            resp.headers["Cache-Control"] = (
+                _STATIC_IMMUTABLE if versioned else _STATIC_SHORT
+            )
+        return resp
+
+
+app.mount("/static", VersionedStaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+def _html(*parts: str) -> FileResponse:
+    """返回一个页面 HTML,并强制 no-cache —— 页面和它引用的 JS 必须成对更新。"""
+    return FileResponse(str(STATIC_DIR.joinpath(*parts)),
+                        headers={"Cache-Control": _HTML_CACHE})
 
 
 def _kline_records(df: pd.DataFrame) -> List[Dict[str, Any]]:
@@ -235,53 +296,53 @@ def _kline_records(df: pd.DataFrame) -> List[Dict[str, Any]]:
 
 @app.get("/")
 async def root():
-    return FileResponse(str(STATIC_DIR / "index.html"))
+    return _html("index.html")
 
 
 @app.get("/paper_trading")
 async def paper_trading_page():
-    return FileResponse(str(STATIC_DIR / "paper_trading.html"))
+    return _html("paper_trading.html")
 
 
 @app.get("/cloudmap", include_in_schema=False)
 async def page_cloudmap():
     """大盘云图（D3 Treemap）。资源在 app/static/cloudmap/ 下。"""
-    return FileResponse(str(STATIC_DIR / "cloudmap" / "index.html"))
+    return _html("cloudmap", "index.html")
 
 
 @app.get("/ai_hotsector", include_in_schema=False)
 async def page_ai_hotsector():
-    return FileResponse(str(STATIC_DIR / "ai_hotsector.html"))
+    return _html("ai_hotsector.html")
 
 
 @app.get("/daily_review", include_in_schema=False)
 async def page_daily_review():
-    return FileResponse(str(STATIC_DIR / "daily_review.html"))
+    return _html("daily_review.html")
 
 
 @app.get("/subscribe", include_in_schema=False)
 async def page_subscribe():
-    return FileResponse(str(STATIC_DIR / "subscribe.html"))
+    return _html("subscribe.html")
 
 
 @app.get("/watchlist", include_in_schema=False)
 async def page_watchlist():
-    return FileResponse(str(STATIC_DIR / "watchlist.html"))
+    return _html("watchlist.html")
 
 
 @app.get("/dashboard", include_in_schema=False)
 async def page_dashboard():
-    return FileResponse(str(STATIC_DIR / "dashboard.html"))
+    return _html("dashboard.html")
 
 
 @app.get("/my_board", include_in_schema=False)
 async def page_my_board():
-    return FileResponse(str(STATIC_DIR / "my_board.html"))
+    return _html("my_board.html")
 
 
 @app.get("/legal", include_in_schema=False)
 async def page_legal():
-    return FileResponse(str(STATIC_DIR / "legal.html"))
+    return _html("legal.html")
 
 
 _SITE_ORIGIN = "https://shoupan.asia"
@@ -748,7 +809,7 @@ def _iso(v):
 
 @app.get("/admin/tasks", include_in_schema=False)
 async def page_tasks():
-    return FileResponse(STATIC_DIR / "tasks.html")
+    return _html("tasks.html")
 
 
 @app.get("/tasks", include_in_schema=False)
@@ -947,7 +1008,11 @@ class BacktestRequest(BaseModel):
     end_date: str
     initial_capital: float = 100_000
     adjust: str = "qfq"
-    strategies: List[StrategyConfig]
+    # 有上限:每个 cfg 都要跑一次全量回测,robustness_check 还会再放大数倍。
+    # 频控只限请求次数、不限单次成本,不设上限的话一个请求就能顶满线程池。
+    # 20 对正常用法足够宽松(共 9 个信号策略,允许同一策略挂多组参数对比),
+    # 前端在 MAX_INSTANCES 处做了同值的拦截,正常操作碰不到这里。
+    strategies: List[StrategyConfig] = Field(..., min_length=1, max_length=20)
     slippage_rate: float = 0.0001
     stop_loss: Optional[float] = None    # e.g. 0.05 for 5% stop-loss
     take_profit: Optional[float] = None  # e.g. 0.20 for 20% take-profit

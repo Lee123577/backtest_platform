@@ -1,22 +1,33 @@
+# 全部依赖都带上限 —— 之前是清一色 `>=` 无上限，一次 `pip install -U` 就可能
+# 把生产打挂（akshare / curl_cffi 这类上游 breaking change 很频繁）。上限统一
+# 卡在下一个大版本，安全补丁照常能进，破坏性升级需要人工改这个文件。
+#
+# 版本区间同时覆盖本地 dev 与生产（两边曾漂到不同的 pandas 大版本：
+# 本地 2.2.2 / 线上 3.0.3）。要真正可复现，下一步是 pip-compile 出 lock 文件。
+# 记录用的实测组合（2026-07-28）:
+#   线上 pandas 3.0.3  numpy 2.4.6  fastapi 0.138.0  starlette 1.3.1  pydantic 2.13.4
+#   本地 pandas 2.2.2  numpy 2.4.4  fastapi 0.136.1
+
 # Core
-python-dotenv>=1.0.0
-PyMySQL>=1.1.0
-fastapi>=0.104.0
-uvicorn[standard]>=0.24.0
-pandas>=2.1.0
-numpy>=1.26.0
-python-multipart>=0.0.6
-httpx>=0.25.0              # MCP streamable-http 客户端(app/llm_assistant)
+python-dotenv>=1.0.0,<2.0
+PyMySQL>=1.1.0,<2.0
+fastapi>=0.104.0,<1.0
+uvicorn[standard]>=0.24.0,<1.0
+pandas>=2.1.0,<4.0
+numpy>=1.26.0,<3.0
+python-multipart>=0.0.6,<1.0
+httpx>=0.25.0,<1.0         # MCP streamable-http 客户端(app/llm_assistant)
 
 # Default data source
-akshare>=1.12.0
-curl_cffi>=0.6.0          # fallback TLS impersonation for akshare market snapshot
+# akshare 在 1.x 内部也常有破坏性改动，上限收得比别的紧
+akshare>=1.12.0,<1.19
+curl_cffi>=0.6.0,<1.0     # fallback TLS impersonation for akshare market snapshot
 
 # Access-log IP geo lookup (offline xdb, no network)
-py-ip2region>=3.0.4        # import name: ip2region; uses data/ip2region_v4.xdb
+py-ip2region>=3.0.4,<4.0   # import name: ip2region; uses data/ip2region_v4.xdb
 
 # Dev / test
-pytest>=7.4.0             # 纯函数测试套件 tests/(无 DB/网络依赖):python -m pytest tests/
+pytest>=7.4.0,<10.0       # 纯函数测试套件 tests/(无 DB/网络依赖):python -m pytest tests/
 
 # Optional data sources (install whichever you use)
 # tqsdk>=3.6.0            # 天勤量化: pip install tqsdk

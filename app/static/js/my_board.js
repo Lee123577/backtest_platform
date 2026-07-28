@@ -919,13 +919,24 @@
     saveErrTimer = setTimeout(function () { saveErrTimer = null; }, 8000);
   }
 
+  // 未登录访客写的是"全站共享默认布局",服务端只允许白名单 IP 改(防内容投毒)。
+  // 这种 403 是身份问题、重试多少次都一样,所以本次会话直接停掉保存:卡片照样
+  // 能拖能缩放(纯前端状态),只是不落库。和真正的保存失败区分开,别反复弹错。
+  var saveForbidden = false;
+
   function doSaveBoard() {
+    if (saveForbidden) return Promise.resolve();
     return fetch("/api/my_board/layout", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ layout: { cards: boardCards, positions: currentLayout } }),
       keepalive: true,   // 防抖触发后立刻关页,请求也别被浏览器取消
     }).then(function (r) {
+      if (r.status === 403) {
+        saveForbidden = true;
+        showToast("这是访客共享的默认布局，只有维护者能改动。你的调整本次浏览有效，刷新后恢复。", 6000);
+        return;
+      }
       if (!r.ok) notifySaveError();
     }).catch(function () { /* 网络抖动是暂时的,静默,下次保存自然重试 */ });
   }
@@ -944,6 +955,7 @@
     if (saveTimer == null) return;
     clearTimeout(saveTimer);
     saveTimer = null;
+    if (saveForbidden) return;   // 已知没权限就别再发了(beacon 拿不到响应,只会白打一次 403)
     var payload = JSON.stringify({ layout: { cards: boardCards, positions: currentLayout } });
     if (navigator.sendBeacon) {
       navigator.sendBeacon("/api/my_board/layout", new Blob([payload], { type: "application/json" }));

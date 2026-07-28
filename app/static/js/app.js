@@ -116,10 +116,10 @@ function renderSignalStrategyGrid() {
     return `
       <div class="strategy-card${hasAdded ? ' selected-card' : ''}" data-id="${s.id}">
         <div class="sc-name">
-          ${escHtml(s.name)}
+          ${esc(s.name)}
           ${hasAdded ? `<span class="sc-count-badge">${count}</span>` : ''}
         </div>
-        <div class="sc-desc">${escHtml(s.description)}</div>
+        <div class="sc-desc">${esc(s.description)}</div>
         <div class="sc-btn-row">
           <button class="btn btn-ghost sc-add sc-add-primary">${hasAdded ? `＋ 再添加（已选 ${count}）` : '＋ 添加'}</button>
           <button class="btn sc-quickrun" title="用推荐参数直接跑一遍示例回测，看看这个策略长什么样"
@@ -147,10 +147,10 @@ function renderPortfolioStrategyGrid() {
       <div class="strategy-card${isSelected ? ' selected-card' : ''}"
            data-id="${s.id}">
         <div class="sc-name">
-          ${escHtml(s.name)}
+          ${esc(s.name)}
           ${isSelected ? '<span class="sc-count-badge">✓</span>' : ''}
         </div>
-        <div class="sc-desc">${escHtml(s.description)}</div>
+        <div class="sc-desc">${esc(s.description)}</div>
         <button class="btn ${isSelected ? 'btn-accent' : 'btn-ghost'} sc-add">
           ${isSelected ? '✓ 已选择' : '✓ 选择'}
         </button>
@@ -183,7 +183,7 @@ function renderPortfolioStrategyDetail() {
   const d = selectedPortfolio?.strategy?.detail;
   if (!d) { el.innerHTML = ''; return; }
   const row = (label, text, cls = '') => text
-    ? `<div class="sd-row ${cls}"><span class="sd-label">${label}</span><span class="sd-text">${escHtml(text)}</span></div>`
+    ? `<div class="sd-row ${cls}"><span class="sd-label">${label}</span><span class="sd-text">${esc(text)}</span></div>`
     : '';
   el.innerHTML = `
     <div class="strategy-detail-box">
@@ -201,7 +201,7 @@ function renderPortfolioInstanceCard() {
 
   const paramRows = Object.entries(inst.strategy.params || {}).map(([key, schema]) => `
     <div class="param-item">
-      <label>${escHtml(schema.description)}</label>
+      <label>${esc(schema.description)}</label>
       <input
         type="number"
         value="${inst.params[key]}"
@@ -215,7 +215,7 @@ function renderPortfolioInstanceCard() {
   document.getElementById('portfolioInstanceCard').innerHTML = `
     <div class="portfolio-instance-card">
       <div class="portfolio-instance-header">
-        <span class="portfolio-instance-title">${escHtml(inst.strategy.name)}</span>
+        <span class="portfolio-instance-title">${esc(inst.strategy.name)}</span>
         <button class="btn btn-danger portfolio-clear-btn" style="font-size:12px;padding:3px 8px">✕ 取消</button>
       </div>
       <div class="portfolio-instance-params">${paramRows}</div>
@@ -238,9 +238,18 @@ function clearPortfolioStrategy() {
 }
 
 // ── Signal strategy instance management ───────────────────────────────────────
+// 与后端 BacktestRequest.strategies 的 max_length 保持一致 —— 在这里拦一下
+// 是为了给出人话提示，而不是让用户吃一个 422。
+const MAX_INSTANCES = 20;
+
 function addInstance(strategyId) {
   const strategy = signalStrategies.find(s => s.id === strategyId);
   if (!strategy) return;
+
+  if (instances.length >= MAX_INSTANCES) {
+    showError(`最多同时对比 ${MAX_INSTANCES} 个策略实例，请先移除一些再添加。`);
+    return;
+  }
 
   const params = {};
   for (const [k, schema] of Object.entries(strategy.params || {})) {
@@ -283,7 +292,7 @@ function renderInstances() {
   list.innerHTML = instances.map((inst, idx) => {
     const paramRows = Object.entries(inst.strategy.params || {}).map(([key, schema]) => `
       <div class="param-item">
-        <label>${escHtml(schema.description)}</label>
+        <label>${esc(schema.description)}</label>
         <input type="number" value="${inst.params[key]}"
           min="${schema.min}" max="${schema.max}"
           step="${schema.type === 'float' ? 0.1 : 1}"
@@ -295,9 +304,9 @@ function renderInstances() {
       <div class="instance-card">
         <div class="instance-header">
           <input class="instance-label-input" type="text"
-            value="${escHtml(inst.label)}"
+            value="${esc(inst.label)}"
             data-idx="${idx}">
-          <span class="instance-badge">${escHtml(inst.strategy.name)}</span>
+          <span class="instance-badge">${esc(inst.strategy.name)}</span>
           <button class="btn btn-danger instance-remove-btn" style="font-size:12px;padding:3px 8px"
                   data-idx="${idx}">✕ 移除</button>
         </div>
@@ -652,7 +661,7 @@ function renderMetrics(results, benchmark) {
   let html = '<div class="metrics-scroll"><table class="metrics-tbl"><thead><tr>';
   html += '<th style="text-align:left">指标</th>';
   cols.forEach(c => {
-    html += `<th class="${c.isBm ? 'bm-col' : ''}">${escHtml(c.strategy_name)}</th>`;
+    html += `<th class="${c.isBm ? 'bm-col' : ''}">${esc(c.strategy_name)}</th>`;
   });
   html += '</tr></thead><tbody>';
 
@@ -683,7 +692,7 @@ function renderMetrics(results, benchmark) {
   if (errored.length) {
     errored.forEach(r => {
       html += `<div class="error-box" style="margin-top:8px">` +
-        `策略「${escHtml(r.strategy_name)}」出错：${escHtml(r.error)}</div>`;
+        `策略「${esc(r.strategy_name)}」出错：${esc(r.error)}</div>`;
     });
   }
   document.getElementById('metricsWrap').innerHTML = html;
@@ -727,7 +736,7 @@ function renderEquityChart(results, benchmark) {
       formatter(params) {
         let s = `<b>${params[0].axisValue}</b><br/>`;
         params.forEach(p => {
-          s += `${p.marker}${escHtml(p.seriesName)}: <b>¥${Number(p.value[1]).toLocaleString()}</b><br/>`;
+          s += `${p.marker}${esc(p.seriesName)}: <b>¥${Number(p.value[1]).toLocaleString()}</b><br/>`;
         });
         return s;
       },
@@ -767,7 +776,7 @@ function renderYearlyBreakdown(results, benchmark) {
 
   let html = '<div class="metrics-scroll"><table class="metrics-tbl"><thead><tr>';
   html += '<th style="text-align:left">年份</th>';
-  cols.forEach(c => { html += `<th class="${c.isBm ? 'bm-col' : ''}">${escHtml(c.strategy_name)}</th>`; });
+  cols.forEach(c => { html += `<th class="${c.isBm ? 'bm-col' : ''}">${esc(c.strategy_name)}</th>`; });
   html += '</tr></thead><tbody>';
 
   years.forEach(y => {
@@ -807,7 +816,7 @@ function renderRobustness(results) {
   let html = '';
   withRobustness.forEach(r => {
     html += `<div class="robustness-block">`;
-    html += `<div class="robustness-strategy-name">${escHtml(r.strategy_name)}</div>`;
+    html += `<div class="robustness-strategy-name">${esc(r.strategy_name)}</div>`;
 
     if (r.sensitivity.length) {
       const baseAnnual = r.metrics?.annual_return;
@@ -820,7 +829,7 @@ function renderRobustness(results) {
         row.variants.forEach((v, vi) => {
           html += '<tr>';
           if (vi === 0) {
-            html += `<td class="row-label" rowspan="${n}">${escHtml(row.param_label)}</td>`;
+            html += `<td class="row-label" rowspan="${n}">${esc(row.param_label)}</td>`;
             html += `<td rowspan="${n}">${row.base_value}</td>`;
             html += `<td rowspan="${n}">${baseAnnual != null ? baseAnnual + '%' : '—'}</td>`;
           }
@@ -885,7 +894,7 @@ function renderTrades(results, isPortfolio) {
 
   withTrades.forEach((r, i) => {
     tabs += `<button class="tab-btn${i === 0 ? ' active' : ''}" data-idx="${i}">
-      ${escHtml(r.strategy_name)}</button>`;
+      ${esc(r.strategy_name)}</button>`;
 
     const buyCount = r.trades.filter(t => t.type === '买入').length;
     const sellCount = r.trades.length - buyCount;
@@ -1031,12 +1040,12 @@ function hideProgressBar() {
 }
 
 function showError(msg) {
-  document.getElementById('settingsError').innerHTML = `<div class="error-box">${escHtml(msg)}</div>`;
+  document.getElementById('settingsError').innerHTML = `<div class="error-box">${esc(msg)}</div>`;
 }
 function clearError() { document.getElementById('settingsError').innerHTML = ''; }
 
 function showPortfolioError(msg) {
-  document.getElementById('portfolioError').innerHTML = `<div class="error-box">${escHtml(msg)}</div>`;
+  document.getElementById('portfolioError').innerHTML = `<div class="error-box">${esc(msg)}</div>`;
 }
 function clearPortfolioError() { document.getElementById('portfolioError').innerHTML = ''; }
 
@@ -1044,8 +1053,3 @@ function scrollTo(id) {
   document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
-function escHtml(str) {
-  return String(str ?? '')
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}

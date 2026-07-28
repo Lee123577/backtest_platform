@@ -1,11 +1,5 @@
 /* 小市值策略 · 实盘观察 — 简洁版前端 */
 
-function escapeHtml(s) {
-  if (s === null || s === undefined) return '';
-  return String(s).replace(/[&<>"']/g, c => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-  }[c]));
-}
 
 const fmtPct = (v) => {
   if (v === null || v === undefined || isNaN(v)) return '—';
@@ -391,7 +385,7 @@ function renderRuns(runs) {
   // 把 notes_struct（结构化）或 notes 字符串渲染为带 badge 的 HTML
   function renderNotes(r) {
     if (r.status === 'error') {
-      return `<span style="color:#cf222e">${escapeHtml(r.error_msg || '')}</span>`;
+      return `<span style="color:#cf222e">${esc(r.error_msg || '')}</span>`;
     }
     // 优先用结构化字段（新版 runner 写入）
     let ns = r.notes_struct;
@@ -406,7 +400,7 @@ function renderRuns(runs) {
         parts.push(`<span class="note-buy">▲买入</span> <span class="note-codes">${ns.buy.join(',')}</span>`);
       if (ns.stop_loss && ns.stop_loss.length)
         parts.push(`<span class="tag-stop" style="font-size:11px">⚠止损</span> <span class="note-codes">${ns.stop_loss.join(',')}</span>`);
-      if (ns.reason) parts.push(`<span style="color:#57606a">${escapeHtml(ns.reason)}</span>`);
+      if (ns.reason) parts.push(`<span style="color:#57606a">${esc(ns.reason)}</span>`);
       return parts.join('　') || '<span style="color:#57606a">持有日，无交易</span>';
     }
     // 兜底：旧字符串 + 正则上色（兼容历史数据）
@@ -1026,7 +1020,7 @@ function renderAdminList(data) {
         <span class="ip">${r.ip}${isMe ? ' (本机)' : ''}</span>
         <span class="note">${r.note || '—'}</span>
         <span class="meta">${r.created_by_ip || '—'} · ${(r.created_at || '').slice(0,16).replace('T',' ')}</span>
-        <button class="del-btn" data-ip="${escapeHtml(r.ip)}"
+        <button class="del-btn" data-ip="${esc(r.ip)}"
                 ${cantDelete ? 'disabled title="不能删除最后一个白名单 IP"' : ''}>
           删除
         </button>
