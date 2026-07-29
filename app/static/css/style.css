@@ -95,6 +95,68 @@ main {
   gap: 16px;
 }
 
+/* ── 首屏价值主张 ── */
+.hero {
+  background: linear-gradient(135deg, rgba(24, 95, 165, .06), rgba(239, 159, 39, .06));
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 22px 24px;
+}
+.hero-title {
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  color: var(--accent);
+  margin: 0 0 6px;
+}
+.hero-sub {
+  font-size: 14px;
+  color: var(--txt2);
+  line-height: 1.75;
+  margin: 0 0 14px;
+  max-width: 700px;
+}
+.hero-points {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 10px 20px;
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+}
+.hero-points li {
+  font-size: 12.5px;
+  color: var(--txt2);
+  line-height: 1.6;
+  padding-left: 14px;
+  border-left: 2px solid var(--brand-2, #EF9F27);
+}
+.hero-points strong {
+  display: block;
+  font-size: 13.5px;
+  color: var(--txt);
+  margin-bottom: 2px;
+}
+.hero-cta { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.hero-cta-hint { font-size: 12px; color: var(--txt2); }
+
+/* ── 分享 ── */
+.share-bar {
+  display: flex; align-items: center; gap: 10px;
+  flex-wrap: wrap; margin-bottom: 14px;
+}
+.share-msg { font-size: 12px; color: var(--txt2); }
+.share-msg a { color: var(--accent); word-break: break-all; }
+
+/* 分享页(/s/{token}) */
+.sh-meta { font-size: 12px; color: var(--txt2); margin-bottom: 12px; }
+.sh-cta { text-align: center; }
+.sh-cta-title { font-size: 16px; font-weight: 700; margin-bottom: 6px; }
+.sh-cta p {
+  font-size: 13px; color: var(--txt2); line-height: 1.7;
+  margin: 0 auto 14px; max-width: 560px;
+}
+
 /* ── Footer ── */
 .site-footer {
   max-width: 1440px;
@@ -572,6 +634,32 @@ table.holdings-tbl { width: 100%; border-collapse: collapse; font-size: 12px; mi
 .robustness-strategy-name { font-size: 13px; font-weight: 700; color: var(--txt); margin-bottom: 8px; }
 .robustness-subtitle { font-size: 12px; font-weight: 600; color: var(--txt2); margin: 10px 0 6px; }
 .oos-hint { font-size: 11.5px; color: var(--txt2); margin-bottom: 6px; }
+
+/* 防过拟合结论卡片。
+   这里**不用** --up/--down:那两个是 A 股涨跌色(涨红跌绿),而"通过/不通过"
+   是另一套语义,绿=通过红=不通过才是通识。混用会让"✅ 通过"显示成红色。 */
+.rb-verdict {
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  border-left: 3px solid;
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+.rb-verdict-head { font-weight: 700; margin-bottom: 2px; }
+.rb-verdict-list { margin: 0; padding-left: 18px; color: var(--txt2); }
+.rb-verdict-list li { margin: 2px 0; }
+.rb-verdict--good { border-color: #1a7f37; background: rgba(26, 127, 55, .07); }
+.rb-verdict--good .rb-verdict-head { color: #1a7f37; }
+.rb-verdict--warn { border-color: #9a6700; background: rgba(154, 103, 0, .08); }
+.rb-verdict--warn .rb-verdict-head { color: #9a6700; }
+.rb-verdict--bad  { border-color: #cf222e; background: rgba(207, 34, 46, .07); }
+.rb-verdict--bad .rb-verdict-head { color: #cf222e; }
+.rb-verdict--none {
+  border-color: var(--border);
+  background: var(--bg2);
+  color: var(--txt2);
+}
 
 /* ── 选股策略：策略说明 + 回测口径(2026 优化) ───────────────────────────── */
 .strategy-detail-box {

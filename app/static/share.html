@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27><text y=%27.9em%27 font-size=%2790%27>%F0%9F%95%90</text></svg>">
+  <title>回测结果分享 | shoupan</title>
+  <meta name="description" content="用收盘 shoupan 跑出的 A 股单股回测结果快照，含净值曲线与防过拟合检查。">
+  <!-- 快照是用户生成的、成千上万份内容近似的页面,放进索引既是薄内容
+       也会带来"晒收益"的合规风险 —— 只做分享链接,不做 SEO 资产 -->
+  <meta name="robots" content="noindex,nofollow">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="收盘 shoupan">
+  <meta property="og:title" content="回测结果分享 | shoupan">
+  <link rel="stylesheet" href="/static/css/style.css">
+  <script src="/static/js/vendor/echarts.min.js"></script>
+  <link rel="stylesheet" href="/static/css/shell.css">
+</head>
+<body>
+
+<header>
+  <h1>🕐 收盘 shoupan</h1>
+  <nav class="header-nav">
+    <a class="nav-btn" href="/" style="text-decoration:none;display:inline-flex;align-items:center;">单股策略</a>
+    <a class="nav-btn" href="/daily_review" style="text-decoration:none;display:inline-flex;align-items:center;">每日复盘</a>
+    <a class="nav-btn" href="/ai_hotsector" style="text-decoration:none;display:inline-flex;align-items:center;">AI热门板块</a>
+  </nav>
+</header>
+
+<main>
+
+  <div class="panel">
+    <div class="panel-title">
+      回测结果 <span id="shTitle">加载中…</span>
+      <span class="tip-badge">仅供研究，不构成投资建议</span>
+    </div>
+    <div id="shMeta" class="sh-meta"></div>
+    <div class="metrics-scroll" id="shMetrics"></div>
+
+    <div class="section-title">净值曲线</div>
+    <div class="chart-wrap-sm" id="shChart"></div>
+
+    <div id="shRobustSection" style="display:none">
+      <div class="section-title">防过拟合检查</div>
+      <div id="shRobust"></div>
+    </div>
+  </div>
+
+  <div class="panel sh-cta">
+    <div class="sh-cta-title">换成你自己的股票试试</div>
+    <p>这份结果是用收盘 shoupan 跑出来的：不写代码，填股票代码、选日期、点开始，
+       并自动做参数扰动与样本内外验证，告诉你结果稳不稳。</p>
+    <a class="btn btn-accent" href="/?utm_source=share&amp;utm_medium=snapshot">立即回测一只股票</a>
+  </div>
+
+</main>
+
+<footer class="site-footer">
+  <div class="site-footer-brand">🕐 收盘 shoupan · 用数据验证策略，让判断有据可依</div>
+  <div class="site-footer-legal"><a href="/legal">隐私政策</a> · <a href="/legal#terms">用户协议</a></div>
+  <div class="site-footer-beian"><a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener">苏ICP备2026049395号-1</a></div>
+</footer>
+
+<script src="/static/js/util.js"></script>
+<script src="/static/js/share.js"></script>
+<script src="/static/js/shell.js"></script>
+</body>
+</html>

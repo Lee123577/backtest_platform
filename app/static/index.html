@@ -4,12 +4,12 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27><text y=%27.9em%27 font-size=%2790%27>%F0%9F%95%90</text></svg>">
-  <title>单股回测 - 收盘 shoupan</title>
-  <meta name="description" content="收盘 shoupan · 用数据验证策略，让判断有据可依 —— A股单股回测与多策略验证平台">
+  <title>A股单股回测·无代码防过拟合 | shoupan</title>
+  <meta name="description" content="不写一行代码，把一只 A 股放进历史里跑一遍：9 种内置策略、前后复权与涨跌停规则内置，并用参数 ±20% 扰动和样本内外 70/30 拆分告诉你这个结果是不是「调」出来的。">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="收盘 shoupan">
-  <meta property="og:title" content="单股回测 - 收盘 shoupan">
-  <meta property="og:description" content="收盘 shoupan · 用数据验证策略，让判断有据可依 —— A股单股回测与多策略验证平台">
+  <meta property="og:title" content="A股单股回测·无代码防过拟合 | shoupan">
+  <meta property="og:description" content="不写一行代码，把一只 A 股放进历史里跑一遍：9 种内置策略、前后复权与涨跌停规则内置，并用参数 ±20% 扰动和样本内外 70/30 拆分告诉你这个结果是不是「调」出来的。">
   <meta property="og:url" content="https://shoupan.asia/">
   <meta name="twitter:card" content="summary">
   <link rel="canonical" href="https://shoupan.asia/">
@@ -65,6 +65,38 @@
 </header>
 
 <main>
+
+  <!-- ══════════════════════════════════════════════════════
+       首屏价值主张
+       原先打开页面第一眼就是"单股回测设置"表单,新访客既不知道这是什么,
+       也看不到本站唯一的差异化(防过拟合检查)。三个能力点对应三件竞品
+       普遍不做或做得重的事:无需代码 / A股规则内置 / 结果可信度检查。
+  ══════════════════════════════════════════════════════ -->
+  <section class="hero">
+    <h2 class="hero-title">让回测说真话</h2>
+    <p class="hero-sub">
+      不写一行代码，把一只 A 股放进历史里跑一遍 ——
+      再告诉你这个结果是真规律，还是「调」出来的。
+    </p>
+    <ul class="hero-points">
+      <li>
+        <strong>不用写代码</strong>
+        填股票代码、选日期、点开始，三步出报告
+      </li>
+      <li>
+        <strong>A 股规则内置</strong>
+        前后复权、涨跌停、停牌、最小 100 股，都替你算好了
+      </li>
+      <li>
+        <strong>防过拟合检查</strong>
+        参数 ±20% 扰动 + 样本内外 70/30 拆分，直接告诉你结果稳不稳
+      </li>
+    </ul>
+    <div class="hero-cta">
+      <button class="btn btn-accent" id="heroDemoBtn" type="button">用示例试跑一次</button>
+      <span class="hero-cta-hint">平安银行 000001 · 均线交叉 · 自 2022 年起</span>
+    </div>
+  </section>
 
   <!-- ══════════════════════════════════════════════════════
        单股策略面板
@@ -125,8 +157,10 @@
         <div class="empty-hint" id="emptyHint"><span class="empty-hint-icon" aria-hidden="true">🗂️</span><span>暂无已选策略，点击上方策略卡片即可添加</span></div>
       </div>
 
+      <!-- 默认开:这是本站与其他回测工具最大的区别,藏在一个默认关的勾选框里
+           等于没有。多跑几组回测的代价，换"这个结果靠不靠谱"的答案，值得。 -->
       <label class="method-check" style="margin-top:14px">
-        <input type="checkbox" id="robustnessCheck">
+        <input type="checkbox" id="robustnessCheck" checked>
         <span>运行防过拟合检查 <em>（参数敏感性 + 样本内/外拆分）</em></span>
         <small>把每个参数各自 ±20% 扰动重跑，观察结果跳动幅度；并把回测区间切成前 70% / 后 30% 独立验证。跳动越大、样本外表现掉得越多，说明结果越可能是"调"出来的偶然，而非真实规律。会多跑几组回测，速度稍慢。</small>
       </label>
@@ -227,6 +261,12 @@
   ══════════════════════════════════════════════════════ -->
   <div class="panel" id="resultsPanel" style="display:none">
     <div class="panel-title">回测结果 <span id="resultSubtitle"></span><span class="tip-badge">仅供研究，不构成投资建议</span></div>
+    <!-- 分享:跑完回测拿不走任何东西,等于每次传播都断在这里 -->
+    <div class="share-bar">
+      <button class="btn btn-outline" id="shareImgBtn" type="button">📷 保存结果图</button>
+      <button class="btn btn-outline" id="shareLinkBtn" type="button">🔗 生成分享链接</button>
+      <span class="share-msg" id="shareMsg"></span>
+    </div>
     <div class="metrics-scroll" id="metricsWrap"></div>
     <div class="section-title">净值曲线</div>
     <div class="chart-wrap-sm" id="equityChart"></div>

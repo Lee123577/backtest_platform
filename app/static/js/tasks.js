@@ -402,6 +402,50 @@ function renderDataStatus(data) {
   }).join('');
 }
 
+// ── 转化漏斗 ────────────────────────────────────────────────────────────────
+// 数据来自自建的 user_event_log + user_visit_log,不接第三方分析。
+// 每层显示绝对数 + 相对上一层的转化率;上一层为 0 时显示"—"而不是 0%,
+// "没有上游"和"上游全流失"不是一回事。
+async function loadFunnel() {
+  const row = document.getElementById('funnelRow');
+  const days = document.getElementById('funnelRange').value;
+  try {
+    const res = await fetch(`/api/analytics/funnel?days=${encodeURIComponent(days)}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    renderFunnel(await res.json());
+  } catch (e) {
+    row.innerHTML = `<div class="no-data">加载失败：${esc(e.message)}</div>`;
+    document.getElementById('funnelChannels').innerHTML = '';
+  }
+}
+
+function renderFunnel(data) {
+  const steps = data.steps || [];
+  document.getElementById('funnelRow').innerHTML = steps.map(s => `
+    <div class="funnel-step">
+      <div class="funnel-step-label">${esc(s.label)}</div>
+      <div class="funnel-step-val">${Number(s.count || 0).toLocaleString()}</div>
+      <div class="funnel-step-rate">${s.rate == null ? '—' : s.rate + '%'}</div>
+    </div>
+  `).join('<div class="funnel-arrow">→</div>');
+
+  const ch = data.channels || [];
+  const wrap = document.getElementById('funnelChannels');
+  if (!ch.length) {
+    wrap.innerHTML = '<div class="no-data">该区间还没有带渠道标记的事件。' +
+      '推广链接加上 ?utm_source=xxx 即可归因。</div>';
+    return;
+  }
+  wrap.innerHTML =
+    '<div class="funnel-ch-title">渠道拆分</div>' +
+    '<div class="metrics-scroll"><table class="metrics-tbl"><thead><tr>' +
+    '<th style="text-align:left">来源</th><th style="text-align:left">事件</th><th>次数</th>' +
+    '</tr></thead><tbody>' +
+    ch.map(r => `<tr><td class="row-label">${esc(r.source)}</td>` +
+      `<td>${esc(r.event)}</td><td>${Number(r.n).toLocaleString()}</td></tr>`).join('') +
+    '</tbody></table></div>';
+}
+
 async function loadTraffic() {
   try {
     const res = await fetch('/api/data_status/traffic_today');
@@ -519,6 +563,8 @@ async function load() {
   loadRuns();
   loadDataStatus();
   loadTraffic();
+  loadFunnel();
+  document.getElementById('funnelRange').addEventListener('change', loadFunnel);
   document.getElementById('dsRefreshAll').addEventListener('click', triggerDailyRefresh);
   // 包一层箭头函数：直接传 loadRuns 会把 Event 对象当成 reset 参数传进去
   document.getElementById('taskFilter').addEventListener('change', () => loadRuns());

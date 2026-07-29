@@ -41,6 +41,7 @@ def _validate_date_range(start: str, end: str) -> None:
     if (e - s).days > _MAX_RANGE_DAYS:
         raise HTTPException(400, f"回测时间跨度最大 15 年,请缩短日期范围")
 
+from .auth import deps as _auth_deps
 from .daily_review import db as _dr_db
 from .daily_review import render as _dr_render
 from .data.calendar import count_trading_days, next_n_trading_days
@@ -237,6 +238,14 @@ app.include_router(sectors_router)
 # 数据看板卡片拖拽布局(登录用户各自一份,访客共享默认布局)
 from .my_board.api import router as my_board_router  # noqa: E402
 app.include_router(my_board_router)
+
+# 转化埋点与漏斗(自建,不引入 GA4/神策 —— 访问日志表本来就在跑)
+from .analytics.api import router as analytics_router  # noqa: E402
+app.include_router(analytics_router)
+
+# 回测结果分享快照(公开链接)
+from .share.api import router as share_router  # noqa: E402
+app.include_router(share_router)
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -438,6 +447,22 @@ async def page_my_board(request: Request):
 @app.get("/legal", include_in_schema=False)
 async def page_legal(request: Request):
     return _html(request, "legal.html")
+
+
+@app.get("/s/{token}", include_in_schema=False)
+async def page_share(token: str, request: Request):
+    """回测结果分享页。内容由 /api/backtest/share/{token} 前端拉取。
+
+    这页**不进 sitemap、页面自带 noindex**:快照是用户生成的,成千上万份
+    结构雷同,放进索引既是薄内容,又会变成一堆"晒收益"页面,合规上不划算。
+    分享靠链接传播,不靠搜索。
+    """
+    if not _SHARE_TOKEN_RE.match(token):
+        raise HTTPException(404, "页面不存在")
+    return _html(request, "share.html")
+
+
+_SHARE_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 
 
 _SITE_ORIGIN = "https://shoupan.asia"
@@ -1427,6 +1452,11 @@ def api_backtest(req: BacktestRequest,
 
     benchmark = calc_benchmark(df, req.initial_capital, slippage_rate=req.slippage_rate)
     kline = _kline_records(df)
+
+    # 漏斗第二层「跑过回测」。在服务端记而不是让前端上报 —— 前端 beacon
+    # 会被拦截器/关页面吃掉,拿它算激活率会系统性偏低。埋点失败不影响返回。
+    _record_backtest_event(request, code, req.robustness_check, len(results))
+
     return {
         "stock_code": code,
         "stock_name": stock_name,
@@ -1435,6 +1465,22 @@ def api_backtest(req: BacktestRequest,
         "kline": kline,
         "capital_warning": capital_warning,
     }
+
+
+def _record_backtest_event(request: Request, code: str,
+                           robustness: bool, n: int) -> None:
+    try:
+        from .analytics.api import request_context
+        from .analytics import service as an_service
+        user = _auth_deps.get_current_user(request)
+        an_service.record(
+            "backtest_run",
+            user_id=int(user["id"]) if user else None,
+            meta={"code": code, "robustness": bool(robustness), "strategies": n},
+            **request_context(request),
+        )
+    except Exception as e:
+        logger.info("回测事件埋点失败(忽略): %s", e)
 
 
 # ── Portfolio backtest ────────────────────────────────────────────────────────

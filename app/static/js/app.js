@@ -12,6 +12,10 @@ let klineChart = null;
 let equityChart = null;
 let currentMode = 'signal';  // 'signal' | 'portfolio'
 
+// 最近一次回测的可分享内容。生成分享链接要把它 POST 回服务端，
+// 而 runBacktest 里的 data 是局部变量,渲染完就没了
+let lastShareable = null;
+
 // ── Boot ──────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('endDate').value = todayStr();
@@ -30,6 +34,23 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   document.getElementById('navSignal').addEventListener('click', () => switchMode('signal'));
   document.getElementById('navPortfolio').addEventListener('click', () => switchMode('portfolio'));
+
+  // 首屏「用示例试跑一次」—— 新访客的 3 秒 aha:不填任何参数就看到完整报告
+  // (含防过拟合结论)。复用策略卡片上的一键试跑,示例股同为 000001 平安银行。
+  document.getElementById('shareImgBtn').addEventListener('click', onShareImage);
+  document.getElementById('shareLinkBtn').addEventListener('click', onShareLink);
+
+  document.getElementById('heroDemoBtn').addEventListener('click', () => {
+    reportEvent('demo_click');
+    if (currentMode !== 'signal') switchMode('signal');
+    // 结果面板要等回测返回才 display:'',所以滚动必须排在 quickRun 之后
+    Promise.resolve(quickRun('ma_cross')).then(() => {
+      const panel = document.getElementById('resultsPanel');
+      if (panel.style.display !== 'none') {
+        panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    });
+  });
 
   window.addEventListener('resize', () => {
     klineChart?.resize();
@@ -139,7 +160,8 @@ function quickRun(strategyId) {
   // 已在列表里就直接跑;不在则先加 —— 加不进去(已达上限)就停,别跑成一堆
   // 用户没点的策略还把上面那条上限提示给覆盖掉。
   if (!instances.some(i => i.id === strategyId) && !addInstance(strategyId)) return;
-  runBacktest();
+  // 把 promise 交出去 —— 调用方(首屏 CTA)要等结果面板真正出现后再滚过去
+  return runBacktest();
 }
 
 function renderPortfolioStrategyGrid() {
@@ -437,6 +459,11 @@ async function runBacktest() {
     renderKline(data.kline, title);
     klineChart?.resize();
 
+    lastShareable = {
+      stock_code: data.stock_code, stock_name: data.stock_name,
+      start_date: start, end_date: end, initial_capital: capital,
+      results: data.results, benchmark: data.benchmark,
+    };
     renderResults(data.results, data.benchmark, `${data.stock_name || data.stock_code}  ${start} → ${end}`);
     equityChart?.resize();
 
@@ -511,6 +538,12 @@ async function runPortfolioBacktest() {
 
       const subtitle = `${selectedPortfolio.strategy.name}  市值${evt.cap_range}  ` +
         `共${evt.universe_count}只股票  ${start} → ${end}`;
+      lastShareable = {
+        stock_name: `${selectedPortfolio.strategy.name}（选股回测）`,
+        start_date: start, end_date: end,
+        initial_capital: parseFloat(document.getElementById('pCapital').value) || null,
+        results: evt.results, benchmark: evt.benchmark,
+      };
       renderResults(evt.results, evt.benchmark, subtitle, true);
       equityChart?.resize();
 
@@ -636,6 +669,7 @@ function renderKline(data, title) {
 // ── Backtest results ──────────────────────────────────────────────────────────
 function renderResults(results, benchmark, subtitle, isPortfolio = false) {
   document.getElementById('resultSubtitle').textContent = subtitle;
+  shareMsg('');   // 上一次的分享链接是上一次回测的,别留在新结果旁边
   renderMetrics(results, benchmark);
   renderEquityChart(results, benchmark);
   renderYearlyBreakdown(results, benchmark);
@@ -836,6 +870,76 @@ const OOS_METRIC_DEFS = [
   { key: 'sharpe_ratio',  label: '夏普比率',   unit: '' },
 ];
 
+// ── 防过拟合结论 ──────────────────────────────────────────────────────────────
+// 两张表格自己不会说话:用户看完"某参数扰动后年化 -18pp"也不知道这算好还是坏。
+// 这里把两项检查各读成一句话,再取较差的一项作为总结论。
+// 只描述数字读出来是什么,不做任何"该不该买"的判断 —— 页面另有免责声明。
+const _LEVEL_RANK = { good: 0, warn: 1, bad: 2, unknown: -1 };
+
+// 阈值与上面表格里的着色保持一致(>10pp 红、>5pp 黄),免得
+// "结论说通过、表格里一片红"这种自相矛盾
+function sensitivityVerdict(r) {
+  const base = r.metrics?.annual_return;
+  if (base == null || !r.sensitivity?.length) return null;
+  let maxDelta = 0, counted = 0;
+  r.sensitivity.forEach(row => row.variants.forEach(v => {
+    if (v.error || v.annual_return == null) return;
+    counted++;
+    maxDelta = Math.max(maxDelta, Math.abs(v.annual_return - base));
+  }));
+  if (!counted) return null;
+  const d = round1(maxDelta);
+  if (maxDelta <= 5) {
+    return { level: 'good', text: `参数 ±20% 扰动后年化最大变化 ${d}pp，对参数不敏感` };
+  }
+  if (maxDelta <= 10) {
+    return { level: 'warn', text: `参数 ±20% 扰动后年化最大变化 ${d}pp，对参数中等敏感` };
+  }
+  return { level: 'bad', text: `参数 ±20% 扰动后年化最大变化 ${d}pp，对参数高度敏感 —— 换一组邻近参数结果就可能完全不同` };
+}
+
+function oosVerdict(r) {
+  if (!r.oos_split) return null;
+  const inAnn = r.oos_split.in_sample?.metrics?.annual_return;
+  const outAnn = r.oos_split.out_of_sample?.metrics?.annual_return;
+  if (inAnn == null || outAnn == null) return null;
+  if (inAnn <= 0) {
+    // 样本内本来就没赚钱,谈不上"过拟合",但同样不是个能用的结果
+    return { level: 'warn', text: `样本内年化 ${inAnn}% 本身为负，这段历史上没有表现出效果` };
+  }
+  const keep = Math.round(outAnn / inAnn * 100);
+  if (outAnn <= 0) {
+    return { level: 'bad', text: `样本内年化 ${inAnn}%，样本外 ${outAnn}% 由盈转亏 —— 过拟合的典型信号` };
+  }
+  if (keep >= 70) {
+    return { level: 'good', text: `样本外年化 ${outAnn}%，维持了样本内(${inAnn}%)的 ${keep}%` };
+  }
+  if (keep >= 30) {
+    return { level: 'warn', text: `样本外年化 ${outAnn}%，只剩样本内(${inAnn}%)的 ${keep}%，衰减明显` };
+  }
+  return { level: 'bad', text: `样本外年化 ${outAnn}%，只剩样本内(${inAnn}%)的 ${keep}% —— 疑似过拟合` };
+}
+
+const _VERDICT_HEAD = {
+  good: { cls: 'rb-verdict--good', icon: '✅', label: '两项检查通过' },
+  warn: { cls: 'rb-verdict--warn', icon: '⚠️', label: '需要留意' },
+  bad:  { cls: 'rb-verdict--bad',  icon: '🚩', label: '疑似过拟合' },
+};
+
+function renderVerdict(r) {
+  const parts = [sensitivityVerdict(r), oosVerdict(r)].filter(Boolean);
+  if (!parts.length) {
+    return '<div class="rb-verdict rb-verdict--none">数据不足，无法给出防过拟合结论</div>';
+  }
+  const worst = parts.reduce((a, b) => _LEVEL_RANK[b.level] > _LEVEL_RANK[a.level] ? b : a);
+  const head = _VERDICT_HEAD[worst.level] || _VERDICT_HEAD.warn;
+  return `<div class="rb-verdict ${head.cls}">` +
+    `<div class="rb-verdict-head">${head.icon} ${head.label}</div>` +
+    '<ul class="rb-verdict-list">' +
+    parts.map(p => `<li>${esc(p.text)}</li>`).join('') +
+    '</ul></div>';
+}
+
 function renderRobustness(results) {
   const section = document.getElementById('robustnessSection');
   const wrap = document.getElementById('robustnessWrap');
@@ -848,6 +952,7 @@ function renderRobustness(results) {
   withRobustness.forEach(r => {
     html += `<div class="robustness-block">`;
     html += `<div class="robustness-strategy-name">${esc(r.strategy_name)}</div>`;
+    html += renderVerdict(r);
 
     if (r.sensitivity.length) {
       const baseAnnual = r.metrics?.annual_return;
@@ -906,6 +1011,112 @@ function renderRobustness(results) {
   });
 
   wrap.innerHTML = html;
+}
+
+// ── 分享 ──────────────────────────────────────────────────────────────────────
+// 跑完回测拿不走任何东西,每一次可能的口碑传播都断在这里。两条出口：
+//   保存结果图 —— 画在 canvas 上,自带品牌与免责声明,适合发群/发帖
+//   分享链接   —— 快照存服务端,给一个 /s/{token} 的公开页
+function shareMsg(html) {
+  document.getElementById('shareMsg').innerHTML = html;
+}
+
+// 生成结果图。曲线用 ECharts 自己导出的位图,再在上面补标题、关键指标、
+// 品牌与免责声明 —— 免责声明必须留在图上:图会被单独转发,脱离页面语境。
+function buildShareImage() {
+  if (!equityChart || !lastShareable) return null;
+  const chartUrl = equityChart.getDataURL({
+    type: 'png', pixelRatio: 2, backgroundColor: '#ffffff',
+  });
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      const pad = 28, headH = 96, footH = 64;
+      const W = img.width + pad * 2;
+      const H = img.height + headH + footH + pad;
+      const cv = document.createElement('canvas');
+      cv.width = W; cv.height = H;
+      const ctx = cv.getContext('2d');
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, W, H);
+
+      const s = lastShareable;
+      const name = s.stock_name || s.stock_code || '回测结果';
+      ctx.fillStyle = '#1f2328';
+      ctx.font = 'bold 30px -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif';
+      ctx.fillText(name, pad, 46);
+      ctx.fillStyle = '#57606a';
+      ctx.font = '17px -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif';
+      ctx.fillText(`${s.start_date} → ${s.end_date}　初始资金 ¥${Number(s.initial_capital || 0).toLocaleString('zh-CN')}`, pad, 76);
+
+      ctx.drawImage(img, pad, headH);
+
+      // 页脚:品牌 + 站点地址 + 免责声明
+      const fy = headH + img.height + 30;
+      ctx.fillStyle = '#185FA5';
+      ctx.font = 'bold 19px -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif';
+      ctx.fillText('🕐 收盘 shoupan · shoupan.asia', pad, fy);
+      ctx.fillStyle = '#8c959f';
+      ctx.font = '14px -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif';
+      ctx.fillText('历史回测结果，不代表未来收益 · 仅供研究，不构成投资建议', pad, fy + 24);
+
+      resolve(cv.toDataURL('image/png'));
+    };
+    img.onerror = () => resolve(null);
+    img.src = chartUrl;
+  });
+}
+
+async function onShareImage() {
+  if (!lastShareable) return shareMsg('请先跑一次回测');
+  shareMsg('正在生成…');
+  try {
+    const url = await buildShareImage();
+    if (!url) return shareMsg('生成失败，请重试');
+    const s = lastShareable;
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `shoupan_${s.stock_code || 'backtest'}_${s.start_date}_${s.end_date}.png`;
+    document.body.appendChild(a); a.click(); a.remove();
+    shareMsg('已保存到下载目录');
+    reportEvent('share_click', { kind: 'image' });
+  } catch (e) {
+    shareMsg('生成失败：' + esc(e.message));
+  }
+}
+
+async function onShareLink() {
+  if (!lastShareable) return shareMsg('请先跑一次回测');
+  shareMsg('正在生成链接…');
+  try {
+    const res = await fetch('/api/backtest/share', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(lastShareable),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+    const full = location.origin + data.url;
+    shareMsg(`分享链接：<a href="${esc(data.url)}" target="_blank" rel="noopener">${esc(full)}</a>`);
+    copyToClipboard(full);
+  } catch (e) {
+    shareMsg('生成失败：' + esc(e.message));
+  }
+}
+
+// navigator.clipboard 只在安全上下文可用,失败就算了 —— 链接已经显示在页面上
+function copyToClipboard(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).catch(() => {});
+  }
+}
+
+// 前端埋点:只上报服务端看不见的动作。失败静默,绝不打扰用户
+function reportEvent(event, meta) {
+  fetch('/api/event', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ event, meta }),
+  }).catch(() => {});
 }
 
 // ── Trade history ─────────────────────────────────────────────────────────────

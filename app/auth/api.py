@@ -72,7 +72,30 @@ def login(req: LoginReq, request: Request, response: Response):
         max_age=ttl, httponly=True, samesite="lax",
         secure=_cookie_secure(request),
     )
+    _record_if_new_user(user, request)
     return {"ok": True, "user": _user_out(user)}
+
+
+# 登录接口同时承担注册(手机号首次登录即建号)。漏斗要的是"注册"这一层,
+# 所以只在首次登录时记一条 —— 以 created_at 与 last_login_at 是否为同一次
+# 判定:首次插入时两者由同一个 now 写入,老用户的 created_at 早于本次登录。
+_NEW_USER_WINDOW_SEC = 5
+
+
+def _record_if_new_user(user: dict, request) -> None:
+    try:
+        created = user.get("created_at")
+        last = user.get("last_login_at")
+        if not created or not last:
+            return
+        if abs((last - created).total_seconds()) > _NEW_USER_WINDOW_SEC:
+            return
+        from ..analytics.api import request_context
+        from ..analytics import service as an_service
+        an_service.record("register", user_id=int(user["id"]),
+                          **request_context(request))
+    except Exception as e:  # 埋点失败绝不影响登录
+        logger.info("注册事件埋点失败(忽略): %s", e)
 
 
 @router.post("/logout")

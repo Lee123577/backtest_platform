@@ -40,6 +40,21 @@
     .admin-chip-guest   { background: #fff8c5; color: #9a6700; cursor: help; }
     .rerun-btn[data-locked="1"] { opacity: 0.5; cursor: not-allowed; }
 
+    /* ── 转化漏斗 ───────────────────────────────────────────────────── */
+    .funnel-row { display: flex; align-items: stretch; gap: 6px; flex-wrap: wrap; }
+    .funnel-step {
+      flex: 1 1 110px; min-width: 100px;
+      background: var(--bg2); border: 1px solid #d0d7de;
+      border-radius: 8px; padding: 12px 10px; text-align: center;
+    }
+    .funnel-step-label { font-size: 11px; color: var(--txt2); }
+    .funnel-step-val   { font-size: 22px; font-weight: 700; color: var(--accent); line-height: 1.2; }
+    /* 相对上一层的转化率 —— 主看的是这个数,不是绝对值 */
+    .funnel-step-rate  { font-size: 11px; color: #1a7f37; font-weight: 600; }
+    .funnel-arrow { align-self: center; color: #8c959f; font-size: 14px; }
+    .funnel-channels { margin-top: 14px; }
+    .funnel-ch-title { font-size: 12px; font-weight: 600; color: var(--txt2); margin-bottom: 6px; }
+
     /* ── 今日数据入库详情 ───────────────────────────────────────────── */
     .ds-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
     .ds-rule {
@@ -226,6 +241,21 @@
     <div class="ds-grid" id="dsGrid">
       <div class="no-data">加载中…</div>
     </div>
+  </div>
+
+  <!-- ══════════════ 转化漏斗 ══════════════ -->
+  <div class="panel">
+    <div class="panel-title">
+      转化漏斗
+      <span class="tip-badge">访客 → 回测 → 注册 → 下单 → 开通，按事件去重</span>
+      <select id="funnelRange" style="margin-left:auto;width:auto;padding:4px 8px;">
+        <option value="7">最近 7 天</option>
+        <option value="30">最近 30 天</option>
+        <option value="90">最近 90 天</option>
+      </select>
+    </div>
+    <div class="funnel-row" id="funnelRow"><div class="no-data">加载中…</div></div>
+    <div class="funnel-channels" id="funnelChannels"></div>
   </div>
 
   <div class="panel">

@@ -21,11 +21,14 @@ import ipaddress
 import logging
 import os
 import re
+import threading
+import time
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from starlette.requests import Request
 
+from .analytics import attribution
 from .data.data_loader import _get_pool
 
 logger = logging.getLogger(__name__)
@@ -226,15 +229,51 @@ def _parse_ua(ua: Optional[str]) -> Tuple[Optional[str], Optional[str], Optional
 
 # ─────────────────────────── 写入逻辑 ───────────────────────────
 
-_INSERT_SQL = """
-INSERT INTO back_test.user_visit_log
-    (ip, user_agent, referer, request_path, request_method,
-     status_code, device_type, os, browser,
-     country, region, city, isp)
-VALUES (%(ip)s, %(ua)s, %(ref)s, %(path)s, %(method)s,
-        %(status)s, %(device)s, %(os)s, %(browser)s,
-        %(country)s, %(region)s, %(city)s, %(isp)s)
-"""
+_BASE_COLUMNS = [
+    "ip", "user_agent", "referer", "request_path", "request_method",
+    "status_code", "device_type", "os", "browser",
+    "country", "region", "city", "isp",
+    "user_id", "session_id",
+]
+_BASE_PARAMS = [
+    "ip", "ua", "ref", "path", "method",
+    "status", "device", "os", "browser",
+    "country", "region", "city", "isp",
+    "user_id", "sid",
+]
+
+# utm_* 是后加的列。老库里没有时不能让 INSERT 整条失败(那等于访问日志全丢),
+# 所以探测一次实际存在的列,据此拼语句。
+#
+# 探测结果只在**确定**时才缓存:DB 抖动那一下返回的是 None(不知道),
+# 若把它当成"没有列"缓存下来,进程活多久就多久不记渠道 —— 一次几秒的网络
+# 抖动换来永久性的数据缺失。不确定就这次先按无列写,下次再探。
+_insert_sql_cache: Optional[str] = None
+
+
+def _build_insert_sql(utm_cols: List[str]) -> str:
+    cols = _BASE_COLUMNS + list(utm_cols)
+    params = _BASE_PARAMS + list(utm_cols)
+    return "INSERT INTO back_test.user_visit_log ({})\nVALUES ({})".format(
+        ", ".join(cols),
+        ", ".join(f"%({p})s" for p in params),
+    )
+
+
+def _insert_sql() -> str:
+    global _insert_sql_cache
+    if _insert_sql_cache is not None:
+        return _insert_sql_cache
+    try:
+        from .analytics import db as _an_db
+        utm_cols = _an_db.visit_log_utm_columns()
+    except Exception as e:
+        logger.info("探测 utm 列失败(下次重试): %s", e)
+        utm_cols = None
+    if utm_cols is None:
+        return _build_insert_sql([])      # 本次降级,不缓存
+    _insert_sql_cache = _build_insert_sql(utm_cols)
+    return _insert_sql_cache
 
 
 def _insert_log_sync(payload: dict) -> None:
@@ -245,9 +284,66 @@ def _insert_log_sync(payload: dict) -> None:
             return
         conn.ping(reconnect=True)
         with conn.cursor() as cur:
-            cur.execute(_INSERT_SQL, payload)
+            cur.execute(_insert_sql(), payload)
     except Exception as e:
         logger.warning("写入访问日志失败: %s", e)
+
+
+# ── 登录态解析(给访问日志补 user_id)─────────────────────────────────────────
+# 每条访问日志都去跑一遍 auth.current_user 要 2 次查询,等于把全站 DB 压力翻倍。
+# 这里只要 user_id,一条按主键索引的轻查询就够,再加 5 分钟进程缓存 ——
+# 摊下来每个登录用户每 5 分钟一次查询。日志用途,不需要更实时。
+# 登录 cookie 名。这里不 import auth.service —— visit_log 是最外层中间件，
+# 在 main.py 里比 auth 更早加载，为一个常量把 auth 整条依赖链拽进来不划算。
+# 与 app/auth/service.py 的 SESSION_COOKIE 保持一致(有测试钉住)。
+_SESSION_COOKIE_NAME = "sp_session"
+
+_UID_CACHE: dict = {}          # token_hash -> (expire_ts, user_id|None)
+_UID_TTL = 300.0
+_UID_CACHE_MAX = 512
+_uid_lock = threading.Lock()
+
+
+def _resolve_user_id(token: Optional[str]) -> Optional[int]:
+    if not token:
+        return None
+    try:
+        from .auth.service import _token_hash
+        th = _token_hash(token)
+    except Exception:
+        return None
+
+    now = time.time()
+    with _uid_lock:
+        hit = _UID_CACHE.get(th)
+        if hit and hit[0] > now:
+            return hit[1]
+
+    uid = None
+    try:
+        conn = _get_pool()
+        if conn is not None:
+            conn.ping(reconnect=True)
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT user_id FROM user_session "
+                    "WHERE token_hash=%s AND expires_at > NOW()",
+                    (th,),
+                )
+                row = cur.fetchone()
+            if row:
+                uid = int(row["user_id"])
+    except Exception as e:
+        logger.debug("解析访问日志 user_id 失败(忽略): %s", e)
+        return None
+
+    with _uid_lock:
+        # 简单封顶:满了就整体清空。日志侧的缓存,重建代价只是几条轻查询,
+        # 不值得为它引入 LRU
+        if len(_UID_CACHE) >= _UID_CACHE_MAX:
+            _UID_CACHE.clear()
+        _UID_CACHE[th] = (now + _UID_TTL, uid)
+    return uid
 
 
 # ─────────────────────────── 中间件本体 ─────────────────────────
@@ -271,10 +367,19 @@ class VisitLogMiddleware:
 
         status_code = 500
 
+        # 归因 cookie 要在响应头里下发,所以得在 http.response.start 之前算好。
+        # 只对会被记录的请求下发,静态资源/favicon 不掺和。
+        set_cookies = self._attribution_cookies(scope)
+
         async def send_wrapper(message):
             nonlocal status_code
             if message["type"] == "http.response.start":
                 status_code = message["status"]
+                if set_cookies:
+                    headers = list(message.get("headers", []))
+                    for c in set_cookies:
+                        headers.append((b"set-cookie", c.encode("latin-1")))
+                    message["headers"] = headers
             await send(message)
 
         try:
@@ -289,6 +394,44 @@ class VisitLogMiddleware:
                 )
             except Exception as e:
                 logger.warning("访问日志埋点异常: %s", e)
+
+    def _attribution_cookies(self, scope) -> List[str]:
+        """算出本次响应要补发的 Set-Cookie(访客标识 / 首次触达渠道)。
+
+        - sp_sid:没有或格式不对就补一个。同一浏览器稳定,漏斗靠它串起来。
+        - sp_attr:**只在还没有的时候写** —— 首次触达归因,后面再带 utm 进来
+          也不覆盖,否则老用户点一次自己的推广链接就把原始来源冲掉了。
+        """
+        try:
+            path = scope.get("path", "")
+            if _should_skip(path):
+                return []
+            request = Request(scope)
+            secure = scope.get("scheme") == "https" or (
+                request.headers.get("x-forwarded-proto", "").lower() == "https"
+            )
+            out: List[str] = []
+
+            if not attribution.valid_sid(request.cookies.get(attribution.SID_COOKIE)):
+                out.append(attribution.build_cookie(
+                    attribution.SID_COOKIE, attribution.new_sid(),
+                    attribution.SID_MAX_AGE, secure,
+                ))
+
+            if not request.cookies.get(attribution.ATTR_COOKIE):
+                utm = attribution.utm_from_query(
+                    scope.get("query_string", b"").decode("latin-1", "ignore")
+                )
+                if utm:
+                    out.append(attribution.build_cookie(
+                        attribution.ATTR_COOKIE, attribution.encode_attr(utm),
+                        attribution.ATTR_MAX_AGE, secure,
+                    ))
+            return out
+        except Exception as e:
+            # 归因是锦上添花,算不出来就不发,绝不影响响应
+            logger.debug("计算归因 cookie 失败(忽略): %s", e)
+            return []
 
     def _record(self, scope, status_code: int) -> None:
         """整个函数跑在线程池 worker 里(含可能的 admin 缓存 DB 查询和入库)。
@@ -319,6 +462,19 @@ class VisitLogMiddleware:
             logger.debug("admin 缓存查询失败（忽略）: %s", e)
 
         country, region, city, isp = _lookup_geo(ip)
+
+        # 身份与归因:sid 认自己签发的格式,user_id 走 5 分钟缓存的轻查询。
+        # 本次请求刚补发的 sid 在 request.cookies 里还看不到(要下次请求才带上),
+        # 那条日志的 session_id 为空是正常的,不值得为它把 cookie 再传一手。
+        sid = request.cookies.get(attribution.SID_COOKIE)
+        if not attribution.valid_sid(sid):
+            sid = None
+        utm = attribution.decode_attr(request.cookies.get(attribution.ATTR_COOKIE))
+        if not utm:
+            # 落地那一刻 cookie 还没写回来,直接从查询串取,不然首次触达
+            # 这条最关键的记录反而没有渠道
+            utm = attribution.utm_from_query(request.url.query or "")
+
         payload = {
             "ip":      ip,
             "ua":      (ua[:500] if ua else None),
@@ -333,7 +489,13 @@ class VisitLogMiddleware:
             "region":  (region[:64] if region else None),
             "city":    (city[:64] if city else None),
             "isp":     (isp[:128] if isp else None),
+            "user_id": _resolve_user_id(
+                request.cookies.get(_SESSION_COOKIE_NAME)
+            ),
+            "sid":     sid,
         }
+        for col in ("utm_source", "utm_medium", "utm_campaign"):
+            payload[col] = utm.get(col)
 
         # 已在线程池 worker 里(__call__ 把整个 _record 丢了进来),直接同步写
         _insert_log_sync(payload)
