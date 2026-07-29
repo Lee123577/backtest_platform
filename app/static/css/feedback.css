@@ -18,6 +18,8 @@
   box-shadow: 0 4px 14px rgba(0, 0, 0, .3);
 }
 .fb-fab:hover { background: #4a7ce0; }
+/* 让开贴底的 sticky 主按钮(.btn-run,bottom:12px + 40px 高) */
+.fb-fab--raised { bottom: 72px; }
 
 .fb-mask {
   position: fixed;

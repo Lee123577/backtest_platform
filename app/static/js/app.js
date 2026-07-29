@@ -600,7 +600,7 @@ function renderKline(data, title) {
       { type: 'value', scale: true, gridIndex: 0,
         splitLine: { lineStyle: { color: '#eaeef2' } }, axisLabel: { color: '#57606a' } },
       { type: 'value', gridIndex: 1, splitLine: { show: false },
-        axisLabel: { color: '#57606a', fontSize: 10, formatter: v => (v / 1e4).toFixed(0) + '万' } },
+        axisLabel: { color: '#57606a', fontSize: 10, formatter: makeWanAxisFormatter(vols) } },
     ],
     dataZoom: [
       { type: 'inside', xAxisIndex: [0, 1], start: startPct, end: 100 },
@@ -705,27 +705,53 @@ function renderMetrics(results, benchmark) {
 
 const LINE_COLORS = ['#0969da', '#e36209', '#cf222e', '#1a7f37', '#8250df', '#0550ae'];
 
+// 固定「万 + 整数」的轴标签在数据跨度小的时候会把相邻刻度压成同一个字符串
+// (10 万本金 0 笔成交那次,7 个刻度全是「¥10万」)。按实际跨度挑小数位:
+// 跨度不足 1 万时「万」这个单位已经没有分辨率了,退回原始数值。
+function makeWanAxisFormatter(values, prefix = '') {
+  let min = Infinity, max = -Infinity;
+  for (const v of values) {
+    if (!Number.isFinite(v)) continue;
+    if (v < min) min = v;
+    if (v > max) max = v;
+  }
+  const range = max > min ? max - min : 0;
+  if (range < 1e4) return v => prefix + Math.round(v).toLocaleString('zh-CN');
+  // ECharts 默认切 ~5 段,用 range/5 近似刻度间距
+  const decimals = range / 5 >= 1e4 ? 0 : 1;
+  return v => prefix + (v / 1e4).toFixed(decimals) + '万';
+}
+
 function renderEquityChart(results, benchmark) {
   const el = document.getElementById('equityChart');
   if (equityChart) { equityChart.dispose(); equityChart = null; }
   equityChart = echarts.init(el);
 
+  // 只在 lineStyle 里设色的话,图例小圆点读不到,会退回 ECharts 默认色板 ——
+  // 图例说"基准=蓝紫、策略=绿",图上却是"基准=灰虚线、策略=蓝"。itemStyle
+  // 才是图例取色的地方,两处一起设。
   const series = [];
+  const allValues = [];
   if (benchmark?.equity_curve?.length) {
+    benchmark.equity_curve.forEach(e => allValues.push(e.value));
     series.push({
       name: benchmark.strategy_name,
       type: 'line',
       data: benchmark.equity_curve.map(e => [e.date, e.value]),
+      itemStyle: { color: '#999' },
       lineStyle: { color: '#999', type: 'dashed', width: 1.5 },
       symbol: 'none',
     });
   }
   results.filter(r => r.equity_curve).forEach((r, i) => {
+    const color = LINE_COLORS[i % LINE_COLORS.length];
+    r.equity_curve.forEach(e => allValues.push(e.value));
     series.push({
       name: r.strategy_name,
       type: 'line',
       data: r.equity_curve.map(e => [e.date, e.value]),
-      lineStyle: { color: LINE_COLORS[i % LINE_COLORS.length], width: 2 },
+      itemStyle: { color },
+      lineStyle: { color, width: 2 },
       symbol: 'none',
     });
   });
@@ -752,7 +778,7 @@ function renderEquityChart(results, benchmark) {
     },
     yAxis: {
       type: 'value', scale: true,
-      axisLabel: { color: '#57606a', formatter: v => '¥' + (v / 1e4).toFixed(0) + '万' },
+      axisLabel: { color: '#57606a', formatter: makeWanAxisFormatter(allValues, '¥') },
       splitLine: { lineStyle: { color: '#eaeef2' } },
     },
     dataZoom: [

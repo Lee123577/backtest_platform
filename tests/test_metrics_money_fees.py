@@ -1,6 +1,7 @@
 """
 metrics / money / fees 三个共用模块。
 """
+import numpy as np
 import pandas as pd
 
 from app.engine import fees
@@ -40,8 +41,33 @@ def test_monotonic_rising_has_no_drawdown():
     assert m["max_drawdown"] == 0.0          # 单调上涨无回撤
     assert m["max_drawdown_days"] == 0
     assert m["total_return"] > 0
-    assert m["sharpe_ratio"] > 0
+    # 恒定 +1%/日 → 日收益方差为 0,Sharpe 分母为 0、数学上未定义 → None。
+    # (这里曾断言 > 0,靠的是 std() 返回 ~1e-20 浮点残差除出来的天文数字)
+    assert m["sharpe_ratio"] is None
     assert m["final_value"] == round(float(equity.iloc[-1]), 2)
+
+
+def test_flat_equity_ratios_are_none_not_astronomical():
+    """净值全平(0 笔成交 / 资金不足买 1 手)不能算出 -6.9e+16 这种数。
+
+    daily_ret 恒为 0,downside = 0 - rf_daily 是一列相同的常数,但
+    pandas std() 给的是 ~2.7e-20 的浮点残差而非精确 0 —— 旧的
+    `if downside.std() > 0` 拦不住,除下去直接甩到前端。
+    """
+    m = compute_risk_metrics(pd.Series([100_000.0] * 300), 100_000)
+    assert m["sharpe_ratio"] is None
+    assert m["sortino_ratio"] is None
+    assert m["total_return"] == 0.0
+    assert m["max_drawdown"] == 0.0
+
+
+def test_normal_equity_still_produces_finite_ratios():
+    """有真实波动时比率照常算出有限值,别被上面的守卫误伤。"""
+    rng = np.random.default_rng(42)
+    equity = pd.Series(100_000 * np.cumprod(1 + rng.normal(0.0005, 0.015, 400)))
+    m = compute_risk_metrics(equity, 100_000)
+    assert m["sharpe_ratio"] is not None and abs(m["sharpe_ratio"]) < 100
+    assert m["sortino_ratio"] is not None and abs(m["sortino_ratio"]) < 100
 
 
 def test_drawdown_detected():

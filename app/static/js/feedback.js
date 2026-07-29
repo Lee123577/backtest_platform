@@ -116,6 +116,10 @@
   function mountFab() {
     var fab = document.createElement("button");
     fab.className = "fb-fab";
+    // 回测页的「开始回测」是 position:sticky 贴底的整宽按钮,悬浮球压在它右端
+    // 上面 —— 点按钮右侧 1/4 弹出来的是反馈框而不是跑回测。有贴底 CTA 的页面
+    // 把悬浮球抬到 CTA 上方。(.btn-run 是全站唯一 bottom 锚定的 sticky 元素)
+    if (document.querySelector(".btn-run")) fab.className += " fb-fab--raised";
     fab.innerHTML = "💬 反馈";
     fab.addEventListener("click", open);
     document.body.appendChild(fab);
