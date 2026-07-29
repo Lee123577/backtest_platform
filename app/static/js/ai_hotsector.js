@@ -36,34 +36,75 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // ── 1. 统计条 ────────────────────────────────────────────────────────────────
 
+// 涨跌着色(A 股习惯:涨红跌绿)。base 是元素原有的类名前缀
+function signClass(base, v) {
+  return base + ' ' + (v > 0 ? 'pos' : v < 0 ? 'neg' : '');
+}
+
 async function loadStats() {
   try {
     const res = await fetch('/api/ai_hotsector/stats');
     const s = await res.json();
-    document.getElementById('hsInitCapital').textContent = `¥${fmtMoney(s.initial_capital)}`;
+
+    document.getElementById('hsInitCapital').textContent = `本金 ¥${fmtMoney(s.initial_capital)}`;
     document.getElementById('hsCapital').textContent = `¥${fmtMoney(s.capital)}`;
 
     const cumEl = document.getElementById('hsCumReturn');
     cumEl.textContent = fmtPct(s.cum_return);
-    cumEl.className = 'sum-val ' + (s.cum_return > 0 ? 'pos' : s.cum_return < 0 ? 'neg' : '');
+    cumEl.className = signClass('hs-stat-val', s.cum_return);
 
     const feeEl = document.getElementById('hsCumReturnAfterFee');
     feeEl.textContent = fmtPct(s.cum_return_after_fee);
-    feeEl.className = 'sum-val ' + (s.cum_return_after_fee > 0 ? 'pos' : s.cum_return_after_fee < 0 ? 'neg' : '');
+    feeEl.className = signClass('hs-stat-val', s.cum_return_after_fee);
 
     const bmEl = document.getElementById('hsBenchmarkReturn');
     bmEl.textContent = fmtPct(s.benchmark_cum_return);
-    bmEl.className = 'sum-val ' + (s.benchmark_cum_return > 0 ? 'pos' : s.benchmark_cum_return < 0 ? 'neg' : '');
+    bmEl.className = signClass('hs-stat-val', s.benchmark_cum_return);
 
-    const winEl = document.getElementById('hsWinRate');
-    if (s.total_count > 0) {
-      winEl.textContent = `${fmtPct(s.win_rate)}（${s.win_count}/${s.total_count}）`;
-    } else {
-      winEl.textContent = '暂无已结算数据';
-    }
+    renderExcess(s);
+    renderWinRate(s);
   } catch (e) {
     console.error(e);
+    document.getElementById('hsExcessSub').textContent = '统计加载失败';
   }
+}
+
+// 超额收益 = 策略累计 − 基准累计,单位 pp(百分点)。
+// 这才是"这个 AI 到底行不行"的答案:原先把两个数并排摆着,要用户自己做减法。
+// 用未扣费口径与基准对齐(基准也没扣费),扣费后单独列在支撑数据里,不藏。
+function renderExcess(s) {
+  const el = document.getElementById('hsExcess');
+  const sub = document.getElementById('hsExcessSub');
+  const a = s.cum_return, b = s.benchmark_cum_return;
+  if (a === null || a === undefined || b === null || b === undefined) {
+    el.textContent = '—';
+    // 必须同时清掉涨跌色:只改文字会留下一个染成红/绿的"—",
+    // 看着像"有数据且在涨",实际是没数据
+    el.className = 'hs-headline-val';
+    sub.textContent = '等待首批结算';
+    return;
+  }
+  const pp = (Number(a) - Number(b)) * 100;
+  el.textContent = `${pp > 0 ? '+' : ''}${pp.toFixed(1)}pp`;
+  el.className = signClass('hs-headline-val', pp);
+  sub.textContent = `策略 ${fmtPct(a)}　基准 ${fmtPct(b)}`;
+}
+
+function renderWinRate(s) {
+  const el = document.getElementById('hsWinRate');
+  const bar = document.getElementById('hsWinBar');
+  const fill = bar && bar.querySelector('.hs-winrate-fill');
+  if (!s.total_count) {
+    el.textContent = '暂无已结算数据';
+    if (bar) bar.style.display = 'none';
+    if (fill) fill.style.width = '0';   // 归零,别留上一次的宽度
+    return;
+  }
+  const pct = s.win_rate * 100;
+  el.textContent = `${pct.toFixed(1)}%（${s.win_count}/${s.total_count}）`;
+  if (bar) bar.style.display = '';
+  if (fill) fill.style.width = `${Math.max(0, Math.min(100, pct))}%`;
+  if (bar) bar.setAttribute('aria-label', `胜率 ${pct.toFixed(1)}%，${s.win_count} 胜 ${s.total_count - s.win_count} 负`);
 }
 
 // ── 2. 资金曲线 ──────────────────────────────────────────────────────────────
@@ -180,6 +221,22 @@ async function loadToday() {
   }
 }
 
+// 板块级聚合:该板块已结算个股的平均涨跌。
+// 原先三张卡片除了名字完全一样,得逐只读完才知道哪个板块拖了后腿。
+function sectorAgg(stocks) {
+  const done = stocks.filter(
+    st => st.settle_status === 'settled' &&
+          st.pct_change !== null && st.pct_change !== undefined
+  );
+  if (!done.length) {
+    return '<span class="sector-agg na">待结算</span>';
+  }
+  const avg = done.reduce((s, st) => s + Number(st.pct_change), 0) / done.length;
+  const cls = avg > 0 ? 'pos' : avg < 0 ? 'neg' : '';
+  return `<span class="sector-agg ${cls}">${fmtPct(avg)}` +
+         `<span style="font-weight:400;opacity:.7"> · ${done.length}只</span></span>`;
+}
+
 function renderSectorCard(rank, sector) {
   const stockRows = sector.stocks
     .sort((a, b) => a.stock_rank - b.stock_rank)
@@ -189,6 +246,7 @@ function renderSectorCard(rank, sector) {
     <div class="sector-card">
       <div class="sector-card-head">
         <div><span class="sector-rank">${rank}</span><span class="sector-name">${esc(sector.name)}</span></div>
+        ${sectorAgg(sector.stocks)}
       </div>
       <div class="sector-reason">${esc(sector.reason)}</div>
       ${stockRows}
@@ -236,10 +294,18 @@ function renderStockRow(st) {
 
 async function loadIntraday() {
   const hint = document.getElementById('hsIntradayUpdated');
+  const live = document.getElementById('hsLive');
   try {
     const res = await fetch('/api/ai_hotsector/intraday');
     const rows = (await res.json()).intraday || [];
     applyIntraday(rows);
+    // 「盘中」标记只在真有实时价回来时点亮 —— 收盘后/无持仓时挂着一个
+    // 呼吸的红点,是在骗人说数据在动
+    if (live) {
+      live.hidden = !rows.some(
+        r => r.realtime_price !== null && r.realtime_price !== undefined
+      );
+    }
     if (hint) {
       const now = new Date();
       const hh = String(now.getHours()).padStart(2, '0');
@@ -249,6 +315,7 @@ async function loadIntraday() {
     }
   } catch (e) {
     console.error(e);
+    if (live) live.hidden = true;
     if (hint) hint.textContent = '盘中数据更新失败，将于 30 秒后重试';
   }
 }
@@ -274,11 +341,48 @@ function applyIntraday(rows) {
 
 // ── 4. 历史批次 ──────────────────────────────────────────────────────────────
 
+// ── 近期战绩条 ───────────────────────────────────────────────────────────────
+// 数据与"历史批次"表同源,只是换个读法:20 根柱子把连亏/连赢压成一眼可见的形状。
+// 柱高按当日收益的绝对值归一化,颜色按正负 —— 不引入任何表里没有的数字。
+const STREAK_DAYS = 20;
+
+function renderStreak(rows) {
+  const wrap = document.getElementById('hsStreak');
+  const hint = document.getElementById('hsStreakHint');
+  const settled = rows
+    .filter(r => r.status === 'settled' &&
+                 r.day_return !== null && r.day_return !== undefined)
+    .slice(0, STREAK_DAYS)
+    .reverse();                       // 接口按日期倒序,画图要从早到晚
+
+  if (!settled.length) {
+    wrap.innerHTML = '<div class="no-data">暂无已结算交易日</div>';
+    return;
+  }
+
+  const maxAbs = Math.max(...settled.map(r => Math.abs(Number(r.day_return)))) || 1;
+  wrap.innerHTML = settled.map(r => {
+    const v = Number(r.day_return);
+    const h = Math.max(4, Math.round(Math.abs(v) / maxAbs * 100));
+    const cls = v > 0 ? 'pos' : v < 0 ? 'neg' : '';
+    const win = r.total_count ? `　${r.win_count}/${r.total_count} 胜` : '';
+    return `<span class="hs-bar ${cls}" title="${esc(r.pick_date)}　${fmtPct(v)}${win}">` +
+           `<i style="height:${h}%"></i></span>`;
+  }).join('');
+
+  if (hint) {
+    const wins = settled.filter(r => Number(r.day_return) > 0).length;
+    hint.textContent =
+      `近 ${settled.length} 个已结算交易日 · ${wins} 天收正 / ${settled.length - wins} 天收负`;
+  }
+}
+
 async function loadHistory() {
   const wrap = document.getElementById('hsHistoryWrap');
   try {
     const res = await fetch('/api/ai_hotsector/history?limit=60');
     const rows = (await res.json()).history || [];
+    renderStreak(rows);
     if (!rows.length) {
       wrap.innerHTML = '<div class="no-data">暂无记录</div>';
       return;
@@ -312,6 +416,8 @@ async function loadHistory() {
   } catch (e) {
     console.error(e);
     wrap.innerHTML = '<div class="no-data">加载失败</div>';
+    document.getElementById('hsStreak').innerHTML =
+      '<div class="no-data">加载失败</div>';
   }
 }
 

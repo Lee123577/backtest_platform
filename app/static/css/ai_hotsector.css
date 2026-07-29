@@ -1,4 +1,212 @@
-/* AI 热门板块页面专用样式（通用摘要卡片/图表容器复用 paper_trading.css / style.css） */
+/* Hallmark · macrostructure: Workbench · genre: modern-minimal · design-system: 站点既有 style.css
+ * 复用站点 token(字体/配色/间距),不引入新主题 —— 这是多页应用里的一页,
+ * 一致性优先于多样性。改的是**层级**,不是皮肤。
+ * pre-emit critique: P5 H5 E4 S5 R5 V4
+ *
+ * 改版起因:原先五个一模一样的白 panel + 六张一模一样的小卡片,
+ * 所有信息等权 = 没有信息。现在:超额收益当主角,今日荐股是重心,
+ * 其余降级为支撑,并用战绩条给页面一个能一眼读完的节奏。
+ *
+ * 涨跌配色沿用 A 股习惯(--up 红 / --down 绿),不改。
+ */
+
+/* 本页新增的值一律先具名再引用,不在规则里散落裸值。
+   站点 style.css 目前没有动效令牌,这里就地定义本页用的两个,
+   将来若全站建了动效体系,把这两行删掉换成全局令牌即可。 */
+.hs-hero, .hs-streak-panel, .hs-today-panel, .sector-card {
+  --hs-sector-3: #6f42c1;   /* 第三个板块的区分色,蓝/琥珀之外的第三个色相 */
+  --hs-dur: 420ms;
+  --hs-ease: cubic-bezier(.16, 1, .3, 1);
+}
+
+/* ── 1. 战绩头条 ──────────────────────────────────────────────────────────
+   刻意不用 .panel:整页全是白卡片正是"单调"的来源。这里换一块带底色的
+   区块,把页面顶部和下面的白卡片区分开。 */
+.hs-hero {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 22px 24px;
+  background:
+    linear-gradient(135deg,
+      rgba(24, 95, 165, .07) 0%,
+      rgba(var(--brand-2-rgb), .07) 100%),
+    var(--bg);
+}
+
+.hs-hero-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.hs-hero-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--txt);
+  margin: 0;
+}
+.hs-hero-rule {
+  font-size: 12px;
+  color: var(--txt2);
+  line-height: 1.7;
+  margin: 6px 0 18px;
+  max-width: 60ch;
+}
+
+/* 主角 + 支撑数据。主角占一列,其余四项挤在右边 —— 视觉重量差是刻意的 */
+.hs-hero-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 210px) minmax(0, 1fr);
+  gap: 20px 28px;
+  align-items: start;
+}
+
+.hs-headline-label {
+  font-size: 12px;
+  color: var(--txt2);
+  font-weight: 600;
+}
+.hs-headline-label span {
+  font-weight: 400;
+  opacity: .8;
+}
+.hs-headline-val {
+  font-size: 44px;
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: -1px;
+  margin: 2px 0 4px;
+  font-variant-numeric: tabular-nums;
+  color: var(--txt2);           /* 数据到位前的中性态,避免闪一下红绿 */
+  overflow-wrap: anywhere;
+}
+.hs-headline-val.pos { color: var(--up); }
+.hs-headline-val.neg { color: var(--down); }
+.hs-headline-sub {
+  font-size: 12px;
+  color: var(--txt2);
+  line-height: 1.6;
+}
+
+.hs-stat-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(130px, 100%), 1fr));
+  gap: 14px 18px;
+}
+.hs-stat { min-width: 0; }
+.hs-stat-label { font-size: 11px; color: var(--txt2); }
+.hs-stat-val {
+  font-size: 19px;
+  font-weight: 700;
+  line-height: 1.3;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.hs-stat-val.pos { color: var(--up); }
+.hs-stat-val.neg { color: var(--down); }
+.hs-stat-note { font-size: 11px; color: var(--txt2); margin-top: 1px; }
+
+/* 胜率:数字之外再给一条能一眼看完的条 */
+.hs-winrate { margin-top: 18px; }
+.hs-winrate-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 5px;
+}
+.hs-winrate-label { font-size: 11px; color: var(--txt2); }
+.hs-winrate-val { font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.hs-winrate-bar {
+  height: 7px;
+  border-radius: 4px;
+  background: rgba(26, 127, 55, .22);   /* 底色=负(跌绿) */
+  overflow: hidden;
+}
+/* 胜的部分用涨红铺在上面 —— 与全站涨跌色一致 */
+.hs-winrate-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--up);
+  border-radius: 4px;
+  transition: width var(--hs-dur) var(--hs-ease);
+}
+@media (prefers-reduced-motion: reduce) {
+  .hs-winrate-fill { transition: none; }
+}
+
+/* ── 2. 近期战绩条 ────────────────────────────────────────────────────────
+   数据本来就在"历史批次"表里,但表格要逐行读。柱状条把 20 个交易日的
+   盈亏压成一屏能扫完的形状,连亏/连赢一眼可见。 */
+.hs-streak-panel { padding-bottom: 18px; }
+.hs-streak {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 78px;
+  padding-top: 4px;
+  overflow-x: auto;
+}
+.hs-streak .no-data { align-self: center; }
+.hs-bar {
+  flex: 1 1 8px;
+  min-width: 8px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  height: 100%;
+  border-radius: 3px 3px 0 0;
+  background: transparent;
+  position: relative;
+}
+.hs-bar i {
+  display: block;
+  width: 100%;
+  border-radius: 3px;
+  min-height: 3px;                 /* 收益接近 0 时也要看得见 */
+  background: var(--bg3);
+}
+.hs-bar.pos i { background: var(--up); }
+.hs-bar.neg i { background: var(--down); }
+.hs-bar:hover i { filter: brightness(1.15); }
+/* 基线:把"当日收益"这个有正负的量锚在中间读起来更快 */
+.hs-streak-axis {
+  border-top: 1px dashed var(--border);
+  margin-top: -1px;
+}
+
+/* ── 3. 今日荐股:页面重心 ────────────────────────────────────────────────
+   用一条顶部强调边把它和其余白卡片区分开 —— 这是用户来这页要看的东西 */
+.hs-today-panel {
+  border-top: 3px solid var(--accent);
+  padding-top: 18px;
+}
+
+/* 盘中实时标记 */
+.hs-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--up);
+  background: rgba(207, 34, 46, .09);
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+.hs-live i {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--up);
+  animation: hs-pulse 2s ease-in-out infinite;
+}
+@keyframes hs-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: .25; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hs-live i { animation: none; }
+}
 
 .hs-rule-hint {
   font-size: 12px;
@@ -14,47 +222,32 @@
   margin-left: 8px;
 }
 
-.hs-two-col {
-  display: grid;
-  /* min(420px,100%):窄屏时列宽跟随容器,不把 panel 撑到 420px 溢出 */
-  grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr));
-  gap: 16px;
-}
-.hs-two-col > .panel { margin: 0; }
-
-/* 数据方法论折叠区(板块同质化 / 提示词版本对比)：默认收起，
-   只给想深挖的人看，不占主视图的认知负担 */
-.hs-methodology { padding: 14px 24px; }
-.hs-methodology-summary {
-  cursor: pointer;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--txt2);
-  list-style: none;
-}
-.hs-methodology-summary::-webkit-details-marker { display: none; }
-.hs-methodology[open] .hs-methodology-summary { color: var(--txt); margin-bottom: 14px; }
-.hs-methodology-body { margin-top: 14px; }
-.hs-methodology-body .panel-title { font-size: 14px; }
-
+/* ── 板块卡片 ─────────────────────────────────────────────────────────────
+   原先三张卡片除了名字完全一样。现在给每张一条按顺位着色的左边条,
+   并把该板块当日的聚合表现提到卡头 —— 一眼看出哪个板块拖了后腿。 */
 .sector-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr));
   gap: 14px;
   margin-top: 10px;
 }
 
 .sector-card {
   border: 1px solid var(--border);
+  border-left: 3px solid var(--sector-hue, var(--accent));
   border-radius: 8px;
   padding: 14px 16px;
-  background: var(--bg2);
+  background: var(--bg);
 }
+.sector-card:nth-child(1) { --sector-hue: var(--accent); }
+.sector-card:nth-child(2) { --sector-hue: var(--brand-2); }
+.sector-card:nth-child(3) { --sector-hue: var(--hs-sector-3); }
 
 .sector-card-head {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
+  gap: 10px;
   margin-bottom: 6px;
 }
 
@@ -64,17 +257,25 @@
   line-height: 20px;
   text-align: center;
   border-radius: 50%;
-  background: var(--accent);
+  background: var(--sector-hue, var(--accent));
   color: #fff;
   font-size: 12px;
   font-weight: 700;
   margin-right: 6px;
 }
 
-.sector-name {
-  font-size: 15px;
+.sector-name { font-size: 15px; font-weight: 700; }
+
+/* 板块级聚合(N 只已结算的平均涨跌) */
+.sector-agg {
+  font-size: 12px;
   font-weight: 700;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
+.sector-agg.pos { color: var(--up); }
+.sector-agg.neg { color: var(--down); }
+.sector-agg.na  { color: var(--txt2); font-weight: 400; }
 
 .sector-reason {
   font-size: 12px;
@@ -107,7 +308,11 @@
   gap: 2px;
   align-items: flex-end;
 }
-.stock-pct { font-weight: 700; font-size: 15px; }
+.stock-pct {
+  font-weight: 700;
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+}
 .stock-pct.pos { color: var(--up); }
 .stock-pct.neg { color: var(--down); }
 .stock-price-line { font-size: 12px; color: var(--txt2); }
@@ -125,6 +330,29 @@
 .settle-badge.lose { background: rgba(26,127,55,.1); color: var(--down); }
 .settle-badge.na { background: rgba(87,96,106,.08); color: var(--txt2); }
 
+/* ── 方法论折叠区(不变)──────────────────────────────────────────────── */
+.hs-two-col {
+  display: grid;
+  /* min(420px,100%):窄屏时列宽跟随容器,不把 panel 撑到 420px 溢出 */
+  grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr));
+  gap: 16px;
+}
+.hs-two-col > .panel { margin: 0; }
+
+.hs-methodology { padding: 14px 24px; }
+.hs-methodology-summary {
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--txt2);
+  list-style: none;
+}
+.hs-methodology-summary::-webkit-details-marker { display: none; }
+.hs-methodology[open] .hs-methodology-summary { color: var(--txt); margin-bottom: 14px; }
+.hs-methodology-body { margin-top: 14px; }
+.hs-methodology-body .panel-title { font-size: 14px; }
+
+/* ── 表格 ─────────────────────────────────────────────────────────────── */
 table.hs-tbl {
   width: 100%;
   border-collapse: collapse;
@@ -142,12 +370,28 @@ table.hs-tbl {
   padding: 6px 12px;
   text-align: center;
   border: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
 }
 .hs-tbl tr.status-failed td { background: rgba(207,34,46,.04); }
 .hs-tbl tr.hs-repeat-sector td { background: rgba(154,103,0,.08); }
 .hs-tbl tr.hs-repeat-sector td:first-child { color: #9a6700; font-weight: 700; }
 
-/* 窄屏:多列统计表改为自身横向滚动(表格由 JS innerHTML 注入,无外层滚动容器) */
+/* ── 窄屏 ─────────────────────────────────────────────────────────────── */
 @media (max-width: 768px) {
+  /* 多列统计表改为自身横向滚动(表格由 JS innerHTML 注入,无外层滚动容器) */
   table.hs-tbl { display: block; overflow-x: auto; }
+
+  /* 主角与支撑数据改上下堆叠,不把 44px 的大数字挤成两行 */
+  .hs-hero { padding: 18px 16px; }
+  .hs-hero-grid { grid-template-columns: 1fr; gap: 18px; }
+  .hs-headline-val { font-size: 38px; }
+  .hs-methodology { padding: 14px 16px; }
+}
+
+@media (max-width: 414px) {
+  .hs-headline-val { font-size: 32px; }
+  .hs-stat-val { font-size: 17px; }
+  .hs-streak { height: 62px; }
+  /* 窄屏柱子太细点不中,允许整条横向滚动 */
+  .hs-bar { min-width: 10px; flex-basis: 10px; }
 }

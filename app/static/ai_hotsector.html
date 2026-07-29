@@ -36,39 +36,90 @@
 
 <main>
 
-  <!-- 1. 统计概览 -->
-  <div class="panel">
-    <div class="panel-title">
-      AI 热门板块 · 模拟账户
+  <!-- ══════════════════════════════════════════════════════
+       1. 战绩头条
+       原先是 6 张等大的小卡片,把"累计收益""同期中证1000"并排一放,
+       要用户自己做减法才知道这个 AI 到底行不行。改成:超额收益当主角,
+       其余四项降级为支撑数据,胜率给一条能一眼看完的进度条。
+  ══════════════════════════════════════════════════════ -->
+  <section class="hs-hero">
+    <div class="hs-hero-top">
+      <h1 class="hs-hero-title">AI 热门板块 · 模拟账户</h1>
       <span class="tip-badge">仅供研究，不构成投资建议</span>
     </div>
-    <div class="hs-rule-hint">AI 每日收盘后选 3 个热门板块 × 3 只强势股，按 T 日收盘价买入、T+1 收盘价卖出，10 万本金等权滚动</div>
-    <div class="summary-grid" id="hsSummaryGrid">
-      <div class="sum-card"><div class="sum-label">初始资金</div><div class="sum-val" id="hsInitCapital">—</div></div>
-      <div class="sum-card"><div class="sum-label">当前模拟资金</div><div class="sum-val" id="hsCapital">—</div></div>
-      <div class="sum-card"><div class="sum-label">累计收益</div><div class="sum-val" id="hsCumReturn">—</div></div>
-      <div class="sum-card"><div class="sum-label">扣费后收益</div><div class="sum-val" id="hsCumReturnAfterFee">—</div></div>
-      <div class="sum-card"><div class="sum-label">同期中证1000</div><div class="sum-val" id="hsBenchmarkReturn">—</div></div>
-      <div class="sum-card"><div class="sum-label">累计胜率</div><div class="sum-val" id="hsWinRate">—</div></div>
-    </div>
-  </div>
+    <p class="hs-hero-rule">
+      每交易日收盘后 AI 选 3 个热门板块 × 3 只强势股，按 T 日收盘价买入、
+      T+1 收盘价卖出，10 万本金等权滚动复利
+    </p>
 
-  <!-- 2. 今日 AI 荐股（信息量最大，放最前） -->
-  <div class="panel">
+    <div class="hs-hero-grid">
+      <div class="hs-headline">
+        <div class="hs-headline-label">超额收益 <span>相对中证1000</span></div>
+        <div class="hs-headline-val" id="hsExcess">—</div>
+        <div class="hs-headline-sub" id="hsExcessSub">加载中…</div>
+      </div>
+
+      <div class="hs-stat-row">
+        <div class="hs-stat">
+          <div class="hs-stat-label">累计收益</div>
+          <div class="hs-stat-val" id="hsCumReturn">—</div>
+        </div>
+        <div class="hs-stat">
+          <div class="hs-stat-label">扣费后</div>
+          <div class="hs-stat-val" id="hsCumReturnAfterFee">—</div>
+          <div class="hs-stat-note">佣金双边 + 印花税</div>
+        </div>
+        <div class="hs-stat">
+          <div class="hs-stat-label">同期中证1000</div>
+          <div class="hs-stat-val" id="hsBenchmarkReturn">—</div>
+        </div>
+        <div class="hs-stat">
+          <div class="hs-stat-label">模拟资金</div>
+          <div class="hs-stat-val" id="hsCapital">—</div>
+          <div class="hs-stat-note" id="hsInitCapital">—</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="hs-winrate" id="hsWinrateBlock">
+      <div class="hs-winrate-head">
+        <span class="hs-winrate-label">累计胜率</span>
+        <span class="hs-winrate-val" id="hsWinRate">—</span>
+      </div>
+      <div class="hs-winrate-bar" id="hsWinBar" role="img" aria-label="胜率占比">
+        <span class="hs-winrate-fill"></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2. 20 日战绩条 —— 每根柱子 = 一个已结算交易日的当日收益。
+       历史批次表里本来就有这些数,但表格要逐行读;柱状条一眼看出波动与连败 -->
+  <section class="panel hs-streak-panel">
+    <div class="panel-title">
+      近期战绩 <span id="hsStreakHint">按已结算交易日，柱高为当日收益绝对值</span>
+    </div>
+    <div class="hs-streak" id="hsStreak">
+      <div class="no-data">加载中…</div>
+    </div>
+  </section>
+
+  <!-- 3. 今日 AI 荐股 —— 页面重心,给它区别于其他区块的视觉权重 -->
+  <section class="panel hs-today-panel">
     <div class="panel-title">
       今日 AI 荐股 <span id="hsTodayDate"></span>
+      <span class="hs-live" id="hsLive" hidden><i></i>盘中</span>
       <span class="hs-updated-hint" id="hsIntradayUpdated"></span>
     </div>
     <div id="hsTodayWrap">
       <div class="no-data">加载中…</div>
     </div>
-  </div>
+  </section>
 
-  <!-- 3. 资金曲线 -->
-  <div class="panel">
+  <!-- 4. 资金曲线 -->
+  <section class="panel">
     <div class="panel-title">模拟资金曲线 <span>10 万本金 · 每日滚动复利 · 对比中证1000 · 扣费后</span></div>
     <div class="chart-wrap-sm" id="hsEquityChart"></div>
-  </div>
+  </section>
 
   <!-- 4. 板块表现 + 提示词版本对比 —— 收进折叠区:这两张是给想验证"AI
        是不是在同质化推荐/提示词迭代到底有没有用"的人看的方法论细节,
@@ -96,13 +147,13 @@
     </div>
   </details>
 
-  <!-- 5. 历史批次 -->
-  <div class="panel">
-    <div class="panel-title">历史批次</div>
+  <!-- 6. 历史批次 -->
+  <section class="panel">
+    <div class="panel-title">历史批次 <span>每日一批，含未结算</span></div>
     <div id="hsHistoryWrap">
       <div class="no-data">加载中…</div>
     </div>
-  </div>
+  </section>
 
 </main>
 
