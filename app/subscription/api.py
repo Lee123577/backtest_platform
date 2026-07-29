@@ -2,12 +2,14 @@
 订阅/订单 API
 =============
 
-GET  /api/subscription/status              — 当前订阅态 + 套餐列表(未登录也可查套餐)
-POST /api/subscription/order  {plan}       — 下单(需登录)，返回订单号+金额
+GET  /api/subscription/status              — 当前订阅态 + 套餐列表 + 人工开通联系方式
+POST /api/subscription/order  {plan}       — 下单(需登录)，返回订单号+金额+联系方式
 POST /api/subscription/dev_activate {order_no}
-        — 【仅管理员 IP】模拟支付成功，用于支付宝接入前打通解锁流程
+        — 【仅管理员 IP】把订单标记为已支付并开通会员
 
-真实支付回调(支付宝异步通知)待接入沙箱后补 /api/subscription/alipay_notify。
+当前不接在线支付：用户下单拿到订单号 → 加 QQ 找主理人 → 核对后管理员调
+dev_activate 履约。接入支付宝时在此补 /alipay_notify 回调调 service.fulfill_order
+即可，其余各层不用改。
 """
 from __future__ import annotations
 
@@ -36,15 +38,17 @@ class DevActivateReq(BaseModel):
 @router.get("/status")
 def status(request: Request):
     user = get_current_user(request)
+    contact = service.contact_info()
     if user is None:
-        return {"logged_in": False, "subscribed": False,
-                "expires_at": None, "plans": service.plans_public()}
+        return {"logged_in": False, "subscribed": False, "expires_at": None,
+                "plans": service.plans_public(), "contact": contact}
     try:
         st = service.subscription_status(int(user["id"]))
     except Exception as e:
         logger.info("subscription status 查询失败(按未订阅处理): %s", e)
         st = {"subscribed": False, "expires_at": None, "plan": None}
-    return {"logged_in": True, **st, "plans": service.plans_public()}
+    return {"logged_in": True, **st,
+            "plans": service.plans_public(), "contact": contact}
 
 
 @router.post("/order")
@@ -53,9 +57,10 @@ def create_order(req: OrderReq, user: dict = Depends(require_login)):
         order = service.create_order(int(user["id"]), req.plan)
     except service.SubscriptionError as e:
         raise HTTPException(400, str(e))
-    # 支付宝接入后这里附上二维码链接;当前先回订单信息
+    # 当前无在线支付:回订单号 + QQ,由用户拿单号联系人工开通。
+    # pay_ready 保留给支付宝接入后置 true,前端据此切换成拉起二维码。
     return {"ok": True, **order, "pay_ready": False,
-            "note": "支付功能接入中，暂无法在线支付"}
+            "contact": service.contact_info()}
 
 
 @router.post("/dev_activate")

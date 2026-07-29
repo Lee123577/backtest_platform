@@ -6,11 +6,23 @@
  *
  * 正文是 LLM 生成的 markdown —— 先整体 HTML 转义再做受限的 markdown
  * 变换(标题/加粗/列表/段落),不引入完整 md 库,杜绝 XSS。
+ * 服务端有一份同款实现(app/daily_review/render.py)负责首屏直出,改这里记得同步。
+ *
+ * 路由:每篇复盘有独立路径 /daily_review/YYYY-MM-DD(可被搜索引擎收录)。
+ * 服务端已直出公开正文,本脚本只负责:
+ *   1) 会员的往期完整正文(HTML 是公共缓存,付费内容只能走 API)
+ *   2) 概览卡片(数据快照)
+ *   3) 站内切换往期时的局部刷新(pushState,不整页重载)
  */
 (function () {
   "use strict";
 
-  var currentDate = null; // 正在展示的 review_date
+  var initEl = document.getElementById("drInit");
+  var ssrDate = initEl ? initEl.getAttribute("data-review-date") : "";
+  var ssrLocked = initEl ? initEl.getAttribute("data-locked") === "1" : false;
+  var hasSsr = initEl ? initEl.getAttribute("data-ssr") === "1" : false;
+
+  var currentDate = ssrDate || null; // 正在展示的 review_date
   var subscribed = false; // 当前用户是否会员(付费墙用)
   var latestDate = null;  // 最新一篇复盘日期(对所有人免费,不加锁)
 
@@ -144,6 +156,10 @@
     }
     currentDate = String(review.review_date);
     dateEl.textContent = currentDate;
+    // 站内切换往期是 pushState,不整页重载 —— 标题得自己跟上,
+    // 否则收藏/分享出去的还是上一篇的标题
+    document.title = (review.title || (currentDate + " A股复盘")) +
+      "（" + currentDate + "） | shoupan";
     if (review.locked) {
       // 付费墙:历史篇未订阅 —— 标题当钩子,正文换成订阅引导
       titleEl.textContent = review.title || (currentDate + " A股复盘");
@@ -176,6 +192,12 @@
     window.location.href = "/subscribe";
   }
 
+  // 服务端直出的付费墙按钮也要能点(首屏就在页面上,不经 renderReview)
+  function bindPaywallBtn() {
+    var btn = document.getElementById("drSubBtn");
+    if (btn) btn.addEventListener("click", goSubscribe);
+  }
+
   // ── 历史列表 ──────────────────────────────────────────────────────────
   function highlightHistory() {
     var items = document.querySelectorAll(".dr-history-item");
@@ -187,36 +209,52 @@
   function renderHistory(rows) {
     var wrap = document.getElementById("drHistoryWrap");
     if (!rows || !rows.length) {
+      // 服务端已经直出过列表时不要清空 —— 接口抖一下就把好好的链接
+      // 换成"暂无历史复盘",既丢了导航也丢了给爬虫的内链
+      if (wrap.querySelector(".dr-history-item")) return;
       wrap.innerHTML = '<div class="no-data">暂无历史复盘</div>';
       return;
     }
     // 历史按日期倒序 → 第一条即最新一篇(对所有人免费)
     latestDate = String(rows[0].review_date);
+    // 每项都是真链接 —— 服务端也直出同样的 <a>,爬虫顺着能抓到每篇往期;
+    // 下面再拦截点击做局部刷新,兼顾可收录与不整页重载
     wrap.innerHTML = rows.map(function (r) {
       var d = String(r.review_date);
       var locked = !subscribed && d !== latestDate && r.status !== "failed";
-      return '<div class="dr-history-item" data-date="' + esc(d) + '">' +
+      return '<a class="dr-history-item" href="/daily_review/' + esc(d) +
+        '" data-date="' + esc(d) + '">' +
         '<span class="dr-history-date">' + esc(d) + "</span>" +
         '<span class="dr-history-title">' + esc(r.title || "") + "</span>" +
         (r.status === "failed" ? '<span class="dr-history-failed">生成失败</span>' : "") +
         (locked ? '<span class="dr-history-lock">🔒</span>' : "") +
-        "</div>";
+        "</a>";
     }).join("");
-    wrap.querySelectorAll(".dr-history-item").forEach(function (el) {
-      el.addEventListener("click", function () {
-        loadByDate(el.getAttribute("data-date"));
-      });
-    });
+    bindHistoryLinks(wrap);
     highlightHistory();
   }
 
-  function loadByDate(dateStr) {
+  // 拦截站内往期链接:新标签页/中键/带修饰键的点击照常交给浏览器
+  function bindHistoryLinks(wrap) {
+    wrap.querySelectorAll(".dr-history-item").forEach(function (el) {
+      el.addEventListener("click", function (ev) {
+        if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey ||
+            ev.button !== 0) return;
+        ev.preventDefault();
+        var d = el.getAttribute("data-date");
+        if (d === currentDate) return;
+        loadByDate(d, true);
+      });
+    });
+  }
+
+  function loadByDate(dateStr, push) {
     fetchJson("/api/daily_review/" + encodeURIComponent(dateStr))
       .then(function (data) {
         renderReview(data.review);
-        // 可分享链接:/daily_review#2026-07-08 直达往期
-        // (renderReview 已更新 currentDate,hashchange 里会据此跳过重复加载)
-        if (location.hash.slice(1) !== dateStr) location.hash = dateStr;
+        if (push) {
+          history.pushState({ date: dateStr }, "", "/daily_review/" + dateStr);
+        }
       })
       .catch(function (e) {
         currentDate = null;
@@ -229,15 +267,26 @@
       });
   }
 
+  // 路径里的日期:/daily_review/2026-07-08 → "2026-07-08"
+  function pathDate() {
+    var m = location.pathname.match(/^\/daily_review\/(\d{4}-\d{2}-\d{2})\/?$/);
+    return m ? m[1] : null;
+  }
+
+  // 老的 hash 链接(/daily_review#2026-07-08)已发出去过,不能直接失效 ——
+  // 悄悄换成等价的真实路径,收藏和外链继续可用
   function hashDate() {
     var m = location.hash.match(/^#(\d{4}-\d{2}-\d{2})$/);
     return m ? m[1] : null;
   }
 
   // 浏览器前进/后退在往期复盘之间切换
-  window.addEventListener("hashchange", function () {
-    var d = hashDate();
-    if (d && d !== currentDate) loadByDate(d);
+  window.addEventListener("popstate", function () {
+    var d = pathDate();
+    if (d && d !== currentDate) loadByDate(d, false);
+    else if (!d && latestDate && latestDate !== currentDate) {
+      loadByDate(latestDate, false);
+    }
   });
 
   function refreshSub() {
@@ -247,16 +296,44 @@
   }
 
   // ── 初始化 ────────────────────────────────────────────────────────────
-  // 先定订阅态，再渲染历史(锁标记依赖 subscribed)与正文
+  // 服务端已直出的部分不要重复渲染：正文首屏已经在页面上，这里只补
+  //   ① 概览卡片(数据快照，服务端不直出)
+  //   ② 会员的往期完整正文(付费内容不进公共缓存的 HTML)
+  // 先定订阅态，再渲染历史(锁标记依赖 subscribed)
+  // 服务端直出的列表/付费墙按钮先接上交互，别等接口回来
+  // (锁图标依赖订阅态，是按人变的，只能等 renderHistory；直出的 HTML 里不能有)
+  bindHistoryLinks(document.getElementById("drHistoryWrap"));
+  bindPaywallBtn();
+  highlightHistory();
+
   refreshSub().then(function () {
-    var initDate = hashDate();
-    if (initDate) {
-      loadByDate(initDate);
+    var legacy = hashDate();
+    if (legacy) {
+      // 老 hash 链接 → 换成真实路径后按该日期加载
+      history.replaceState({ date: legacy }, "", "/daily_review/" + legacy);
+      loadByDate(legacy, false);
+    } else if (!hasSsr) {
+      // 服务端没数据(DB 未就绪/表未建)：退回纯前端加载，页面不至于空着
+      var p = pathDate();
+      if (p) {
+        loadByDate(p, false);
+      } else {
+        fetchJson("/api/daily_review/latest")
+          .then(function (data) { renderReview(data.review); })
+          .catch(function () { renderReview(null); });
+      }
+    } else if (ssrLocked && subscribed) {
+      // 直出的是付费墙预览，但当前用户是会员 → 拉完整正文覆盖
+      loadByDate(ssrDate, false);
     } else {
-      fetchJson("/api/daily_review/latest")
-        .then(function (data) { renderReview(data.review); })
-        .catch(function () { renderReview(null); });
+      // 首屏正文已就位，只补概览卡片
+      fetchJson("/api/daily_review/" + encodeURIComponent(ssrDate))
+        .then(function (data) {
+          if (data.review) renderSummary(data.review.context);
+        })
+        .catch(function () { renderSummary(null); });
     }
+
     fetchJson("/api/daily_review/history?limit=30")
       .then(function (data) { renderHistory(data.history); })
       .catch(function () { renderHistory([]); });

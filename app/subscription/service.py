@@ -10,12 +10,17 @@
 “按时长订阅”续费规则：新到期 = max(now, 原到期) + 套餐天数
   —— 会员没过期时续费叠加剩余时长，过期后续费从现在起算。
 
-DB 经模块级 db 引用调用(测试可 monkeypatch)。支付网关(支付宝)不在这层，
-本层只认“订单已支付”这个事实，由 api 层的回调/沙箱触发 fulfill_order。
+DB 经模块级 db 引用调用(测试可 monkeypatch)。支付网关不在这层，本层只认
+“订单已支付”这个事实，由 api 层触发 fulfill_order。
+
+当前阶段**不接在线支付**：下单只生成订单号，用户拿订单号加 QQ 人工联系开通，
+管理员核对后走 /api/subscription/dev_activate 履约。接入支付宝时只需新增回调
+路由调 fulfill_order，本层与前端的其余部分都不用动。
 """
 from __future__ import annotations
 
 import logging
+import os
 import secrets
 from datetime import datetime as _DT, timedelta
 from typing import Any, Dict, List, Optional, Tuple
@@ -23,6 +28,20 @@ from typing import Any, Dict, List, Optional, Tuple
 from . import db
 
 logger = logging.getLogger(__name__)
+
+# 人工开通联系方式：在线支付接入前，用户拿订单号加 QQ 找主理人开通。
+# 可用环境变量 SUBSCRIBE_CONTACT_QQ 覆盖，免得换号还要改代码重新发版。
+CONTACT_QQ: str = os.getenv("SUBSCRIBE_CONTACT_QQ", "1415854304").strip()
+
+
+def contact_info() -> Dict[str, Any]:
+    """给前端的人工开通联系方式(下单前后都要展示,统一从这里取)。"""
+    return {
+        "channel": "qq",
+        "qq": CONTACT_QQ,
+        "hint": f"暂未开放在线支付，请加 QQ {CONTACT_QQ} 并发送订单号开通",
+    }
+
 
 # 套餐：code -> (展示名, 时长天数, 价格分)。价格为占位，按业务判断调整。
 PLANS: Dict[str, Dict[str, Any]] = {
@@ -81,10 +100,13 @@ def create_order(user_id: int, plan: str, now: Optional[_DT] = None) -> Dict[str
     now = now or _DT.now()
     amount_fen = PLANS[plan]["price_fen"]
     order_no = _gen_order_no(now)
-    db.create_order(order_no, user_id, plan, amount_fen, provider="alipay", created_at=now)
+    # provider=manual：当前是"下单 → 加 QQ 人工开通"，不是支付宝渠道。
+    # 记成 alipay 会让后续对账分不清哪些单真的走过网关。
+    db.create_order(order_no, user_id, plan, amount_fen, provider="manual", created_at=now)
     return {
         "order_no": order_no,
         "plan": plan,
+        "plan_label": PLANS[plan]["label"],
         "amount_fen": amount_fen,
         "amount_yuan": round(amount_fen / 100, 2),
     }

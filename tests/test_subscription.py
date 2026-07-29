@@ -98,6 +98,28 @@ def test_create_order_amount_matches_plan(fake):
     assert fake.orders[o["order_no"]]["status"] == "pending"
 
 
+def test_create_order_carries_plan_label_for_ui(fake):
+    # 前端下单成功文案要展示"月卡"而不是 "month"
+    o = service.create_order(UID, "month", now=NOW)
+    assert o["plan_label"] == PLANS["month"]["label"]
+
+
+def test_create_order_provider_is_manual_not_alipay(fake):
+    # 当前是"下单 → 加 QQ 人工开通",没走任何支付网关。
+    # 记成 alipay 会让后续对账分不清哪些单真的过了网关。
+    o = service.create_order(UID, "month", now=NOW)
+    assert fake.orders[o["order_no"]]["provider"] == "manual"
+
+
+# ── 人工开通联系方式 ──────────────────────────────────────────────────────────
+
+def test_contact_info_exposes_qq():
+    c = service.contact_info()
+    assert c["channel"] == "qq"
+    assert c["qq"] and c["qq"].isdigit()
+    assert c["qq"] in c["hint"]
+
+
 # ── 支付成功 ──────────────────────────────────────────────────────────────────
 
 def test_fulfill_activates_membership(fake):

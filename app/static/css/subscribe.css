@@ -29,6 +29,32 @@
 .plan-days { font-size: 12px; color: var(--txt2, #9aa0aa); margin-top: 6px; }
 
 .sub-msg { min-height: 20px; font-size: 13px; margin: 12px 0 0; color: var(--accent, #185FA5); }
+
+/* 下单成功后的订单号 + QQ 引导 */
+.sub-order-ok p { margin: 0 0 8px; line-height: 1.8; color: var(--txt, #e6e6e6); }
+.sub-order-ok strong { color: var(--brand-2, #EF9F27); }
+
+/* 人工开通说明(常驻) */
+.sub-contact {
+  margin-top: 14px;
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--txt2, #9aa0aa);
+}
+.sub-contact:empty { margin-top: 0; }
+.sub-contact p { margin: 0; }
+.sub-contact-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--txt, #e6e6e6);
+  margin-bottom: 4px;
+}
+.sub-contact-qq {
+  color: var(--brand-2, #EF9F27);
+  font-weight: 700;
+  letter-spacing: .5px;
+  user-select: all;   /* 双击即可整串选中,方便手动复制 */
+}
 .sub-hint {
   margin-top: 14px;
   font-size: 12px;

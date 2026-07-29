@@ -39,7 +39,14 @@
 }
 .md-body .no-data { padding: 14px 0; }
 
+/* 复盘标题从 div 改成 h1(每篇复盘的页面主标题) —— 抵掉 UA 默认的字号/外边距 */
+h1.panel-title {
+  margin-top: 0;
+  font-size: 18px;
+}
+
 /* ── 历史复盘列表 ────────────────────────────────────────────── */
+/* 每项是 <a href="/daily_review/YYYY-MM-DD">(可被爬虫发现),外观保持原样 */
 .dr-history-item {
   display: flex;
   align-items: baseline;
@@ -47,6 +54,8 @@
   padding: 8px 6px;
   border-bottom: 1px solid var(--border, #333);
   cursor: pointer;
+  text-decoration: none;
+  color: inherit;
 }
 .dr-history-item:hover { background: rgba(128, 128, 128, .08); }
 .dr-history-item.active { background: rgba(91, 141, 239, .12); }

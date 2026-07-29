@@ -12,6 +12,39 @@
   <meta property="og:description" content="收盘 shoupan · 用数据验证策略，让判断有据可依 —— A股单股回测与多策略验证平台">
   <meta property="og:url" content="https://shoupan.asia/">
   <meta name="twitter:card" content="summary">
+  <link rel="canonical" href="https://shoupan.asia/">
+  <!-- 结构化数据:让搜索引擎知道这是个什么工具、免费不免费。
+       CSP 是 script-src 'self',但 application/ld+json 不是可执行脚本,不受限。 -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "收盘 shoupan · 单股回测",
+    "url": "https://shoupan.asia/",
+    "applicationCategory": "FinanceApplication",
+    "operatingSystem": "Web",
+    "inLanguage": "zh-CN",
+    "description": "A 股单股回测工具：不写代码即可用均线、MACD、RSI、KDJ、布林带等内置策略回测单只股票的历史表现，并用参数扰动与样本内外拆分做防过拟合检查。",
+    "featureList": [
+      "11 种内置技术指标策略回测",
+      "防过拟合检查：参数 ±20% 扰动 + 样本内/外 70/30 拆分",
+      "A 股规则内置：前后复权、涨跌停、停牌",
+      "全市场选股与定期调仓的组合回测",
+      "模拟盘：收盘出信号、次日开盘价成交"
+    ],
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "CNY",
+      "description": "回测功能免费使用，历史复盘等内容为会员内容"
+    },
+    "publisher": {
+      "@type": "Organization",
+      "name": "收盘 shoupan",
+      "url": "https://shoupan.asia"
+    }
+  }
+  </script>
   <link rel="stylesheet" href="/static/css/style.css">
   <script src="/static/js/vendor/echarts.min.js"></script>
   <link rel="stylesheet" href="/static/css/feedback.css">

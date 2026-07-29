@@ -84,6 +84,16 @@ def upsert_review(
         )
 
 
+def db_available() -> bool:
+    """当前能不能拿到数据库连接。
+
+    用来区分"这天确实没有复盘"和"数据库暂时连不上" —— 两种情况 get_review()
+    都返回 None,但对外一个该回 404、一个该回 503。复盘页的 URL 是要进搜索引擎
+    索引的,DB 抖一下就回 404 会被判定成页面已删除。
+    """
+    return _get_pool() is not None
+
+
 def get_review(review_date: _Date) -> Optional[Dict[str, Any]]:
     conn = _get_pool()
     if conn is None:
@@ -104,6 +114,23 @@ def get_latest_review() -> Optional[Dict[str, Any]]:
             "ORDER BY review_date DESC LIMIT 1"
         )
         return cur.fetchone()
+
+
+def list_review_dates(limit: int = 365) -> List[_Date]:
+    """sitemap 用：生成成功的复盘日期，倒序。
+
+    failed 的不收录 —— 那种页面正文是"生成失败"，送进索引只会拉低质量。
+    """
+    conn = _get_pool()
+    if conn is None:
+        return []
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT review_date FROM daily_review WHERE status='generated' "
+            "ORDER BY review_date DESC LIMIT %s",
+            (max(1, min(limit, 2000)),),
+        )
+        return [r["review_date"] for r in cur.fetchall()]
 
 
 def list_reviews(limit: int = 30) -> List[Dict[str, Any]]:

@@ -1,6 +1,8 @@
 import asyncio
 import hashlib
+import html as _htmlmod
 import json
+import logging
 import re
 import threading
 import time
@@ -18,6 +20,8 @@ from pydantic import BaseModel, Field
 from starlette.requests import Request
 
 from .config import settings
+
+logger = logging.getLogger(__name__)
 
 
 _MAX_RANGE_DAYS = 15 * 366  # 15 年(含闰年余量),防 DoS:全市场×长跨度抓崩后端
@@ -37,6 +41,8 @@ def _validate_date_range(start: str, end: str) -> None:
     if (e - s).days > _MAX_RANGE_DAYS:
         raise HTTPException(400, f"回测时间跨度最大 15 年,请缩短日期范围")
 
+from .daily_review import db as _dr_db
+from .daily_review import render as _dr_render
 from .data.calendar import count_trading_days, next_n_trading_days
 from .data.data_loader import get_kline_data, get_stock_name, normalize_code
 from .data.market_data import (
@@ -307,11 +313,16 @@ class VersionedStaticFiles(StaticFiles):
 app.mount("/static", VersionedStaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
-def _html(request: Request, *parts: str) -> Response:
+def _html(request: Request, *parts: str,
+          replacements: Optional[Dict[str, str]] = None) -> Response:
     """返回页面 HTML:自动给静态资源引用打上内容 hash 版本号,并配 no-cache + ETag。
 
     no-cache 不是"不缓存",是"每次都回源校验" —— 配 ETag 后内容没变就 304,
     只有几十字节的开销,而页面和它引用的 JS 永远不会出现版本错配。
+
+    replacements: 服务端直出用 —— {占位注释: 替换成的 HTML}。只允许放**公开
+    内容**:响应带 ETag 且可被共享缓存复用,任何按登录态变化的内容进了 HTML
+    就可能串给其他人(付费正文永远走 API,不走这里)。
     """
     fp = STATIC_DIR.joinpath(*parts)
     st = fp.stat()
@@ -327,6 +338,10 @@ def _html(request: Request, *parts: str) -> Response:
     else:
         text = fp.read_text(encoding="utf-8")
         _html_raw_cache[str(fp)] = (key, text)
+
+    if replacements:
+        for marker, value in replacements.items():
+            text = text.replace(marker, value)
 
     body = _stamp_asset_versions(text).encode("utf-8")
     etag = '"%s"' % hashlib.sha256(body).hexdigest()[:16]
@@ -380,8 +395,24 @@ async def page_ai_hotsector(request: Request):
 
 
 @app.get("/daily_review", include_in_schema=False)
-async def page_daily_review(request: Request):
-    return _html(request, "daily_review.html")
+def page_daily_review(request: Request):
+    """复盘首页 —— 展示最新一篇(对所有人免费)。"""
+    return _daily_review_page(request, None)
+
+
+@app.get("/daily_review/{review_date}", include_in_schema=False)
+def page_daily_review_dated(review_date: str, request: Request):
+    """往期复盘的独立可索引 URL。
+
+    改这条路由的起因:原先往期靠 `/daily_review#2026-07-08` 的 hash 区分,而
+    `#` 后面根本不会发给服务器 —— 几百篇复盘在搜索引擎眼里只有 1 个 URL,
+    正文又是 JS 拉的,抓到的还是空壳。真实路径 + 正文直出才可能被收录。
+    """
+    try:
+        d = _date.fromisoformat(review_date)
+    except ValueError:
+        raise HTTPException(404, "页面不存在")
+    return _daily_review_page(request, d)
 
 
 @app.get("/subscribe", include_in_schema=False)
@@ -411,6 +442,214 @@ async def page_legal(request: Request):
 
 _SITE_ORIGIN = "https://shoupan.asia"
 
+
+# ── 每日复盘：服务端直出(SEO)──────────────────────────────────────────────
+# 只直出**公开内容**：最新一篇全文免费，往期正文是会员内容，HTML 里只放一段
+# 免费预览 + 付费墙占位，完整正文照旧走 /api/daily_review/{date} 按登录态发。
+# 给爬虫和给访客的 HTML 完全一致 —— 按 UA 区分就是 cloaking,会被判罚。
+_DR_LATEST_CACHE: Dict[str, Any] = {}
+_DR_HISTORY_CACHE: Dict[str, Any] = {}
+_DR_LATEST_TTL = 60.0
+
+
+def _dr_latest_cached():
+    """最新一篇复盘(60s 进程缓存)。DB 不可用/表未建时返回 None,页面照常出壳。"""
+    now = time.time()
+    if _DR_LATEST_CACHE and now - _DR_LATEST_CACHE["ts"] < _DR_LATEST_TTL:
+        return _DR_LATEST_CACHE["row"]
+    try:
+        row = _dr_db.get_latest_review()
+    except Exception as e:
+        logger.info("复盘页取最新篇失败(按无数据渲染): %s", e)
+        return None
+    _DR_LATEST_CACHE.update(ts=now, row=row)
+    return row
+
+
+def _json_ld(obj: Dict[str, Any]) -> str:
+    """内联 JSON-LD。`<` 转义成 \\u003c —— 正文里出现 `</script>` 会提前闭合脚本块。"""
+    raw = json.dumps(obj, ensure_ascii=False).replace("<", "\\u003c")
+    return f'<script type="application/ld+json">{raw}</script>'
+
+
+def _dr_head(row: Optional[Dict[str, Any]], canonical: str,
+             locked: bool) -> str:
+    """复盘页 <head> 的 title / description / canonical / OG / 结构化数据。"""
+    if row is None:
+        title = "AI 每日复盘 · A股每日行情复盘 | shoupan"
+        desc = ("每个交易日收盘后自动生成的 A 股市场复盘：主要指数、涨跌家数、"
+                "成交额放缩量、涨停梯队与全市场涨跌幅榜，数据全部来自当日真实行情。")
+        head = [f"<title>{_htmlmod.escape(title)}</title>"]
+    else:
+        d = str(row.get("review_date"))
+        art_title = (row.get("title") or f"{d} A股复盘").strip()
+        title = f"{art_title}（{d}） | shoupan"
+        desc = _dr_render.plain_text(row.get("content_md"), limit=140) or (
+            f"{d} A 股市场复盘：主要指数、涨跌家数、成交额与涨停梯队，"
+            "基于当日真实行情数据自动生成。")
+        head = [f"<title>{_htmlmod.escape(title)}</title>"]
+
+    esc_desc = _htmlmod.escape(desc, quote=True)
+    esc_title = _htmlmod.escape(title, quote=True)
+    head += [
+        f'<meta name="description" content="{esc_desc}">',
+        f'<link rel="canonical" href="{canonical}">',
+        '<meta property="og:type" content="article">',
+        '<meta property="og:site_name" content="收盘 shoupan">',
+        f'<meta property="og:title" content="{esc_title}">',
+        f'<meta property="og:description" content="{esc_desc}">',
+        f'<meta property="og:url" content="{canonical}">',
+        '<meta name="twitter:card" content="summary">',
+    ]
+
+    if row is not None:
+        d = str(row.get("review_date"))
+        article: Dict[str, Any] = {
+            "@context": "https://schema.org",
+            "@type": "Article",
+            "headline": (row.get("title") or f"{d} A股复盘").strip()[:110],
+            "description": desc,
+            "datePublished": d,
+            "dateModified": d,
+            "inLanguage": "zh-CN",
+            "mainEntityOfPage": {"@type": "WebPage", "@id": canonical},
+            "publisher": {"@type": "Organization", "name": "收盘 shoupan",
+                          "url": _SITE_ORIGIN},
+            "isAccessibleForFree": not locked,
+        }
+        if locked:
+            # 付费墙的正规声明:告诉搜索引擎"这段确实是会员内容",
+            # 不声明才会被当成对爬虫和用户发不同内容。
+            article["hasPart"] = {
+                "@type": "WebPageElement",
+                "isAccessibleForFree": False,
+                "cssSelector": ".dr-paid",
+            }
+        head.append(_json_ld(article))
+        head.append(_json_ld({
+            "@context": "https://schema.org",
+            "@type": "BreadcrumbList",
+            "itemListElement": [
+                {"@type": "ListItem", "position": 1, "name": "首页",
+                 "item": _SITE_ORIGIN + "/"},
+                {"@type": "ListItem", "position": 2, "name": "AI 每日复盘",
+                 "item": _SITE_ORIGIN + "/daily_review"},
+                {"@type": "ListItem", "position": 3, "name": d},
+            ],
+        }))
+    return "\n  ".join(head)
+
+
+def _dr_body(row: Optional[Dict[str, Any]], locked: bool) -> str:
+    """复盘正文区。locked=True 时只出免费预览，完整正文由 JS 按登录态补。"""
+    if row is None:
+        return ('<div class="no-data">还没有生成过复盘 —— 每个交易日 17:45 '
+                "数据入库后自动生成。</div>")
+    if row.get("status") == "failed":
+        return '<div class="no-data">该日复盘生成失败</div>'
+    if locked:
+        # 免费预览 + 付费墙。付费墙整段包在 .dr-paid 里 —— 与 _dr_head() 里
+        # hasPart.cssSelector 对应,是向搜索引擎声明"这里确实是会员内容"的锚点。
+        return (
+            _dr_render.preview_html(row.get("content_md")) +
+            '<div class="dr-paid">'
+            '<div class="dr-paywall">'
+            '<div class="dr-paywall-title">🔒 订阅解锁完整复盘</div>'
+            "<p>往期复盘的完整正文与当日数据快照为会员内容，最新一篇可免费查看。</p>"
+            '<button class="dr-paywall-btn" id="drSubBtn" type="button">'
+            "开通会员 · 查看套餐</button>"
+            "</div></div>"
+        )
+    return _dr_render.md_to_html(row.get("content_md"))
+
+
+def _dr_history(limit: int = 30) -> str:
+    """历史列表 —— 直出成真链接。
+
+    原先是 JS 生成的 div + click 事件,爬虫顺不到任何一篇往期;换成 <a href>
+    后每篇复盘都有入口,不必只靠 sitemap 发现(前端仍会拦截点击做局部刷新)。
+
+    列表对所有页面都一样、一天只变一次 —— 缓存 60s,免得每篇复盘被爬一次就查一次库。
+    """
+    now = time.time()
+    if _DR_HISTORY_CACHE and now - _DR_HISTORY_CACHE["ts"] < _DR_LATEST_TTL:
+        return _DR_HISTORY_CACHE["html"]
+    try:
+        rows = _dr_db.list_reviews(limit)
+    except Exception as e:
+        logger.info("复盘页取历史列表失败(按空列表渲染): %s", e)
+        return ""
+    if not rows:
+        return ""
+    items = []
+    for r in rows:
+        d = str(r.get("review_date"))
+        t = (r.get("title") or "").strip()
+        items.append(
+            f'<a class="dr-history-item" href="/daily_review/{d}" data-date="{d}">'
+            f'<span class="dr-history-date">{d}</span>'
+            f'<span class="dr-history-title">{_htmlmod.escape(t)}</span>'
+            + ('<span class="dr-history-failed">生成失败</span>'
+               if r.get("status") == "failed" else "")
+            + "</a>"
+        )
+    html = "".join(items)
+    _DR_HISTORY_CACHE.update(ts=now, html=html)
+    return html
+
+
+def _daily_review_page(request: Request, d: Optional[_date]) -> Response:
+    """渲染复盘页。d=None 表示复盘首页(展示最新一篇)。"""
+    latest = _dr_latest_cached()
+    if d is None:
+        row = latest
+        canonical = f"{_SITE_ORIGIN}/daily_review"
+    else:
+        try:
+            row = _dr_db.get_review(d)
+        except Exception as e:
+            logger.warning("复盘页按日期取失败: %s", e)
+            raise HTTPException(503, "数据服务暂时不可用，请稍后再试")
+        if row is None:
+            # 连不上库时 get_review 也返回 None —— 这里必须分清楚:
+            # 这些 URL 会进搜索引擎索引,DB 抖一下就回 404 等于告诉爬虫"页面没了",
+            # 反复几次就会被踢出索引。连不上就回 503(爬虫会择期重试)。
+            if not _dr_db.db_available():
+                raise HTTPException(503, "数据服务暂时不可用，请稍后再试")
+            raise HTTPException(404, f"{d} 无复盘记录")
+        canonical = f"{_SITE_ORIGIN}/daily_review/{d}"
+
+    # 最新一篇对所有人免费;往期是会员内容 —— 服务端一律按"未订阅"直出,
+    # 订阅用户的完整正文由前端拿 API 覆盖(HTML 带 ETag,不能塞按人变化的内容)
+    is_latest = (
+        row is not None and latest is not None
+        and row.get("review_date") == latest.get("review_date")
+    )
+    locked = row is not None and not is_latest and row.get("status") != "failed"
+
+    date_txt = str(row.get("review_date")) if row else ""
+    art_title = ""
+    if row is not None:
+        art_title = (row.get("title") or f"{date_txt} A股复盘").strip()
+
+    return _html(
+        request, "daily_review.html",
+        replacements={
+            "<!--DR_HEAD-->": _dr_head(row, canonical, locked),
+            "<!--DR_TITLE-->": _htmlmod.escape(art_title) or "加载中…",
+            "<!--DR_DATE-->": _htmlmod.escape(date_txt),
+            "<!--DR_BODY-->": _dr_body(row, locked),
+            "<!--DR_HISTORY-->": _dr_history(),
+            # 前端据此判断服务端已经直出了哪一篇,避免二次渲染时白闪一下
+            "<!--DR_INIT-->": (
+                f'<span id="drInit" hidden data-review-date="{date_txt}" '
+                f'data-locked="{"1" if locked else "0"}" '
+                f'data-ssr="{"1" if row is not None else "0"}"></span>'
+            ),
+        },
+    )
+
+
 # (路径, 更新频率, 优先级) —— 仅收录面向用户的功能页；/admin/tasks、/tasks 是运维监控页不收录
 _SITEMAP_PAGES = [
     ("/", "daily", "1.0"),
@@ -421,7 +660,34 @@ _SITEMAP_PAGES = [
     ("/watchlist", "daily", "0.6"),
     ("/my_board", "weekly", "0.5"),
     ("/subscribe", "weekly", "0.5"),
+    ("/legal", "yearly", "0.2"),
 ]
+
+# 每篇复盘一条 URL,数量随天数增长 —— 每次请求都查库会被爬虫拖累,缓存 10 分钟。
+# 复盘一天只新增一篇,这个新鲜度绰绰有余。
+_SITEMAP_DR_CACHE: Dict[str, Any] = {}
+_SITEMAP_DR_TTL = 600.0
+
+
+def _sitemap_review_urls() -> str:
+    now = time.time()
+    if _SITEMAP_DR_CACHE and now - _SITEMAP_DR_CACHE["ts"] < _SITEMAP_DR_TTL:
+        return _SITEMAP_DR_CACHE["xml"]
+    try:
+        dates = _dr_db.list_review_dates(365)
+    except Exception as e:
+        # 表未建/DB 抖动:少收几条 URL 无所谓,但 sitemap 本身不能 500 ——
+        # 500 会让搜索引擎把整份 sitemap 判为失效
+        logger.info("sitemap 取复盘日期失败(本次跳过复盘条目): %s", e)
+        return ""
+    xml = "".join(
+        f"  <url><loc>{_SITE_ORIGIN}/daily_review/{d}</loc>"
+        f"<lastmod>{d}</lastmod>"
+        f"<changefreq>monthly</changefreq><priority>0.6</priority></url>\n"
+        for d in dates
+    )
+    _SITEMAP_DR_CACHE.update(ts=now, xml=xml)
+    return xml
 
 
 @app.get("/robots.txt", include_in_schema=False)
@@ -431,13 +697,16 @@ async def robots_txt():
         "Allow: /\n"
         "Disallow: /admin/\n"
         "Disallow: /api/\n"
+        # 页面模板的裸文件(/static/daily_review.html 等)与正式路由内容重复,
+        # 且没有 canonical —— 挡掉避免重复收录。CSS/JS 仍允许抓取(渲染需要)。
+        "Disallow: /static/*.html$\n"
         f"Sitemap: {_SITE_ORIGIN}/sitemap.xml\n"
     )
     return Response(body, media_type="text/plain")
 
 
 @app.get("/sitemap.xml", include_in_schema=False)
-async def sitemap_xml():
+def sitemap_xml():
     urls = "".join(
         f"  <url><loc>{_SITE_ORIGIN}{path}</loc>"
         f"<changefreq>{freq}</changefreq><priority>{prio}</priority></url>\n"
@@ -447,6 +716,7 @@ async def sitemap_xml():
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
         f"{urls}"
+        f"{_sitemap_review_urls()}"
         "</urlset>\n"
     )
     return Response(body, media_type="application/xml")
