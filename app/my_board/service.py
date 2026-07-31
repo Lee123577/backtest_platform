@@ -5,7 +5,8 @@
 - cards:    当前画布上有哪些卡片、什么类型(stock/rank/compare/review/hotsector/indices),
             决定了增删卡片后下次打开时展示哪些卡片、以及它们的先后顺序。
 - positions:每张卡片的坐标/尺寸,行情卡片(kind=stock)还可以带 code/type,
-            记录用户把这张卡片切换成了哪只股票/指数;对比卡片(kind=compare)
+            记录用户把这张卡片切换成了哪只股票/指数,以及 chart(走势线/K线,
+            缺省按走势线);对比卡片(kind=compare)
             带 codes(数组,最多 MAX_COMPARE_CODES 支),记录这张卡片同时对比
             哪几只股票/指数 —— 卡片是"槽位",股票只是槽位里当前展示的内容,
             槽位 id 不随切换/增删其它卡片而变。
@@ -28,6 +29,8 @@ SIZE_MIN, SIZE_MAX = 200, 1200
 _CODE_RE = re.compile(r"^[0-9A-Za-z]{1,10}$")
 _CARD_ID_RE = re.compile(r"^[0-9A-Za-z_]{1,40}$")
 _KINDS = ("stock", "rank", "compare", "review", "hotsector", "indices")
+# 行情卡片的图表样式(与前端 my_board.js 的 CHART_MODES 保持一致)
+_CHART_MODES = ("line", "kline")
 # 排行卡片类目是有限、写死的(与前端 my_board.js 的 RANK_INFO 保持一致);
 # 不校验的话,直接调 API 能往访客共享布局塞前端渲染不了的"僵尸"排行卡。
 _RANK_IDS = ("rk_groups", "rk_industry", "rk_concept", "rk_special")
@@ -97,6 +100,14 @@ def _clean_positions(positions: Any) -> Dict[str, Any]:
             entry["type"] = typ
             if isinstance(pos.get("name"), str) and len(pos["name"]) <= 20:
                 entry["name"] = pos["name"]
+
+        # 行情卡片的图表样式(走势线/K线)。白名单校验:布局是原样存原样发回
+        # 前端的,不限值域就能往这里塞任意字符串,而前端会拿它做样式判断。
+        chart = pos.get("chart")
+        if chart is not None:
+            if chart not in _CHART_MODES:
+                raise LayoutError("chart 不合法")
+            entry["chart"] = chart
 
         codes = pos.get("codes")
         if codes is not None:

@@ -165,6 +165,7 @@ body.spx-shell .site-footer.mb-footer { max-width: none; margin-top: 24px; }
      一列堆叠的静态块,加高热区不会跟拖拽手势打架。 */
   .mb-add-btn, .mb-reset-btn { min-height: 44px; }
   .mb-card-close, .mb-switch-btn { min-height: 44px; min-width: 44px; }
+  .mb-mode-btn { min-height: 44px; padding-left: 14px; padding-right: 14px; }
   /* 对比列表里的 ✕ 挤在一行芯片中间,撑到 44px 会把整行顶变形 ——
      改为只扩热区:视觉尺寸不变,靠 padding + 负 margin 把可点范围放大。 */
   .mb-cmp-remove {
@@ -233,8 +234,38 @@ body.spx-shell .site-footer.mb-footer { max-width: none; margin-top: 24px; }
   transition: background-color 120ms ease-out;
 }
 .mb-switch-btn:hover { background: rgba(var(--mb-accent-rgb), .16); }
-/* 空槽位已经有卡片正中的"+ 选择股票或指数"入口,头部这个按钮就不用重复出现了 */
-.mb-card--empty .mb-switch-btn { display: none; }
+/* 空槽位已经有卡片正中的"+ 选择股票或指数"入口,头部这个按钮就不用重复出现了。
+   图表样式切换同理:还没选股票时无图可切。 */
+.mb-card--empty .mb-switch-btn,
+.mb-card--empty .mb-mode-seg { display: none; }
+
+/* 走势线 / K 线切换。做成分段控件而不是两个独立按钮 —— 它们是同一个维度的
+   互斥选项,连成一体才读得出"当前处于哪一档"。 */
+.mb-mode-seg {
+  flex: none;
+  display: inline-flex;
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.mb-mode-btn {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--txt2, #8a929c);
+  background: var(--bg, #fff);
+  border: none;
+  padding: 5px 9px;
+  cursor: pointer;
+  transition: background-color 120ms ease-out, color 120ms ease-out;
+}
+.mb-mode-btn + .mb-mode-btn { border-left: 1px solid var(--border, #d0d7de); }
+.mb-mode-btn:hover { color: var(--txt, #24292f); background: var(--bg2, #f6f8fa); }
+.mb-mode-btn.is-active,
+.mb-mode-btn.is-active:hover {
+  color: #fff;
+  background: var(--mb-accent);
+}
 
 .mb-card-close {
   flex: none;

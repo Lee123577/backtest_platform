@@ -30,6 +30,13 @@
   var MAX_BOARD_CARDS = 10;   // 与后端 service.MAX_CARDS 保持一致
   var MAX_COMPARE_STOCKS = 6;
   var COMPARE_COLORS = ["#0969da", "#cf222e", "#1a7f37", "#9a6700", "#8250df", "#bf3989"];
+  // 行情卡片的两种画法(与后端 service._CHART_MODES 保持一致):
+  //   line  —— 收盘价走势线(默认,一眼看趋势)
+  //   kline —— 日 K + 成交量副图(看单日振幅/影线/放缩量)
+  var CHART_MODES = ["line", "kline"];
+  var MODE_LABEL = { line: "走势", kline: "K线" };
+  var UP_COLOR = "#cf222e", DOWN_COLOR = "#1a7f37";
+  var KLINE_DEFAULT_BARS = 60;   // K 线首屏默认只显示最近 60 根:卡片窄,120 根挤成一片看不出形态
 
   var $ = function (id) { return document.getElementById(id); };
   // esc() 用 util.js 里全站共用的实现(必须比本文件先加载)
@@ -54,6 +61,11 @@
   var slotState = {};    // cardId -> {code, type, name} | null(未选择),仅 stock 卡片有
   var slotCharts = {};   // cardId -> echarts 实例(切换时先 dispose 再重建)
   var slotResizeHandlers = {};  // cardId -> 当前绑定的 resize 回调,重建前先解绑,避免累积泄漏
+  var slotMode = {};     // cardId -> "line" | "kline",每张卡片各自记(随布局持久化)
+  // cardId -> 最近一次拉到的行情数组。走势线和 K 线用的是同一份接口数据
+  // (/api/{stock,index}/{code}/kline 本来就返回 OHLCV),切换样式只是换个画法,
+  // 缓存下来就不用为切一下重新发一次请求。
+  var slotRows = {};
 
   function titleHtml(cur) {
     if (!cur) return '<span class="mb-name mb-name--empty">未选择</span>';
@@ -62,10 +74,20 @@
       '<span class="mb-tag mb-tag--' + cur.type + '">' + tagLabel(cur.type) + "</span>";
   }
 
+  function modeSegHtml(cardId) {
+    return '<div class="mb-mode-seg" id="mbMode_' + cardId + '" role="group" aria-label="图表样式">' +
+      CHART_MODES.map(function (m) {
+        return '<button type="button" class="mb-mode-btn" data-chart-mode="' + m +
+          '" title="' + (m === "kline" ? "日K线 + 成交量" : "收盘价走势线") + '">' +
+          MODE_LABEL[m] + "</button>";
+      }).join("") + "</div>";
+  }
+
   function stockCardHtml(card) {
     return '<div class="mb-card mb-stock-card" id="mbCard_' + card.id + '" data-card-id="' + card.id + '">' +
       '<div class="mb-card-head">' +
       '<div class="mb-card-title" id="mbTitle_' + card.id + '"></div>' +
+      modeSegHtml(card.id) +
       '<button type="button" class="mb-switch-btn" id="mbSwitch_' + card.id + '" title="切换股票/指数">切换</button>' +
       '<span class="mb-drag-handle" title="拖动排列位置,便于横向/纵向比对">⠿</span>' +
       '<button type="button" class="mb-card-close" data-remove-card="' + esc(card.id) + '" title="删除这张卡片">✕</button>' +
@@ -91,6 +113,21 @@
     if (cardEl) cardEl.classList.toggle("mb-card--empty", !slotState[slot.id]);
   }
 
+  function modeOf(cardId) {
+    return slotMode[cardId] === "kline" ? "kline" : "line";
+  }
+
+  function renderSlotMode(slot) {
+    var seg = $("mbMode_" + slot.id);
+    if (!seg) return;
+    var cur = modeOf(slot.id);
+    Array.prototype.forEach.call(seg.querySelectorAll("[data-chart-mode]"), function (btn) {
+      var on = btn.getAttribute("data-chart-mode") === cur;
+      btn.classList.toggle("is-active", on);
+      btn.setAttribute("aria-pressed", on ? "true" : "false");
+    });
+  }
+
   function renderSlotBody(slot) {
     var body = $("mbBody_" + slot.id);
     if (!slotState[slot.id]) { body.innerHTML = emptyBodyHtml(); return; }
@@ -104,39 +141,64 @@
       body.innerHTML = '<div class="mb-error">暂无行情数据</div>';
       return;
     }
+    var mode = modeOf(slot.id);
     var last = rows[rows.length - 1];
     var prev = rows[rows.length - 2];
     var chg = last.close != null && prev.close ? (last.close - prev.close) / prev.close * 100 : null;
     var cls = chg == null ? "mb-flat" : (chg > 0 ? "mb-up" : (chg < 0 ? "mb-down" : "mb-flat"));
     var sign = chg > 0 ? "+" : "";
+    var meta = mode === "kline"
+      ? "日K（前复权）· 下方为成交量 · 拖动滑块或在图上滚轮可放大某段时间"
+      : "拖动图表下方滑块可放大看某段时间";
 
     body.innerHTML =
       '<div class="mb-quote">' +
       '<span class="mb-close ' + cls + '">' + num(last.close) + "</span>" +
       '<span class="mb-chg-chip ' + cls + '">' + (chg == null ? "—" : arrowPrefix(chg) + sign + num(chg) + "%") + "</span>" +
       "</div>" +
-      '<div class="mb-meta">最新 ' + esc(last.date) + " · 近 " + rows.length + " 个交易日 · 拖动图表下方滑块可放大看某段时间</div>" +
+      '<div class="mb-meta">最新 ' + esc(last.date) + " · 近 " + rows.length + " 个交易日 · " + meta + "</div>" +
       '<div class="mb-chart" id="mbChart_' + slot.id + '"></div>';
 
     drawChart(slot.id, rows, chg);
   }
 
-  function drawChart(slotId, rows, chg) {
-    if (!window.echarts) return;
-    var el = $("mbChart_" + slotId);
-    if (slotCharts[slotId]) { slotCharts[slotId].dispose(); }
-    if (slotResizeHandlers[slotId]) {
-      window.removeEventListener("resize", slotResizeHandlers[slotId]);
-      delete slotResizeHandlers[slotId];
-    }
-    var chart = echarts.init(el);
-    slotCharts[slotId] = chart;
-    var up = chg == null || chg >= 0;
-    var color = up ? "#cf222e" : "#1a7f37";
-    var dates = rows.map(function (r) { return r.date; });
-    var closes = rows.map(function (r) { return r.close; });
+  /* ── 图表 ────────────────────────────────────────────────────────────
+     两种画法共用同一份接口数据(接口本来就返回 OHLCV,走势线只是没用后四个
+     字段),所以切换样式不重新请求,直接拿 slotRows 里缓存的行重画。       */
 
-    chart.setOption({
+  // 成交量的紧凑写法。**故意不带单位**:库里 volume 的单位不是一致的 ——
+  // 2026-07-06 之前 amount/volume ≈ 均价(单位是「股」),之后 ≈ 均价×100
+  // (单位是「手」),入库口径中途换过且历史没回填。跨这个日期的窗口里
+  // 写死任何一个单位都会有一半是错的,所以只给数量级;成交量副图在这里的
+  // 作用本来也是看放量/缩量的相对变化,不是读绝对值。
+  function volLabel(v) {
+    if (v == null) return "—";
+    var n = Number(v);
+    if (n >= 1e8) return (n / 1e8).toFixed(1) + "亿";
+    if (n >= 1e4) return (n / 1e4).toFixed(n >= 1e6 ? 0 : 1) + "万";
+    return String(n);
+  }
+
+  var AXIS_LINE = { lineStyle: { color: "#d0d7de" } };
+  var AXIS_LABEL = { color: "#8a929c", fontSize: 11 };
+  var SPLIT_LINE = { lineStyle: { color: "#eef1f4" } };
+
+  function sliderCfg(extra) {
+    var base = {
+      type: "slider", height: 16, bottom: 4,
+      borderColor: "transparent", backgroundColor: "#f6f8fa",
+      fillerColor: "rgba(9,105,218,.15)", moveHandleSize: 0,
+      handleStyle: { color: "#0969da", borderColor: "#0969da" },
+      textStyle: { color: "#8a929c", fontSize: 10 },
+    };
+    Object.keys(extra || {}).forEach(function (k) { base[k] = extra[k]; });
+    return base;
+  }
+
+  function lineOption(rows, chg) {
+    var up = chg == null || chg >= 0;
+    var color = up ? UP_COLOR : DOWN_COLOR;
+    return {
       grid: { left: 52, right: 14, top: 14, bottom: 40 },
       tooltip: {
         trigger: "axis",
@@ -147,30 +209,19 @@
       },
       xAxis: {
         type: "category",
-        data: dates,
+        data: rows.map(function (r) { return r.date; }),
         boundaryGap: false,
-        axisLine: { lineStyle: { color: "#d0d7de" } },
-        axisLabel: { color: "#8a929c", fontSize: 11 },
+        axisLine: AXIS_LINE,
+        axisLabel: AXIS_LABEL,
       },
-      yAxis: {
-        type: "value",
-        scale: true,
-        splitLine: { lineStyle: { color: "#eef1f4" } },
-        axisLabel: { color: "#8a929c", fontSize: 11 },
-      },
+      yAxis: { type: "value", scale: true, splitLine: SPLIT_LINE, axisLabel: AXIS_LABEL },
       dataZoom: [
         { type: "inside", start: 0, end: 100 },
-        {
-          type: "slider", start: 0, end: 100, height: 16, bottom: 4,
-          borderColor: "transparent", backgroundColor: "#f6f8fa",
-          fillerColor: "rgba(9,105,218,.15)", moveHandleSize: 0,
-          handleStyle: { color: "#0969da", borderColor: "#0969da" },
-          textStyle: { color: "#8a929c", fontSize: 10 },
-        },
+        sliderCfg({ start: 0, end: 100 }),
       ],
       series: [{
         type: "line",
-        data: closes,
+        data: rows.map(function (r) { return r.close; }),
         showSymbol: false,
         lineStyle: { width: 2, color: color },
         itemStyle: { color: color },
@@ -184,7 +235,118 @@
           },
         },
       }],
+    };
+  }
+
+  function klineOption(rows) {
+    // 蜡烛必须四价齐全,缺一根就画不出来(历史早期数据可能有 NULL)
+    var bars = rows.filter(function (r) {
+      return r.open != null && r.high != null && r.low != null && r.close != null;
     });
+    if (bars.length < 2) return null;
+
+    var dates = bars.map(function (r) { return r.date; });
+    // candlestick 的数据顺序是 [开, 收, 低, 高],不是 OHLC
+    var ohlc = bars.map(function (r) { return [r.open, r.close, r.low, r.high]; });
+    var vols = bars.map(function (r) { return r.volume; });
+    var barColor = bars.map(function (r) { return r.close >= r.open ? UP_COLOR : DOWN_COLOR; });
+
+    var visible = Math.min(KLINE_DEFAULT_BARS, bars.length);
+    var startPct = bars.length > visible ? (1 - visible / bars.length) * 100 : 0;
+    var zoom = { start: startPct, end: 100, xAxisIndex: [0, 1] };
+
+    return {
+      animation: false,
+      // 主图 + 成交量副图。副图/日期轴/滑块都按"离底部多少像素"定位,主图吃掉
+      // 剩下的高度 —— 卡片能被拖到很扁(最小 300px 高,图表区只剩百来像素),
+      // 用百分比分配的话副图和下面的日期轴、滑块会叠在一起。
+      grid: [
+        { left: 52, right: 14, top: 12, bottom: 78 },
+        { left: 52, right: 14, bottom: 36, height: 34 },
+      ],
+      axisPointer: { link: [{ xAxisIndex: "all" }] },
+      tooltip: {
+        trigger: "axis",
+        axisPointer: { type: "cross" },
+        formatter: function (params) {
+          if (!params || !params.length) return "";
+          var i = params[0].dataIndex;
+          var r = bars[i];
+          if (!r) return "";
+          // 涨跌以前一交易日收盘为基准(首根没有前一日,退化成对当日开盘)
+          var base = i > 0 && bars[i - 1].close ? bars[i - 1].close : r.open;
+          var pct = base ? (r.close - base) / base * 100 : null;
+          var color = r.close >= r.open ? UP_COLOR : DOWN_COLOR;
+          return "<b>" + esc(r.date) + "</b><br/>" +
+            "开 " + num(r.open) + "　高 " + num(r.high) + "<br/>" +
+            "低 " + num(r.low) + "　收 " +
+            '<b style="color:' + color + '">' + num(r.close) + "</b><br/>" +
+            "涨跌 " + '<span style="color:' + color + '">' +
+            (pct == null ? "—" : (pct > 0 ? "+" : "") + num(pct) + "%") + "</span>" +
+            "　量 " + volLabel(r.volume);
+        },
+      },
+      xAxis: [
+        {
+          type: "category", data: dates, gridIndex: 0,
+          axisLine: AXIS_LINE, axisLabel: { show: false },
+          axisTick: { show: false }, splitLine: { show: false },
+        },
+        {
+          type: "category", data: dates, gridIndex: 1,
+          axisLine: AXIS_LINE, axisLabel: { color: "#8a929c", fontSize: 10 },
+          axisTick: { show: false }, splitLine: { show: false },
+        },
+      ],
+      yAxis: [
+        { type: "value", scale: true, gridIndex: 0, splitLine: SPLIT_LINE, axisLabel: AXIS_LABEL },
+        {
+          type: "value", gridIndex: 1, splitNumber: 2, splitLine: { show: false },
+          axisLabel: { color: "#8a929c", fontSize: 10, formatter: volLabel },
+        },
+      ],
+      dataZoom: [
+        Object.assign({ type: "inside" }, zoom),
+        sliderCfg(zoom),
+      ],
+      series: [
+        {
+          name: "K线", type: "candlestick", xAxisIndex: 0, yAxisIndex: 0, data: ohlc,
+          itemStyle: {
+            color: UP_COLOR, color0: DOWN_COLOR,
+            borderColor: UP_COLOR, borderColor0: DOWN_COLOR,
+          },
+        },
+        {
+          name: "成交量", type: "bar", xAxisIndex: 1, yAxisIndex: 1, data: vols,
+          barMaxWidth: 6,
+          itemStyle: { color: function (p) { return barColor[p.dataIndex]; } },
+        },
+      ],
+    };
+  }
+
+  function drawChart(slotId, rows, chg) {
+    slotRows[slotId] = rows;
+    if (!window.echarts) return;
+    var el = $("mbChart_" + slotId);
+    if (!el) return;
+    if (slotCharts[slotId]) { slotCharts[slotId].dispose(); }
+    if (slotResizeHandlers[slotId]) {
+      window.removeEventListener("resize", slotResizeHandlers[slotId]);
+      delete slotResizeHandlers[slotId];
+    }
+
+    var option = modeOf(slotId) === "kline" ? klineOption(rows) : lineOption(rows, chg);
+    if (!option) {
+      // K 线需要四价齐全,老数据缺 open/high/low 时如实说明,别画个空图
+      el.innerHTML = '<div class="mb-error">这段行情缺少开/高/低价，画不出 K 线，可切回「走势」查看</div>';
+      return;
+    }
+
+    var chart = echarts.init(el);
+    slotCharts[slotId] = chart;
+    chart.setOption(option, true);
     var onResize = function () { chart.resize(); };
     slotResizeHandlers[slotId] = onResize;
     window.addEventListener("resize", onResize);
@@ -212,6 +374,24 @@
         if (body) body.innerHTML = '<div class="mb-error">加载失败：' + esc(e.message) + "</div>";
         refreshCanvas();
       });
+  }
+
+  // 切换走势线 / K 线。两种画法用的是同一份数据,有缓存就直接重画,不再发请求;
+  // 没缓存说明上次压根没加载成功,那就重新拉一次。模式跟坐标、选中的股票一样
+  // 随布局持久化,下次打开这张卡还是这个样子。
+  function setSlotMode(slot, mode) {
+    if (CHART_MODES.indexOf(mode) === -1 || modeOf(slot.id) === mode) return;
+    slotMode[slot.id] = mode;
+    renderSlotMode(slot);
+    if (slotState[slot.id]) {
+      if (slotRows[slot.id]) {
+        fillQuote(slot, slotRows[slot.id]);
+        refreshCanvas();
+      } else {
+        loadSlot(slot);
+      }
+    }
+    saveSlotSelection(slot);
   }
 
   /* ── 搜索切换 ──────────────────────────────────────────────────────── */
@@ -270,6 +450,12 @@
     $("mbSwitch_" + slot.id).addEventListener("click", function (e) {
       e.stopPropagation();
       openPop(slot);
+    });
+    $("mbMode_" + slot.id).addEventListener("click", function (e) {
+      var btn = e.target.closest("[data-chart-mode]");
+      if (!btn) return;
+      e.stopPropagation();
+      setSlotMode(slot, btn.getAttribute("data-chart-mode"));
     });
     $("mbCard_" + slot.id).addEventListener("click", function (e) {
       if (e.target && e.target.getAttribute("data-empty-pick")) {
@@ -986,6 +1172,7 @@
     var cur = slotState[slot.id];
     if (cur) { entry.code = cur.code; entry.type = cur.type; entry.name = cur.name; }
     else { delete entry.code; delete entry.type; delete entry.name; }
+    entry.chart = modeOf(slot.id);
     currentLayout[slot.id] = entry;
     queueSaveBoard();
   }
@@ -1305,7 +1492,9 @@
     updateEmptyCanvasHint();
     var el = mountCardHtml(stockCardHtml(card));
     slotState[id] = null;
+    slotMode[id] = "line";
     renderSlotTitle(card);
+    renderSlotMode(card);
     renderSlotBody(card);
     bindSwitchUI(card);
     placeNewCard(el);
@@ -1372,6 +1561,8 @@
         delete slotResizeHandlers[cardId];
       }
       delete slotState[cardId];
+      delete slotMode[cardId];
+      delete slotRows[cardId];
     } else if (card.kind === "compare") {
       if (compareCharts[cardId]) { compareCharts[cardId].dispose(); delete compareCharts[cardId]; }
       if (compareResizeHandlers[cardId]) {
@@ -1524,7 +1715,9 @@
         } else {
           slotState[card.id] = null;
         }
+        slotMode[card.id] = (saved2 && saved2.chart === "kline") ? "kline" : "line";
         renderSlotTitle(card);
+        renderSlotMode(card);
         bindSwitchUI(card);
         loadSlot(card);
       });
