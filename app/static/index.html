@@ -49,8 +49,9 @@
   <script src="/static/js/vendor/echarts.min.js"></script>
   <link rel="stylesheet" href="/static/css/feedback.css">
   <link rel="stylesheet" href="/static/css/shell.css">
+  <link rel="stylesheet" href="/static/css/stock_suggest.css">
 </head>
-<body>
+<body class="spx-shell">
 
 <header>
   <h1>🕐 收盘 shoupan</h1>
@@ -109,7 +110,7 @@
         <div class="form-group">
           <label>股票代码</label>
           <div class="inline-group">
-            <input type="text" id="stockCode" placeholder="如 000001" maxlength="8" style="width:110px">
+            <input type="text" id="stockCode" placeholder="代码或名称，如 平安银行" maxlength="20" style="width:150px">
             <button class="btn btn-outline" id="loadKlineBtn">查看K线</button>
           </div>
           <div class="stock-tag" id="stockTag"></div>
@@ -295,17 +296,10 @@
   </div>
 </div>
 
-<footer class="site-footer">
-  <div class="site-footer-brand">🕐 收盘 shoupan · 用数据验证策略，让判断有据可依</div>
-  <div class="site-footer-contact">
-  💡 需要定制策略 / 接入实盘？只提供代码，服务器需自行购买 · 第一单免费（目前限时全免）·
-  <a href="mailto:lihaichuan393@gmail.com">lihaichuan393@gmail.com</a>
-  </div>
-  <div class="site-footer-legal"><a href="/legal">隐私政策</a> · <a href="/legal#terms">用户协议</a></div>
-  <div class="site-footer-beian"><a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener">苏ICP备2026049395号-1</a></div>
-</footer>
+<!--FOOTER-->
 
 <script src="/static/js/util.js"></script>
+<script src="/static/js/stock_suggest.js"></script>
 <script src="/static/js/app.js"></script>
 <script src="/static/js/feedback.js"></script>
 <script src="/static/js/auth.js"></script>

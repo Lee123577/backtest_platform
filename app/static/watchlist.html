@@ -18,8 +18,9 @@
   <link rel="stylesheet" href="/static/css/feedback.css">
   <link rel="stylesheet" href="/static/css/watchlist.css">
   <link rel="stylesheet" href="/static/css/shell.css">
+  <link rel="stylesheet" href="/static/css/stock_suggest.css">
 </head>
-<body>
+<body class="spx-shell">
 
 <header>
   <h1>📈 A股量化回测平台</h1>
@@ -74,7 +75,7 @@
     <div class="panel">
       <div class="panel-title">我的自选股 <span id="wlCount"></span></div>
       <div class="wl-add">
-        <input id="wlCodeInput" maxlength="6" placeholder="输入 6 位股票代码，如 600519" />
+        <input id="wlCodeInput" maxlength="20" placeholder="输入代码或名称，如 贵州茅台" />
         <button class="wl-addbtn" id="wlAddBtn">添加</button>
         <span class="wl-add-msg" id="wlAddMsg"></span>
       </div>
@@ -93,17 +94,10 @@
   </div>
 </main>
 
-<footer class="site-footer">
-  <div class="site-footer-brand">🕐 收盘 shoupan · 用数据验证策略，让判断有据可依</div>
-  <div class="site-footer-contact">
-  💡 需要定制策略 / 接入实盘？只提供代码，服务器需自行购买 · 第一单免费（目前限时全免）·
-  <a href="mailto:lihaichuan393@gmail.com">lihaichuan393@gmail.com</a>
-  </div>
-  <div class="site-footer-legal"><a href="/legal">隐私政策</a> · <a href="/legal#terms">用户协议</a></div>
-  <div class="site-footer-beian"><a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener">苏ICP备2026049395号-1</a></div>
-</footer>
+<!--FOOTER-->
 
 <script src="/static/js/util.js"></script>
+<script src="/static/js/stock_suggest.js"></script>
 <script src="/static/js/auth.js"></script>
 <script src="/static/js/feedback.js"></script>
 <script src="/static/js/watchlist.js"></script>

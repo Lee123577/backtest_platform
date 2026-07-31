@@ -97,7 +97,12 @@
   // ── 动作 ────────────────────────────────────────────────────────────────
   function addStock() {
     var code = ($("wlCodeInput").value || "").trim();
-    if (!/^\d{6}$/.test(code)) { setAddMsg("请输入 6 位股票代码"); return; }
+    // 输入框支持按名称联想，但提交的必须是代码 —— 打了名字没从下拉里选时
+    // 会走到这里，提示要指向下拉而不是干巴巴地说"请输入 6 位代码"。
+    if (!/^\d{6}$/.test(code)) {
+      setAddMsg("请从下拉候选中选择股票，或直接输入 6 位代码");
+      return;
+    }
     postJson("/api/watchlist/add", { code: code })
       .then(function () { $("wlCodeInput").value = ""; setAddMsg("已添加", true); reloadConfig(); })
       .catch(function (e) { setAddMsg(e.message); });
@@ -175,6 +180,10 @@
         loadAlerts();
         $("wlAddBtn").addEventListener("click", addStock);
         $("wlCodeInput").addEventListener("keydown", function (e) { if (e.key === "Enter") addStock(); });
+        // 代码/名称联想。选中候选后直接入库,省掉用户再点一次"添加"。
+        if (window.SPStockSuggest) {
+          SPStockSuggest.attach($("wlCodeInput"), { onPick: function () { addStock(); } });
+        }
         $("wlSaveRules").addEventListener("click", saveRules);
         $("wlReadBtn").addEventListener("click", markRead);
       })

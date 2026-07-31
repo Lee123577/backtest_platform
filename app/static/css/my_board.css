@@ -158,6 +158,19 @@ body.spx-shell .site-footer.mb-footer { max-width: none; margin-top: 24px; }
   .mb-drag-handle, .mb-resize-handle { display: none !important; }
   /* 没了拖拽把手的 margin-left:auto 占位,把删除按钮推到右侧对齐 */
   .mb-card-close { margin-left: auto; }
+
+  /* 点击目标 ≥44px（与 style.css 里 .btn 的移动端下限一致）。原先工具栏
+     27px、卡片头 ✕ 21px、切换 25px,手指很难点准。
+     这里能放心撑开是因为上面已经把拖拽/缩放把手隐藏了 —— 手机上卡片是
+     一列堆叠的静态块,加高热区不会跟拖拽手势打架。 */
+  .mb-add-btn, .mb-reset-btn { min-height: 44px; }
+  .mb-card-close, .mb-switch-btn { min-height: 44px; min-width: 44px; }
+  /* 对比列表里的 ✕ 挤在一行芯片中间,撑到 44px 会把整行顶变形 ——
+     改为只扩热区:视觉尺寸不变,靠 padding + 负 margin 把可点范围放大。 */
+  .mb-cmp-remove {
+    padding: 14px 12px;
+    margin: -14px -6px -14px 0;
+  }
 }
 
 .mb-card {

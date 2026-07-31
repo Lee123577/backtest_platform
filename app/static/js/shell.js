@@ -25,7 +25,11 @@
       { label: "实盘观察", href: "/paper_trading", ico: "💹" },
       { label: "自选盯盘", href: "/watchlist", ico: "⭐" },
     ]},
-    // 购买订阅页先隐藏入口(产品要求暂缓上线,页面/接口都还在,只是不导流量进去)
+    // 订阅页(/subscribe)不进侧边栏,但**不是**下线状态 —— 页面/接口都在正常
+    // 收单,入口走场景内引导(复盘付费墙、仪表盘会员卡、自选盯盘提醒),转化率
+    // 比放一个常驻"开通会员"菜单项高;同时它照常进 sitemap 吃搜索流量。
+    // 早先这里写的是"暂缓上线,不导流量进去",跟 main.py 的 _SITEMAP_PAGES
+    // 自相矛盾,已按实际行为改正。
     // 运维页:仅管理员 IP 可见(默认 hidden,确认身份后才显示,避免闪现)。
     // 路径特意用 /admin/tasks 而不是 /tasks —— 这是内部运维监控,不该跟
     // 单股回测/看板等用户功能同层级挂在一起(旧路径 /tasks 307 跳转过来)。
@@ -145,7 +149,10 @@
 
   // ── 组装 ──────────────────────────────────────────────────────────────
   function mount() {
-    if (document.body.classList.contains("spx-shell")) return;
+    // 幂等判据看的是"侧边栏建没建",不是 .spx-shell 这个 class ——
+    // 该 class 现在由各页 HTML 的 <body class="spx-shell"> 直接带上(见下方
+    // 说明),用它当判据会让 mount() 一进来就 return,侧边栏永远建不出来。
+    if (document.querySelector(".spx-sidebar")) return;
     var title = (document.title || "").replace(/\s*[-|].*$/, "").trim() || "控制台";
 
     var sidebar = buildSidebar();
@@ -156,6 +163,8 @@
     document.body.appendChild(sidebar);
     document.body.appendChild(topbar);
     document.body.appendChild(mask);
+    // 兜底:正常情况下 HTML 已经写了 <body class="spx-shell">(首屏就隐藏旧
+    // header,避免闪现);万一哪个新页面漏写,这里补上,行为跟以前一致。
     document.body.classList.add("spx-shell");
 
     // 移动端汉堡菜单

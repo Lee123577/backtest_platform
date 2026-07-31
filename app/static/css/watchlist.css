@@ -59,6 +59,7 @@
   color: #fff;
   font-size: 14px;
   padding: 10px 24px;
+  min-height: 44px;   /* 未登录时这是本页唯一的行动按钮，原先 40px */
   cursor: pointer;
 }
 

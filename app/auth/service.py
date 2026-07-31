@@ -17,11 +17,10 @@ import hashlib
 import logging
 import re
 import secrets
-import time
-from collections import deque
 from datetime import date as _Date, datetime as _DT, timedelta
-from typing import Any, Deque, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
+from ..ratelimit import SlidingWindowLimiter
 from . import db, sms
 
 logger = logging.getLogger(__name__)
@@ -43,30 +42,16 @@ class AuthError(RuntimeError):
 
 
 # ── 单 IP 发码限流：进程内滑动窗口(单 worker，够用) ─────────────────────────
-_ip_hits: Dict[str, Deque[float]] = {}
-_ip_hits_last_sweep = 0.0
-
-
-def _sweep_idle_ips(now: float) -> None:
-    """每小时清一次超过 1 小时没动静的 IP,防止字典随访客 IP 无限增长。"""
-    global _ip_hits_last_sweep
-    if now - _ip_hits_last_sweep < 3600:
-        return
-    _ip_hits_last_sweep = now
-    for ip in [ip for ip, dq in _ip_hits.items() if not dq or now - dq[-1] > 3600]:
-        del _ip_hits[ip]
+# 滑动窗口本体在 app/ratelimit.py(五处调用点共用一份实现)。
+# 注意这里只是**按 IP** 的那一道闸;同号 60s 冷却与单号单日上限是另一套口径,
+# 依赖 sms_code 表的持久化计数(重启不能清零),不走这个内存限流器。
+_ip_limiter = SlidingWindowLimiter(
+    limit=IP_MAX_PER_HOUR, window_sec=3600, sweep_interval_sec=3600, name="auth_sms_ip",
+)
 
 
 def _ip_allowed(ip: str) -> bool:
-    now = time.time()
-    _sweep_idle_ips(now)
-    dq = _ip_hits.setdefault(ip, deque())
-    while dq and now - dq[0] > 3600:
-        dq.popleft()
-    if len(dq) >= IP_MAX_PER_HOUR:
-        return False
-    dq.append(now)
-    return True
+    return _ip_limiter.allow(ip)
 
 
 def _token_hash(token: str) -> str:

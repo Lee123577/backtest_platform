@@ -1,6 +1,12 @@
 /* ============================================================
    App Shell —— 左侧边栏 + 顶栏 + 中间内容
-   渐进增强：shell.js 隐藏旧 <header>，把 <main> 挪到内容区。
+   渐进增强：shell.js 建出侧边栏/顶栏，把 <main> 挪到内容区。
+
+   .spx-shell 这个 class 由各页 HTML 的 <body class="spx-shell"> 直接写死，
+   不再等 shell.js 跑完才加 —— 否则 JS 执行前旧 <header> 会先画出来闪一下，
+   隐藏时内容还要向上跳一次。legal.html 是唯一不引 shell.js 的页，它靠旧
+   <header> 当导航，因此**不能**给 body 加这个 class，也不能在这里无条件
+   隐藏 header。
    ============================================================ */
 
 :root {
@@ -112,6 +118,13 @@ body.spx-shell .site-footer {
   font-size: 20px;
   cursor: pointer;
   color: var(--txt, #24292f);
+  /* 这是手机上唯一的导航入口，字形本身只有 27px 高，够不着 44px 的点击下限。
+     用 min-width/height 撑开热区(顶栏 64px，塞得下)，图标视觉大小不变。 */
+  min-width: 44px;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  margin-left: -10px;   /* 热区左扩后视觉上仍与顶栏左边距对齐 */
 }
 
 /* ── 账户区(右上角) ───────────────────────────────────── */
@@ -176,4 +189,7 @@ body.spx-shell .site-footer {
   .spx-hamburger { display: inline-flex; }
   .spx-mask.show { display: block; }
   body.spx-shell main, body.spx-shell .site-footer { padding-left: 16px; padding-right: 16px; }
+  /* 顶栏右上角的登录/账户按钮原本 31px 高。它在每个页面都有，未登录时
+     还是"登录"这个转化动作本身，撑到 44px。 */
+  .spx-account-btn { min-height: 44px; }
 }

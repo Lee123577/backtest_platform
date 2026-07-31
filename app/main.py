@@ -4,7 +4,6 @@ import html as _htmlmod
 import json
 import logging
 import re
-import threading
 import time
 from datetime import date as _date
 from pathlib import Path
@@ -20,6 +19,7 @@ from pydantic import BaseModel, Field
 from starlette.requests import Request
 
 from .config import settings
+from .ratelimit import SlidingWindowLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +57,7 @@ from .data.market_data import (
     get_universe_stocks,
 )
 from .data.realtime import get_realtime_prices
+from .data import stock_search
 from .engine.backtest import calc_benchmark, run_backtest
 from .engine.portfolio_backtest import run_portfolio_backtest
 from .engine.robustness import compute_oos_split, compute_param_sensitivity
@@ -152,45 +153,22 @@ def _safe_detail(msg: str, exc: Exception | None = None) -> str:
 
 
 # ── 轻量速率限制(防重型计算接口被滥用/DoS)──────────────────────────────────
-_BACKTEST_HITS: dict = {}
+# 滑动窗口本体在 app/ratelimit.py(五处调用点共用一份实现)。
 _BACKTEST_LIMIT = 6        # 每窗口最多请求数
 _BACKTEST_WINDOW = 60.0    # 秒
-_BACKTEST_LOCK = threading.Lock()
-# 单进程常驻服务:_BACKTEST_HITS 按 IP 建条目,窗口外的时间戳会被弹出,但空条目
-# 本身留在 dict 里 —— 公网站点跑久了就是只增不减的慢性内存增长。每隔
-# _BACKTEST_SWEEP_INTERVAL 秒顺手清一次过期条目(清理在已持锁的路径里,不额外加锁)。
-_BACKTEST_SWEEP_INTERVAL = 300.0
-_backtest_last_sweep = 0.0
-
-
-def _sweep_backtest_hits(now: float) -> None:
-    """清掉窗口内已无请求的 IP 条目。调用方必须已持有 _BACKTEST_LOCK。"""
-    global _backtest_last_sweep
-    if now - _backtest_last_sweep < _BACKTEST_SWEEP_INTERVAL:
-        return
-    _backtest_last_sweep = now
-    stale = [
-        ip for ip, ts in _BACKTEST_HITS.items()
-        if not ts or now - ts[-1] > _BACKTEST_WINDOW
-    ]
-    for ip in stale:
-        del _BACKTEST_HITS[ip]
+_backtest_limiter = SlidingWindowLimiter(
+    limit=_BACKTEST_LIMIT, window_sec=_BACKTEST_WINDOW, name="backtest",
+)
 
 
 def _rate_limit_backtest(request: Request) -> None:
     ip = _client_ip(request)
-    now = time.time()
-    with _BACKTEST_LOCK:
-        _sweep_backtest_hits(now)
-        hits = _BACKTEST_HITS.setdefault(ip, [])
-        while hits and now - hits[0] > _BACKTEST_WINDOW:
-            hits.pop(0)
-        if len(hits) >= _BACKTEST_LIMIT:
-            raise HTTPException(
-                429,
-                detail="请求过于频繁,请稍后再试(回测接口每分钟最多 %d 次)" % _BACKTEST_LIMIT,
-            )
-        hits.append(now)
+    if not _backtest_limiter.allow(ip):
+        raise HTTPException(
+            429,
+            detail="请求过于频繁,请稍后再试(回测接口每分钟最多 %d 次)" % _BACKTEST_LIMIT,
+            headers={"Retry-After": str(_backtest_limiter.retry_after(ip))},
+        )
 
 
 app.add_middleware(SecurityHeadersMiddleware)
@@ -202,10 +180,6 @@ app.include_router(data_status_router)
 # 大盘云图 API（前端 ECharts treemap 消费）
 from .cloudmap.api import router as cloudmap_router  # noqa: E402
 app.include_router(cloudmap_router)
-
-# LLM 股票分析(远程 MCP 服务 elsejj/mcp-cn-a-stock 转发)
-from .llm_assistant.api import router as llm_router  # noqa: E402
-app.include_router(llm_router)
 
 # AI 热门板块(DeepSeek 每日选板块+选股，T 日收盘买入/T+1 收盘卖出模拟)
 from .ai_hotsector.api import router as ai_hotsector_router  # noqa: E402
@@ -308,6 +282,14 @@ class VersionedStaticFiles(StaticFiles):
     """
 
     async def get_response(self, path: str, scope):
+        # 页面模板不从 /static 裸发。它们必须经页面路由的 _html() 出去 ——
+        # 那一层才会注入公共页脚(含法定 ICP 备案号)、戳静态资源版本号、按
+        # 登录态决定复盘正文直出多少。裸文件绕过这些,吐出来的是缺页脚、
+        # 占位注释没替换的半成品,还跟正式路由重复收录(robots 早已 Disallow,
+        # 但那只挡爬虫,挡不住直接访问)。
+        if path.lower().endswith(".html"):
+            return Response(status_code=404)
+
         resp = await super().get_response(path, scope)
         # 只给真正命中的文件打缓存头;404/405 之类不缓存
         if resp.status_code in (200, 304):
@@ -322,9 +304,58 @@ class VersionedStaticFiles(StaticFiles):
 app.mount("/static", VersionedStaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
+# ── 公共页脚(单一事实来源)────────────────────────────────────────────────────
+# 此前这段在 12 个 HTML 里逐字复制。改一次联系邮箱或备案号要动 12 个文件,
+# 且已经漂出了三种不一致的版本。收拢到这里,各页只留 <!--FOOTER--> 占位。
+#
+# 备案号是法定必须展示的 —— 任何新页面漏了占位注释就会缺它。因此
+# _html() 里对"整页无页脚"的情况会记 warning,别静默放过。
+_FOOTER_MARKER = "<!--FOOTER-->"
+_CONTACT_EMAIL = "lihaichuan393@gmail.com"
+_ICP_NUMBER = "苏ICP备2026049395号-1"
+
+
+def _footer(*, legal_links: bool = True, contact: bool = True,
+            extra_class: str = "") -> str:
+    """站点页脚 HTML。
+
+    三处开关对应收拢前就存在的、有意为之的差异:
+      legal_links=False —— /legal 自己不再链回自己
+      contact=False     —— /s/{token} 分享快照页不放"定制策略"的销售话术
+                           (页面会被分享给陌生人,带招揽内容不合适)
+      extra_class       —— /my_board 需要额外的 mb-footer 参与卡片布局
+    """
+    cls = "site-footer" + (f" {extra_class}" if extra_class else "")
+    parts = [
+        f'<footer class="{cls}">',
+        '  <div class="site-footer-brand">🕐 收盘 shoupan · 用数据验证策略，让判断有据可依</div>',
+    ]
+    if contact:
+        parts.append(
+            '  <div class="site-footer-contact">\n'
+            '  💡 需要定制策略 / 接入实盘？只提供代码，服务器需自行购买 · '
+            '第一单免费（目前限时全免）·\n'
+            f'  <a href="mailto:{_CONTACT_EMAIL}">{_CONTACT_EMAIL}</a>\n'
+            '  </div>'
+        )
+    if legal_links:
+        parts.append(
+            '  <div class="site-footer-legal">'
+            '<a href="/legal">隐私政策</a> · <a href="/legal#terms">用户协议</a></div>'
+        )
+    parts.append(
+        '  <div class="site-footer-beian">'
+        '<a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener">'
+        f'{_ICP_NUMBER}</a></div>'
+    )
+    parts.append("</footer>")
+    return "\n".join(parts)
+
+
 def _html(request: Request, *parts: str,
-          replacements: Optional[Dict[str, str]] = None) -> Response:
-    """返回页面 HTML:自动给静态资源引用打上内容 hash 版本号,并配 no-cache + ETag。
+          replacements: Optional[Dict[str, str]] = None,
+          footer: Optional[str] = None) -> Response:
+    """返回页面 HTML:注入公共页脚,给静态资源引用打上内容 hash 版本号,配 no-cache + ETag。
 
     no-cache 不是"不缓存",是"每次都回源校验" —— 配 ETag 后内容没变就 304,
     只有几十字节的开销,而页面和它引用的 JS 永远不会出现版本错配。
@@ -332,6 +363,8 @@ def _html(request: Request, *parts: str,
     replacements: 服务端直出用 —— {占位注释: 替换成的 HTML}。只允许放**公开
     内容**:响应带 ETag 且可被共享缓存复用,任何按登录态变化的内容进了 HTML
     就可能串给其他人(付费正文永远走 API,不走这里)。
+
+    footer: 覆盖默认页脚(见 _footer 的三处开关);None = 标准页脚。
     """
     fp = STATIC_DIR.joinpath(*parts)
     st = fp.stat()
@@ -351,6 +384,13 @@ def _html(request: Request, *parts: str,
     if replacements:
         for marker, value in replacements.items():
             text = text.replace(marker, value)
+
+    if _FOOTER_MARKER in text:
+        text = text.replace(_FOOTER_MARKER, footer if footer is not None else _footer())
+    elif "<footer" not in text:
+        # 备案号是法定要展示的,漏了得有人知道 —— 新页面忘了写占位注释时会走到这。
+        logger.warning("页面 %s 既无 %s 占位也无 <footer>，页脚与备案号缺失",
+                       "/".join(parts), _FOOTER_MARKER)
 
     body = _stamp_asset_versions(text).encode("utf-8")
     etag = '"%s"' % hashlib.sha256(body).hexdigest()[:16]
@@ -441,12 +481,14 @@ async def page_dashboard(request: Request):
 
 @app.get("/my_board", include_in_schema=False)
 async def page_my_board(request: Request):
-    return _html(request, "my_board.html")
+    # mb-footer 参与看板的卡片布局(页脚不能被浮动卡片顶掉)
+    return _html(request, "my_board.html", footer=_footer(extra_class="mb-footer"))
 
 
 @app.get("/legal", include_in_schema=False)
 async def page_legal(request: Request):
-    return _html(request, "legal.html")
+    # 已经在法务页上了,页脚不必再链回自己
+    return _html(request, "legal.html", footer=_footer(legal_links=False))
 
 
 @app.get("/s/{token}", include_in_schema=False)
@@ -459,7 +501,8 @@ async def page_share(token: str, request: Request):
     """
     if not _SHARE_TOKEN_RE.match(token):
         raise HTTPException(404, "页面不存在")
-    return _html(request, "share.html")
+    # 快照会被分享给陌生人,页脚不带"定制策略"的招揽内容
+    return _html(request, "share.html", footer=_footer(contact=False))
 
 
 _SHARE_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
@@ -676,6 +719,8 @@ def _daily_review_page(request: Request, d: Optional[_date]) -> Response:
 
 
 # (路径, 更新频率, 优先级) —— 仅收录面向用户的功能页；/admin/tasks、/tasks 是运维监控页不收录
+# /subscribe 在这里是**有意为之**:它不在侧边栏(入口走场景内引导,见 shell.js 的
+# NAV 注释),但页面正常收单,该吃的搜索流量要吃。别因为"侧边栏里没有"就摘掉。
 _SITEMAP_PAGES = [
     ("/", "daily", "1.0"),
     ("/paper_trading", "daily", "0.8"),
@@ -1281,6 +1326,23 @@ async def api_list_strategies(response: Response):
 
 
 # ── Single-stock endpoints ────────────────────────────────────────────────────
+
+# 放在 /api/stock/{code}/... 之前:虽然 "search" 匹配不到需要后缀的那几条路由,
+# 但把字面量路径写在参数化路径前面是更稳的习惯,以后加 /api/stock/{code} 时
+# 不会突然被吃掉。
+@app.get("/api/stock/search")
+def api_stock_search(response: Response, q: str = "", limit: int = 10):
+    """按代码或名称搜个股。给回测/自选盯盘的输入框做联想用。
+
+    只出个股不出指数 —— 这两处拿到的每一条都要能直接回测/加自选。
+    结果来自进程内缓存(见 data/stock_search.py),正常情况下不碰 DB。
+    """
+    results = stock_search.search(q, limit)
+    # 股票名录一天最多动几只,允许浏览器短时间复用:用户回删一个字符再敲回来
+    # 是最常见的操作,没必要再打一次请求
+    response.headers["Cache-Control"] = "public, max-age=300"
+    return {"results": results}
+
 
 @app.get("/api/stock/{code}/info")
 def api_stock_info(code: str):

@@ -36,7 +36,7 @@ class FakeDB:
 def fake(monkeypatch):
     db = FakeDB()
     monkeypatch.setattr(service, "db", db)
-    service._ip_hits.clear()
+    service._ip_limiter.reset()
     return db
 
 

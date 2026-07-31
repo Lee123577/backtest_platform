@@ -1,6 +1,6 @@
 # A 股量化回测平台
 
-基于 FastAPI + ECharts 的 A 股量化策略回测与模拟交易平台。覆盖**单股信号**、**组合选股**、**模拟盘**、**AI 热门板块**、**AI 每日复盘**、**大盘云图**、**LLM 股票分析**七类场景。
+基于 FastAPI + ECharts 的 A 股量化策略回测与模拟交易平台。覆盖**单股信号**、**组合选股**、**模拟盘**、**AI 热门板块**、**AI 每日复盘**、**大盘云图**六类场景。
 
 ![单股策略](docs/images/01-single-stock.png)
 
@@ -27,8 +27,8 @@
 ## 核心特性
 
 **回测引擎**
-- 单股策略:11 种内置技术指标(MA/RSI/MACD/KDJ/Bollinger/CCI/Williams/Donchian/三均线/动量/低波动)
-- 组合策略:全市场选股 + 定期调仓,基于真实历史市值
+- 单股策略:9 种内置技术指标(MA/三均线/RSI/MACD/Bollinger/KDJ/CCI/Williams/Donchian)
+- 组合策略:3 种全市场选股(小市值/动量/低波动)+ 定期调仓,基于真实历史市值
 - 资金算账全程 `Decimal` 高精度(避免长跑回测累积浮点误差)
 - 末次平仓写入 trades,win_rate 准确
 
@@ -56,11 +56,6 @@
 **大盘云图**
 - ECharts treemap,按行业 / 板块聚类
 - 60s 进程缓存,数据来源 stock_kline 表
-
-**LLM 股票分析**
-- 接入 [elsejj/mcp-cn-a-stock](https://github.com/elsejj/mcp-cn-a-stock) 公开 MCP 服务
-- `GET /api/llm_assistant/analyze?symbol=600000&level=brief|medium|full`
-- 返回 markdown 报告(基本面 + 行情 + 财务 + 技术)
 
 **安全**
 - IP 白名单写操作隔离(`paper_admin_ip` 表)
@@ -103,7 +98,6 @@ MYSQL_DATABASE=back_test
 | `DB_BORROW_TIMEOUT` | 30 | 借连接超时(秒) |
 | `TRUSTED_PROXIES` | (空) | 可信反代 IP/CIDR,逗号分隔。空 = 一律忽略代理头 |
 | `PAPER_ADMIN_INITIAL_IPS` | (空) | 启动时往白名单写入的 IP(避免首次锁死) |
-| `MCP_CNSTOCK_URL` | `http://82.156.17.205/cnstock/mcp` | LLM 分析远程 MCP 地址 |
 | `DEEPSEEK_API_KEY` | (空) | AI 热门板块用的 DeepSeek API Key,不配则该功能不产出预测 |
 
 ### 初始化历史数据
@@ -139,7 +133,7 @@ python run.py
 | `bollinger` | 布林带 | 价格触及下轨买入、上轨卖出 |
 | `kdj` | KDJ | K、D 线金叉/死叉 |
 | `cci` | CCI | 顺势指标,±100 突破 |
-| `williams` | 威廉指标 | %R 超买超卖 |
+| `williams_r` | 威廉指标 | %R 超买超卖 |
 | `donchian` | 唐奇安通道 | 价格突破 N 日高/低点 |
 
 ### 组合选股策略(`/api/portfolio_backtest`)
@@ -166,7 +160,6 @@ python run.py
 | `/daily_review/2026-07-08` | 指定日期的复盘,每篇独立可索引 URL |
 | `/cloudmap` | 大盘云图 treemap |
 | `/tasks` | 调度任务监控:历史运行/状态/手动触发 |
-| `/api/llm_assistant/analyze?symbol=600000` | LLM 股票分析(markdown 报告) |
 
 ### 功能截图
 
@@ -429,7 +422,7 @@ TRUSTED_PROXIES=127.0.0.1,10.0.0.0/8
 systemctl restart backtest
 journalctl -u backtest -f
 ss -lntp | grep :8000
-curl -s http://localhost:8000/api/llm_assistant/health
+curl -s http://localhost:8000/api/strategies
 ```
 
 ---
@@ -473,11 +466,7 @@ app/
     runner.py                  build_context 聚合数据快照 + generate_once 生成落库
     db.py                      daily_review 表 DDL + CRUD + 市场数据快照查询
     prompts.py                 复盘提示词(带版本号,复用 ai_hotsector 的 DeepSeek 客户端)
-  llm_assistant/             LLM 股票分析(MCP 客户端)
-    mcp_client.py              httpx streamable-http JSON-RPC
-    api.py                     /api/llm_assistant/analyze + /health
   data_status/               数据完整性状态查询
-  live/                      实盘接口抽象(无默认实现)
   visit_log.py               HTTP 访问日志中间件(IP 地理 + UA 解析)
   json_safe.py               Decimal/date/NaN → JSON 安全转换(共享工具)
   config.py                  Settings(MySQL + DeepSeek 配置)
@@ -551,14 +540,15 @@ with get_conn() as conn:
 
 ## 实盘接入
 
-`app/live/base.py` 定义了 `LiveAdapter` 抽象。目前**没有可用实现**(原 simnow.py 是 stub 已删)。
+本项目**不含实盘下单能力**,也没有对接券商柜台的计划 —— 模拟盘(`/paper_trading`)
+到"落库的委托与成交"为止,不发出任何真实订单。
 
-接真实 CTP 推荐:
+早先 `app/live/base.py` 放过一个 `LiveAdapter` 抽象基类,但从未有过实现、全项目
+零引用,留着只会让人误以为"接一下就能实盘",已删除。真要接 CTP,推荐直接用成熟
+框架而不是在本项目里重造:
 
 - [vnpy](https://www.vnpy.com) — 包含 CTP/SimNow/OpenCTP 等多个网关
 - [openctp-ctp](https://openctp.cn) — 纯 CTP,无框架
-
-继承 `LiveAdapter` 在每个方法里调对应 SDK 即可。
 
 ---
 

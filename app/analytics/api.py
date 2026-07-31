@@ -12,8 +12,6 @@ GET  /api/analytics/funnel       — 漏斗与渠道拆分(仅管理员 IP)
 from __future__ import annotations
 
 import logging
-import threading
-import time
 from datetime import date as _Date, timedelta
 from typing import Any, Dict, Optional
 
@@ -22,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from ..auth.deps import get_current_user
 from ..paper_trading import admin_ip as paper_admin_ip
+from ..ratelimit import SlidingWindowLimiter
 from ..visit_log import _client_ip
 from . import attribution, db, service
 
@@ -31,30 +30,15 @@ router = APIRouter(tags=["analytics"])
 
 
 # ── 限流:埋点接口是公开的,不能让人拿它往表里灌数据 ──────────────────────────
-_HITS: Dict[str, list] = {}
-_LIMIT = 30            # 每 IP 每窗口最多 30 条
-_WINDOW = 60.0
-_LOCK = threading.Lock()
-_SWEEP_INTERVAL = 300.0
-_last_sweep = 0.0
+# 滑动窗口本体在 app/ratelimit.py(五处调用点共用一份实现)。
+_limiter = SlidingWindowLimiter(limit=30, window_sec=60.0, name="analytics_event")
 
 
 def _rate_limit(request: Request) -> None:
-    global _last_sweep
     ip = _client_ip(request)
-    now = time.time()
-    with _LOCK:
-        if now - _last_sweep > _SWEEP_INTERVAL:
-            _last_sweep = now
-            for k in [k for k, v in _HITS.items()
-                      if not v or now - v[-1] > _WINDOW]:
-                del _HITS[k]
-        hits = _HITS.setdefault(ip, [])
-        while hits and now - hits[0] > _WINDOW:
-            hits.pop(0)
-        if len(hits) >= _LIMIT:
-            raise HTTPException(429, "上报过于频繁")
-        hits.append(now)
+    if not _limiter.allow(ip):
+        raise HTTPException(429, "上报过于频繁",
+                            headers={"Retry-After": str(_limiter.retry_after(ip))})
 
 
 class EventReq(BaseModel):

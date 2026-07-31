@@ -710,4 +710,26 @@ table.holdings-tbl { width: 100%; border-collapse: collapse; font-size: 12px; mi
   .chart-wrap { height: 320px; }
   .chart-wrap-sm { height: 240px; }
   .form-row { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
+
+  /* 输入类控件字号必须 ≥16px。iOS Safari 对 font-size < 16px 的输入框会在
+     聚焦瞬间强制放大整个视口，用户填完还得两指缩回来 —— 这一下正好卡在
+     首页回测表单(主转化路径)上。桌面端是 13px，手机上顶到 16px。
+     16px 是 iOS 的硬阈值，不是审美取值，往下调一点就会重新触发缩放。 */
+  input[type=text], input[type=date], input[type=number],
+  input[type=tel], input[type=password], input[type=search],
+  select, textarea { font-size: 16px; }
+  .param-item input { font-size: 16px; }   /* 桌面端 12px，覆盖掉 */
+
+  /* 点击目标 ≥44px（iOS HIG 建议下限）。桌面端实测：输入框 31px、
+     "＋ 添加" 27px、"⚡ 试跑" 24px —— 手机上很难点准。 */
+  input[type=text], input[type=date], input[type=number],
+  input[type=tel], input[type=password], input[type=search],
+  select { min-height: 44px; }
+  .btn { min-height: 44px; }
+  .param-item input { min-height: 40px; }  /* 参数微调框密集排布，略放宽 */
+
+  /* 勾选框本身 13px 偏小。点击面积其实不缺(外层 <label> 整块可点，实测
+     313×94)，纯粹是手指够过去时"看得见、对得准"的问题，放大到 18px。 */
+  .method-check > input[type=checkbox],
+  .method-boards label input[type=checkbox] { width: 18px; height: 18px; }
 }

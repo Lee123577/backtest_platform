@@ -104,7 +104,7 @@ def fake(monkeypatch):
     sms = FakeSms()
     monkeypatch.setattr(service, "db", db)
     monkeypatch.setattr(service, "sms", sms)
-    service._ip_hits.clear()   # IP 滑窗是模块全局，逐用例清零
+    service._ip_limiter.reset()   # IP 滑窗是模块全局，逐用例清零
     return db, sms
 
 

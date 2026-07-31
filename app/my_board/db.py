@@ -13,6 +13,7 @@ import json
 import logging
 from typing import Any, Dict
 
+from ..data import stock_search
 from ..data.data_loader import _get_pool
 
 logger = logging.getLogger(__name__)
@@ -90,7 +91,11 @@ KNOWN_INDICES = [
 
 
 def search_stocks(q: str, limit: int = 10) -> list:
-    """个股(stock_info,按代码/名称模糊匹配)+ 指数(固定名单)合并搜索。"""
+    """指数(固定名单)+ 个股合并搜索。指数排在前面 —— 看板卡片最常放的是大盘。
+
+    个股部分走 data/stock_search 的进程内缓存(全站共用一份,首页回测与自选
+    盯盘的联想也用它),不再每敲一个键就 `LIKE '%q%'` 全表扫一次。
+    """
     q = (q or "").strip()
     if not q:
         return []
@@ -100,15 +105,7 @@ def search_stocks(q: str, limit: int = 10) -> list:
         if q in code or q in name:
             out.append({"code": code, "name": name, "type": "index"})
 
-    conn = _get_pool()
-    if conn is not None:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT code, name FROM stock_info "
-                "WHERE code LIKE %s OR name LIKE %s ORDER BY code LIMIT %s",
-                (f"%{q}%", f"%{q}%", max(1, min(limit, 20))),
-            )
-            for r in cur.fetchall():
-                out.append({"code": r["code"], "name": r["name"], "type": "stock"})
+    for it in stock_search.search(q, limit):
+        out.append({"code": it["code"], "name": it["name"], "type": "stock"})
 
     return out[:limit]

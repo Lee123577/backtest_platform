@@ -44,7 +44,35 @@ def test_monotonic_rising_has_no_drawdown():
     # 恒定 +1%/日 → 日收益方差为 0,Sharpe 分母为 0、数学上未定义 → None。
     # (这里曾断言 > 0,靠的是 std() 返回 ~1e-20 浮点残差除出来的天文数字)
     assert m["sharpe_ratio"] is None
+    # 零回撤 → Calmar 分母为 0,同样未定义 → None(曾记 0.0,见下面的回归测试)
+    assert m["calmar_ratio"] is None
     assert m["final_value"] == round(float(equity.iloc[-1]), 2)
+
+
+def test_zero_drawdown_calmar_is_none_not_zero():
+    """从没回撤过的净值曲线,Calmar 不能显示成 0。
+
+    Calmar = 年化 / |最大回撤|。max_drawdown == 0 时分母为 0、数学上未定义,
+    旧实现记 0.0 —— 前端把 0 归到 val-neg 档,等于把最理想的一条曲线
+    (一路新高、零回撤)标成"风险调整后收益最差"。跟 sharpe/sortino 统一成 None。
+    """
+    # 60 个周期 ≥ MIN_ANNUALIZE_PERIODS,年化算得出来;单调上涨 → 零回撤。
+    # 两个前提都成立,才能把 calmar 唯一地卡在"分母为 0"这个分支上。
+    equity = pd.Series([100_000 * (1.01 ** i) for i in range(60)])
+    m = compute_risk_metrics(equity, 100_000)
+    assert m["max_drawdown"] == 0.0
+    assert m["annual_return"] is not None      # 排除"期太短未年化"那条 None 路径
+    assert m["calmar_ratio"] is None
+
+
+def test_normal_drawdown_calmar_still_computed():
+    """有回撤时 Calmar 照常算出数值,别被上面的 None 分支误伤。"""
+    rng = np.random.default_rng(7)
+    equity = pd.Series(100_000 * np.cumprod(1 + rng.normal(0.0008, 0.02, 300)))
+    m = compute_risk_metrics(equity, 100_000)
+    assert m["max_drawdown"] < 0
+    assert m["calmar_ratio"] is not None
+    assert isinstance(m["calmar_ratio"], float)
 
 
 def test_flat_equity_ratios_are_none_not_astronomical():

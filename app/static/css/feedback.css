@@ -9,6 +9,7 @@
   align-items: center;
   gap: 6px;
   padding: 10px 16px;
+  min-height: 44px;      /* 手机上的点击下限；原先 40px */
   border: none;
   border-radius: 24px;
   background: #5b8def;
@@ -18,7 +19,9 @@
   box-shadow: 0 4px 14px rgba(0, 0, 0, .3);
 }
 .fb-fab:hover { background: #4a7ce0; }
-/* 让开贴底的 sticky 主按钮(.btn-run,bottom:12px + 40px 高) */
+/* 让开贴底的 sticky 主按钮(.btn-run,bottom:12px + 44px 高)。
+   注意这个偏移只跟"离视口底部多远"有关：两者都是按 bottom 定位的，
+   改各自的高度不会吃掉这段间隙，别按高度重算。 */
 .fb-fab--raised { bottom: 72px; }
 
 .fb-mask {

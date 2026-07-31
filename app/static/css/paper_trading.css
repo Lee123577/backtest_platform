@@ -592,4 +592,7 @@ table.pt-tbl {
    在自己的盒子里滚,不再把整个页面撑出横向滚动条(375px 下曾撑到 909px) */
 @media (max-width: 768px) {
   table.pt-tbl { display: block; overflow-x: auto; }
+  /* 点击目标 ≥44px（与 style.css 里 .btn 的移动端下限一致）。
+     这两个不是 .btn，拿不到那条全局规则，单独补。 */
+  .scan-btn, .trades-filter-clear { min-height: 44px; }
 }

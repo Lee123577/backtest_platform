@@ -32,6 +32,13 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('stockCode').addEventListener('keydown', e => {
     if (e.key === 'Enter') loadKline();
   });
+  // 代码/名称联想 —— 不知道 6 位代码的人此前根本用不了这个表单。
+  // 选中后直接把名称填进 stockTag，省掉一次 /api/stock/{code}/info。
+  if (window.SPStockSuggest) {
+    SPStockSuggest.attach(document.getElementById('stockCode'), {
+      onPick: item => { document.getElementById('stockTag').textContent = item.name || ''; },
+    });
+  }
   document.getElementById('navSignal').addEventListener('click', () => switchMode('signal'));
   document.getElementById('navPortfolio').addEventListener('click', () => switchMode('portfolio'));
 
@@ -351,8 +358,10 @@ function updateRunBtn() {
 
 // ── Input validation helpers ──────────────────────────────────────────────────
 function validateStockCode(code) {
-  if (!code) return '请输入股票代码';
-  if (!/^\d{6}$/.test(code)) return '股票代码须为6位数字（如 000001）';
+  if (!code) return '请输入股票代码或名称';
+  // 输入框支持按名称联想，但提交时必须是代码 —— 用户打了名字却没从下拉里选，
+  // 走到这儿会是"平安银行"这种值。提示要指向下拉，不能只说"须为6位数字"。
+  if (!/^\d{6}$/.test(code)) return '请从下拉候选中选择股票，或直接输入 6 位代码（如 000001）';
   return null;
 }
 

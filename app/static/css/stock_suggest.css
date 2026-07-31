@@ -1,0 +1,57 @@
+/* 股票代码/名称联想下拉(全站共用,配 js/stock_suggest.js) */
+
+.sp-sug-wrap {
+  position: relative;
+  display: inline-block;
+}
+/* 输入框原来的宽度设定(行内 style / 父级 flex)不能被这层包装吃掉 */
+.sp-sug-wrap > input { width: 100%; }
+
+.sp-sug-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 100%;
+  width: max-content;
+  max-width: 320px;
+  max-height: 280px;
+  overflow-y: auto;
+  z-index: 1000;              /* 要盖过 .btn-run 的 sticky 和卡片阴影 */
+  background: var(--bg, #fff);
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(27, 31, 36, .16);
+  padding: 4px;
+}
+
+.sp-sug-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  border: none;
+  background: none;
+  border-radius: 6px;
+  padding: 7px 10px;
+  cursor: pointer;
+  text-align: left;
+  font-size: 13px;
+  color: var(--txt, #24292f);
+}
+.sp-sug-item:hover,
+.sp-sug-item.active {
+  background: rgba(24, 95, 165, .08);
+}
+.sp-sug-name { font-weight: 600; white-space: nowrap; }
+.sp-sug-code {
+  color: var(--txt2, #656d76);
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+
+@media (max-width: 768px) {
+  /* 跟全站移动端点击目标下限一致(见 style.css 的 44px 说明) */
+  .sp-sug-item { min-height: 44px; font-size: 15px; }
+  .sp-sug-panel { max-width: min(320px, calc(100vw - 40px)); }
+}

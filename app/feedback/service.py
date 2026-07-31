@@ -8,10 +8,9 @@
 from __future__ import annotations
 
 import logging
-import time
-from collections import deque
-from typing import Deque, Dict, Optional
+from typing import Optional
 
+from ..ratelimit import SlidingWindowLimiter
 from . import db
 
 logger = logging.getLogger(__name__)
@@ -30,18 +29,16 @@ class FeedbackRateLimitError(FeedbackError):
     """限流触发，api 层转 429。"""
 
 
-_ip_hits: Dict[str, Deque[float]] = {}
+# 滑动窗口本体在 app/ratelimit.py(五处调用点共用一份实现)。
+# 收拢前这份**没有任何清扫**:每来一个新访客 IP 就在字典里留一个条目再也不删,
+# 公网跑久了是只增不减的内存增长。共享实现自带按窗口清扫,顺带修掉。
+_ip_limiter = SlidingWindowLimiter(
+    limit=IP_MAX_PER_HOUR, window_sec=3600, name="feedback_ip",
+)
 
 
 def _ip_allowed(ip: str) -> bool:
-    now = time.time()
-    dq = _ip_hits.setdefault(ip, deque())
-    while dq and now - dq[0] > 3600:
-        dq.popleft()
-    if len(dq) >= IP_MAX_PER_HOUR:
-        return False
-    dq.append(now)
-    return True
+    return _ip_limiter.allow(ip)
 
 
 def submit(

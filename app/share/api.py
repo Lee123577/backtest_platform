@@ -12,14 +12,13 @@ from __future__ import annotations
 
 import json
 import logging
-import threading
-import time
 from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from ..auth.deps import get_current_user
+from ..ratelimit import SlidingWindowLimiter
 from ..visit_log import _client_ip
 from . import db, service
 
@@ -27,24 +26,16 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["share"])
 
-_HITS: Dict[str, list] = {}
-_LIMIT = 5
-_WINDOW = 60.0
-_LOCK = threading.Lock()
+# 滑动窗口本体在 app/ratelimit.py(五处调用点共用一份实现)。
+# 这份收拢前每个请求都要全量扫一遍字典 —— 没有清扫节流,收拢后跟其他几处一致。
+_limiter = SlidingWindowLimiter(limit=5, window_sec=60.0, name="share_create")
 
 
 def _rate_limit(request: Request) -> None:
     ip = _client_ip(request)
-    now = time.time()
-    with _LOCK:
-        for k in [k for k, v in _HITS.items() if not v or now - v[-1] > _WINDOW]:
-            del _HITS[k]
-        hits = _HITS.setdefault(ip, [])
-        while hits and now - hits[0] > _WINDOW:
-            hits.pop(0)
-        if len(hits) >= _LIMIT:
-            raise HTTPException(429, "创建分享过于频繁，请稍后再试")
-        hits.append(now)
+    if not _limiter.allow(ip):
+        raise HTTPException(429, "创建分享过于频繁，请稍后再试",
+                            headers={"Retry-After": str(_limiter.retry_after(ip))})
 
 
 class ShareReq(BaseModel):

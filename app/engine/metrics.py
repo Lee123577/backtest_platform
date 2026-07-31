@@ -98,7 +98,11 @@ def compute_risk_metrics(
     elif max_drawdown != 0:
         calmar = round(annual_return / abs(max_drawdown), 3)
     else:
-        calmar = 0.0
+        # 全程零回撤 —— Calmar = 年化 / |最大回撤|,分母为 0,数学上未定义。
+        # 这里曾经记 0.0,恰好把"净值一路新高、从没回撤"(最理想的曲线)
+        # 显示成 Calmar 0(最差的读数)。跟本文件 sharpe/sortino 统一:
+        # 分母为 0 一律 None,前端渲染成"—"。
+        calmar = None
 
     return {
         "total_return": round(total_return * 100, 2),
