@@ -233,6 +233,12 @@ main {
   letter-spacing: .4px;
 }
 .form-group input, .form-group select { width: 100%; }
+/* 股票代码这格要塞下"输入框 + 查看K线"两件东西，1fr 的格子(桌面约 192px)分完
+   按钮只给输入框剩 108px，占位提示"代码或名称，如 平安银行"要 167px 才显示得全
+   —— 而"能按名字搜"正是这个框的卖点，截断了等于没写。宽屏给它两格。 */
+@media (min-width: 769px) {
+  .form-group-wide { grid-column: span 2; }
+}
 input[type=text], input[type=date], input[type=number], select {
   background: var(--bg);
   border: 1px solid var(--border);
@@ -248,7 +254,12 @@ input[type=text]:focus, input[type=date]:focus, input[type=number]:focus, select
   box-shadow: 0 0 0 3px rgba(24,95,165,.12);
 }
 .inline-group { display: flex; gap: 6px; align-items: flex-end; }
-.inline-group input { flex: 1; min-width: 0; }
+/* 伸缩必须落在真正的 flex 子元素上。stock_suggest.js 会把输入框包进
+   <span class="sp-sug-wrap">(给下拉面板做定位上下文)，包完之后 .inline-group input
+   就不再是 flex 子项了 —— 包装层拿默认的 flex:0 1 auto + min-width:auto，缩不到
+   内容宽度以下，按钮被顶出格子盖住旁边的"开始日期"。 */
+.inline-group > input,
+.inline-group > .sp-sug-wrap { flex: 1; min-width: 0; }
 .inline-group .btn { white-space: nowrap; flex-shrink: 0; }
 
 .stock-tag {
@@ -710,6 +721,9 @@ table.holdings-tbl { width: 100%; border-collapse: collapse; font-size: 12px; mi
   .chart-wrap { height: 320px; }
   .chart-wrap-sm { height: 240px; }
   .form-row { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
+  /* 窄屏一格只有 ~150px，减去"查看K线"按钮后输入框剩不到 70px，连提示都看不见。
+     整行给它(1 / -1 在任意列数下都成立，不会撑出隐式列)。 */
+  .form-group-wide { grid-column: 1 / -1; }
 
   /* 输入类控件字号必须 ≥16px。iOS Safari 对 font-size < 16px 的输入框会在
      聚焦瞬间强制放大整个视口，用户填完还得两指缩回来 —— 这一下正好卡在
