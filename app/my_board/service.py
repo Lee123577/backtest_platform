@@ -1,5 +1,21 @@
 """
-数据看板布局 —— 登录用户各自一份,访客共享 user_id=0 的默认布局。
+数据看板布局 —— 每个访客一份,身份按"登录用户 > IP"降级。
+
+三种归属(scope),读写用的是同一套判定,所见即所存:
+
+  user          已登录     → user_board_layout 里自己那一行
+  site_default  白名单 IP   → user_board_layout 的 user_id=0 那一行,也就是
+                             全站默认布局。维护者摆好的样子 = 新访客看到的
+                             样子,这是既有的产品行为,保持不变。
+  ip            普通访客    → board_layout_by_ip 里 ip_key 那一行。第一次来
+                             没有自己的行,读到的是全站默认布局(当模板用);
+                             一旦拖动保存,就落到自己那一行,与别人隔离。
+
+IP 当身份是有损的,这点必须清楚:同一出口 IP(公司/学校 NAT)的多个人会共用
+一份看板;换 WiFi/切流量则等于换了个人,原来的看板找不回来。之所以还这么做,
+是因为平台目前 user_session 表为空、没有任何登录态可用,按 IP 存至少让绝大
+多数家庭宽带/固定办公网的访客能把看板留住 —— 比现在"谁都存不下"强。
+真要稳,后续应改用已经在下发的 sp_sid cookie(见 analytics/attribution)。
 
 存储的布局是一份 {"cards": [...], "positions": {...}} 文档:
 - cards:    当前画布上有哪些卡片、什么类型(stock/rank/compare/review/hotsector/indices),
@@ -17,10 +33,19 @@
 """
 from __future__ import annotations
 
+import ipaddress
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from . import db
+
+SCOPE_USER = "user"
+SCOPE_SITE = "site_default"
+SCOPE_IP = "ip"
+# 连 IP 都拿不到(request.client 缺失/伪造成垃圾值):没有任何可持久化的身份。
+# 读全站默认布局的只读副本,写一律拒绝 —— 绝不能让它退回去写全站默认那一行,
+# 那正是本模块一直在防的内容投毒面。
+SCOPE_EPHEMERAL = "ephemeral"
 
 MAX_CARDS = 10   # 与前端 my_board.js 的 MAX_BOARD_CARDS 保持一致
 MAX_COMPARE_CODES = 6
@@ -48,12 +73,68 @@ class LayoutError(Exception):
     pass
 
 
+class LayoutForbidden(Exception):
+    """没有可持久化的身份,这次保存不该落库(由 API 层翻成 403)。"""
+    pass
+
+
+def ip_key(ip: Optional[str]) -> Optional[str]:
+    """把请求 IP 归一成看板的存储键;拿不到可用身份时返回 None。
+
+    - IPv4 → 原样(含内网地址:局域网部署/本地开发也得能存)
+    - IPv6 → 截到 /64 前缀。运营商给手机的 IPv6 后 64 位是接口标识,会随机
+      轮换,用完整地址存等于每刷新一次就换个人,看板永远读不回来。
+    - 解析不了(空串 / "unknown" / 伪造的垃圾值)→ None,不落库
+    """
+    ip = (ip or "").strip()
+    if not ip:
+        return None
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return None
+    if addr.version == 6:
+        net = ipaddress.ip_network(f"{addr}/64", strict=False)
+        return str(net)          # 形如 "2408:8207:xxxx:yyyy::/64",≤45 字符
+    return str(addr)
+
+
 def _key_for(user: Optional[Dict[str, Any]]) -> int:
     return int(user["id"]) if user else db.GUEST_USER_ID
 
 
-def get_layout(user: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def resolve_scope(
+    user: Optional[Dict[str, Any]], is_site_editor: bool, ip: Optional[str]
+) -> Tuple[str, Optional[str]]:
+    """定位这次请求该读写哪一份布局,返回 (scope, ip_key)。
+
+    ip_key 只在 scope == SCOPE_IP 时有意义。判定顺序是固定的:
+    登录态最可信,其次是白名单(维护者改的是全站默认),最后才落到 IP。
+    """
+    if user is not None:
+        return SCOPE_USER, None
+    if is_site_editor:
+        return SCOPE_SITE, None
+    key = ip_key(ip)
+    if key is None:
+        return SCOPE_EPHEMERAL, None
+    return SCOPE_IP, key
+
+
+def get_layout(
+    user: Optional[Dict[str, Any]] = None,
+    is_site_editor: bool = False,
+    ip: Optional[str] = None,
+) -> Dict[str, Any]:
     db.ensure_tables()
+    scope, key = resolve_scope(user, is_site_editor, ip)
+    if scope == SCOPE_IP:
+        saved = db.load_ip_layout(key)
+        # 这个 IP 从没存过 → 拿全站默认布局当开局模板(区别于存过一份空的,
+        # 那是用户主动"重置为默认",不该再把默认卡片塞回去)
+        return saved if saved is not None else db.load_layout(db.GUEST_USER_ID)
+    if scope == SCOPE_EPHEMERAL:
+        return db.load_layout(db.GUEST_USER_ID)
     return db.load_layout(_key_for(user))
 
 
@@ -170,7 +251,12 @@ def _clean_cards(cards: Any) -> List[Dict[str, str]]:
     return clean
 
 
-def save_layout(user: Optional[Dict[str, Any]], layout: Dict[str, Any]) -> None:
+def save_layout(
+    user: Optional[Dict[str, Any]],
+    layout: Dict[str, Any],
+    is_site_editor: bool = False,
+    ip: Optional[str] = None,
+) -> None:
     if not isinstance(layout, dict):
         raise LayoutError("布局格式不对")
 
@@ -184,6 +270,18 @@ def save_layout(user: Optional[Dict[str, Any]], layout: Dict[str, Any]) -> None:
         clean = _clean_positions(layout)
 
     db.ensure_tables()
+    scope, key = resolve_scope(user, is_site_editor, ip)
+    if scope == SCOPE_EPHEMERAL:
+        raise LayoutForbidden("识别不到你的网络地址,布局无法保存")
+    if scope == SCOPE_IP:
+        if not clean:
+            # 前端"重置为默认"发的就是空布局。对访客而言删掉自己那一行,
+            # 下次打开重新回退到全站默认 —— 这才是"默认"该有的意思,
+            # 顺带把不再需要的行清掉,不留空壳。
+            db.delete_ip_layout(key)
+        else:
+            db.save_ip_layout(key, clean)
+        return
     db.save_layout(_key_for(user), clean)
 
 

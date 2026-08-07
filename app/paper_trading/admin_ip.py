@@ -259,12 +259,13 @@ def _is_cross_site(source: str, host: str) -> bool:
 
 
 def _reject_cross_site(request: Request) -> None:
-    """管理员写接口的 CSRF 防线:带 Origin/Referer 的浏览器请求必须同源。
+    """以 IP 为身份的写接口的 CSRF 防线:带 Origin/Referer 的浏览器请求必须同源。
 
-    IP 白名单只认来源 IP、不认 cookie,所以 SameSite 保护不了它 ——
-    管理员(或同一出口 IP 的任何人)浏览恶意网页时,跨站表单 POST 是
-    简单请求、无预检,能直接命中无 body 的写接口(如 /api/tasks/{name}/run)。
-    curl/脚本不带 Origin/Referer,不受影响,仍走 IP 白名单。
+    IP 只认来源地址、不认 cookie,所以 SameSite 保护不了它 —— 管理员(或同一
+    出口 IP 的任何人)浏览恶意网页时,跨站表单 POST 是简单请求、无预检,能直接
+    命中无 body 的写接口(如 /api/tasks/{name}/run)。同样的道理也适用于按 IP
+    存的访客看板布局(/api/my_board/layout)。
+    curl/脚本不带 Origin/Referer,不受影响,仍走各自的身份校验。
     """
     source = request.headers.get("origin") or request.headers.get("referer") or ""
     if not source:
@@ -273,8 +274,13 @@ def _reject_cross_site(request: Request) -> None:
     if _is_cross_site(source, host):
         raise HTTPException(
             status_code=403,
-            detail="跨站请求被拒绝:管理员写操作只接受本站页面或无 Origin 的脚本调用。",
+            detail="跨站请求被拒绝:该写操作只接受本站页面或无 Origin 的脚本调用。",
         )
+
+
+# 给模块外用的公开名(my_board 的访客布局写入也要这道防线)。
+# 本模块内部沿用 _reject_cross_site,测试也钉的是那个名字。
+reject_cross_site = _reject_cross_site
 
 
 def require_admin_ip(request: Request) -> str:

@@ -2,16 +2,28 @@
 数据看板卡片拖拽布局持久化
 ==========================
 
-1 张表 user_board_layout:一行一份布局(user_id + layout_json)。
-user_id=0 是"访客默认布局"的哨兵值 —— 所有未登录用户共享同一份、
-可被任意访客拖动覆盖(产品需求:未登录统一用默认布局,且默认布局本身
-可以被修改保存,下次打开沿用上次的样子)。
+2 张表:
+
+  user_board_layout   —— 登录用户各自一份(user_id + layout_json)。
+                         user_id=0 是"全站默认布局"的哨兵值:维护者在未登录
+                         状态下摆好的样子,就是新访客第一次打开时看到的画布。
+  board_layout_by_ip  —— 未登录访客各自一份,按 IP 维度存。
+
+为什么要按 IP 分行:平台至今 user_session 表为空(一次登录都没发生过),
+所有真实访客都是未登录态。原先未登录一律共用 user_id=0 那一行,又只允许
+白名单 IP 写,等于普通访客根本存不下自己的看板 —— 拖完刷新就没了。
+按 IP 拆行之后每个访客写自己的行,互不覆盖,全站默认布局也不会被路人改掉。
+
+IP 作为身份是有损的(同一出口 IP 的多人会共用一份、换网络就换人),
+这是 ip_key() 的归一规则要处理的事,见 service.ip_key。
 """
 from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict
+import threading
+import time
+from typing import Any, Dict, Optional
 
 from ..data import stock_search
 from ..data.data_loader import _get_pool
@@ -19,6 +31,11 @@ from ..data.data_loader import _get_pool
 logger = logging.getLogger(__name__)
 
 GUEST_USER_ID = 0
+
+# 访客布局的保留策略:半年没回来的行清掉,总行数封顶(小内存生产机,
+# 不能让扫描器/一次性访客把表撑爆)。超限时按 updated_at 升序淘汰最旧的。
+IP_LAYOUT_MAX_AGE_DAYS = 180
+IP_LAYOUT_MAX_ROWS = 20000
 
 DDL_STATEMENTS = [
     """
@@ -28,7 +45,17 @@ DDL_STATEMENTS = [
         updated_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
                                   ON UPDATE CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-      COMMENT='数据看板卡片拖拽布局(user_id=0 为访客共享默认布局)'
+      COMMENT='数据看板卡片拖拽布局(user_id=0 为全站默认布局)'
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS board_layout_by_ip (
+        ip_key      VARCHAR(45)  NOT NULL PRIMARY KEY,
+        layout_json MEDIUMTEXT   NOT NULL,
+        updated_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
+                                  ON UPDATE CURRENT_TIMESTAMP,
+        KEY idx_updated (updated_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+      COMMENT='未登录访客的看板布局(按 IP 维度,IPv6 归一到 /64 前缀)'
     """,
 ]
 
@@ -77,6 +104,106 @@ def save_layout(user_id: int, layout: Dict[str, Any]) -> None:
             """,
             (user_id, payload),
         )
+
+
+# ── 访客布局(IP 维度) ───────────────────────────────────────────────────────
+
+def load_ip_layout(ip_key: str) -> Optional[Dict[str, Any]]:
+    """取该 IP 存过的布局。
+
+    返回 None 和返回 {} 是两件事,调用方要靠它决定要不要回退到全站默认:
+      None —— 这个 IP 从没存过,第一次来 → 应该看到全站默认布局
+      {}   —— 存过,而且存的就是空(用户点了"重置为默认")→ 尊重它,别再回退
+    """
+    conn = _get_pool()
+    if conn is None:
+        return None
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT layout_json FROM board_layout_by_ip WHERE ip_key=%s", (ip_key,)
+        )
+        row = cur.fetchone()
+    if not row:
+        return None
+    try:
+        return json.loads(row["layout_json"]) or {}
+    except (TypeError, ValueError):
+        return {}
+
+
+def save_ip_layout(ip_key: str, layout: Dict[str, Any]) -> None:
+    conn = _get_pool()
+    if conn is None:
+        raise RuntimeError("数据库连接不可用")
+    payload = json.dumps(layout, ensure_ascii=False)
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO board_layout_by_ip (ip_key, layout_json) VALUES (%s, %s)
+            ON DUPLICATE KEY UPDATE layout_json=VALUES(layout_json)
+            """,
+            (ip_key, payload),
+        )
+    _maybe_purge_ip_layouts()
+
+
+def delete_ip_layout(ip_key: str) -> None:
+    """删掉该 IP 的布局行 —— 访客点"重置为默认"时用,下次打开回退全站默认。"""
+    conn = _get_pool()
+    if conn is None:
+        raise RuntimeError("数据库连接不可用")
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM board_layout_by_ip WHERE ip_key=%s", (ip_key,))
+
+
+# 清理是顺带做的:每次保存都跑一遍 DELETE 太浪费,一个进程一小时跑一次足够。
+# 保留策略本身是"半年 + 总量封顶",慢几小时生效没有任何影响。
+_PURGE_INTERVAL_SEC = 3600.0
+_last_purge_at = 0.0
+_purge_lock = threading.Lock()
+
+
+def _maybe_purge_ip_layouts() -> None:
+    global _last_purge_at
+    now = time.time()
+    with _purge_lock:
+        if now - _last_purge_at < _PURGE_INTERVAL_SEC:
+            return
+        _last_purge_at = now
+    try:
+        purge_ip_layouts()
+    except Exception as e:
+        # 清理失败不该让用户的保存跟着失败 —— 布局那一行已经写进去了
+        logger.warning("清理访客看板布局失败(忽略): %s", e)
+
+
+def purge_ip_layouts(
+    max_age_days: int = IP_LAYOUT_MAX_AGE_DAYS,
+    max_rows: int = IP_LAYOUT_MAX_ROWS,
+) -> int:
+    """删掉过期的访客布局 + 超出总量上限的最旧几行,返回删除行数。"""
+    conn = _get_pool()
+    if conn is None:
+        return 0
+    deleted = 0
+    with conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM board_layout_by_ip WHERE updated_at < NOW() - INTERVAL %s DAY",
+            (max_age_days,),
+        )
+        deleted += cur.rowcount or 0
+        cur.execute("SELECT COUNT(*) AS c FROM board_layout_by_ip")
+        row = cur.fetchone()
+        total = int(row["c"]) if row else 0
+        if total > max_rows:
+            cur.execute(
+                "DELETE FROM board_layout_by_ip ORDER BY updated_at ASC LIMIT %s",
+                (total - max_rows,),
+            )
+            deleted += cur.rowcount or 0
+    if deleted:
+        logger.info("清理访客看板布局 %d 行", deleted)
+    return deleted
 
 
 # ── 股票/指数搜索(切换卡片用) ────────────────────────────────────────────

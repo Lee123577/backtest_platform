@@ -1074,14 +1074,20 @@
   var saveTimer = null;
   var zCounter = 100;       // 每次拖拽/缩放递增,保证"最后操作的卡片在最上层"
 
-  // 进页面时的登录态。拿它是为了在保存被拒(403)时能说对话:未登录的人写的是
-  // 全站共享布局、本来就该被拦;而进来时是登录状态却被拒,说明会话中途失效了。
+  // 进页面时的身份。拿它是为了在保存被拒(403)时能说对话 —— 三种情况的原因
+  // 完全不同:登录态中途失效 / 识别不到网络地址 / 跨站请求被拦。
+  // scope 见后端 my_board/service.py:user | site_default | ip | ephemeral
   var wasLoggedIn = false;
+  var boardScope = "ip";
 
   function fetchBoard() {
     return fetch("/api/my_board/layout")
       .then(function (r) { return r.ok ? r.json() : { layout: {} }; })
-      .then(function (j) { wasLoggedIn = !!j.logged_in; return j.layout || {}; })
+      .then(function (j) {
+        wasLoggedIn = !!j.logged_in;
+        if (j.scope) boardScope = j.scope;
+        return j.layout || {};
+      })
       .catch(function () { return {}; });
   }
 
@@ -1109,10 +1115,19 @@
     saveErrTimer = setTimeout(function () { saveErrTimer = null; }, 8000);
   }
 
-  // 未登录访客写的是"全站共享默认布局",服务端只允许白名单 IP 改(防内容投毒)。
-  // 这种 403 是身份问题、重试多少次都一样,所以本次会话直接停掉保存:卡片照样
-  // 能拖能缩放(纯前端状态),只是不落库。和真正的保存失败区分开,别反复弹错。
+  // 403 是身份问题、重试多少次都一样,所以本次会话直接停掉保存:卡片照样能拖
+  // 能缩放(纯前端状态),只是不落库。和真正的保存失败区分开,别反复弹错。
+  // 正常访客现在存的是自己 IP 那一份,不会再撞 403 —— 只剩会话失效、拿不到
+  // 网络地址、跨站请求这几种边角情况。
   var saveForbidden = false;
+
+  function forbiddenMessage() {
+    if (wasLoggedIn) return "登录状态已失效，布局无法保存。请重新登录后再调整。";
+    if (boardScope === "ephemeral") {
+      return "识别不到你的网络地址，布局无法保存。你的调整本次浏览有效，刷新后恢复。";
+    }
+    return "布局无法保存。你的调整本次浏览有效，刷新后恢复。";
+  }
 
   function doSaveBoard() {
     if (saveForbidden) return Promise.resolve();
@@ -1124,10 +1139,7 @@
     }).then(function (r) {
       if (r.status === 403) {
         saveForbidden = true;
-        showToast(wasLoggedIn
-          ? "登录状态已失效，布局无法保存。请重新登录后再调整。"
-          : "这是访客共享的默认布局，只有维护者能改动。你的调整本次浏览有效，刷新后恢复。",
-          6000);
+        showToast(forbiddenMessage(), 6000);
         return;
       }
       if (!r.ok) notifySaveError();
