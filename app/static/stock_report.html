@@ -27,18 +27,27 @@
 </header>
 
 <main>
-  <article class="panel" id="srArticle">
+  <article class="panel sr-panel" id="srArticle">
     <!--SR_INIT-->
-    <div class="sr-head">
-      <h1 class="panel-title" id="srTitle"><!--SR_TITLE--></h1>
-      <div class="sr-meta" id="srMeta"><!--SR_META--></div>
-    </div>
 
+    <!-- 股票身份与现价 -->
+    <!--SR_HEADER-->
+
+    <!-- 评分 + 行情指标：数据在前，AI 解读在后 -->
     <!--SR_SCORE-->
+    <!--SR_METRICS-->
 
-    <div class="md-body" id="srContent"><!--SR_BODY--></div>
+    <!-- 策略实测：本站相对纯 LLM 报告的核心差异，放在正文之前 -->
+    <!--SR_BACKTEST-->
 
-    <div class="sr-actions" id="srActions"><!--SR_ACTIONS--></div>
+    <section class="sr-report">
+      <div class="sr-report-head">
+        <h2 class="sr-report-title" id="srTitle"><!--SR_TITLE--></h2>
+        <div class="sr-meta" id="srMeta"><!--SR_META--></div>
+      </div>
+      <div class="md-body" id="srContent"><!--SR_BODY--></div>
+      <div class="sr-actions" id="srActions"><!--SR_ACTIONS--></div>
+    </section>
 
     <p class="sr-disclaimer">
       本页内容由 AI 基于本站行情库与回测引擎的数据自动生成，只是对历史数据的解读，

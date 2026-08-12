@@ -44,7 +44,9 @@ def _validate_date_range(start: str, end: str) -> None:
 from .auth import deps as _auth_deps
 from .daily_review import db as _dr_db
 from .daily_review import render as _dr_render
+from .stock_report import context as _sr_context
 from .stock_report import db as _sr_db
+from .stock_report import render as _sr_render
 from .stock_report import service as _sr_service
 from .data.calendar import count_trading_days, next_n_trading_days
 from .data.data_loader import get_kline_data, get_stock_name, normalize_code
@@ -733,8 +735,6 @@ def _daily_review_page(request: Request, d: Optional[_date]) -> Response:
 #      放进索引只会拉低整站质量评分。有报告了自然会被重新抓到。
 _SR_CODE_RE = re.compile(r"^\d{6}$")
 
-_TREND_CLASS = {"看多": "sr-trend-up", "震荡": "sr-trend-flat", "看空": "sr-trend-down"}
-
 
 def _sr_desc_fallback(label: str) -> str:
     return f"{label} 的技术面、估值与量化策略回测实证，AI 基于本站行情库自动解读。"
@@ -792,36 +792,6 @@ def _sr_head(row: Optional[Dict[str, Any]], code: str, name: str, canonical: str
     return "\n  ".join(head)
 
 
-def _sr_score(row: Optional[Dict[str, Any]]) -> str:
-    if row is None:
-        return ""
-    score, trend, reason = row.get("score"), row.get("trend"), row.get("score_reason")
-    if score is None and not trend:
-        return ""
-    parts = ['<div class="sr-score">']
-    if score is not None:
-        parts.append(f'<div class="sr-score-num">{int(score)}<small>/100</small></div>')
-    if trend:
-        cls = _TREND_CLASS.get(trend, "sr-trend-flat")
-        parts.append(f'<span class="sr-trend {cls}">{_htmlmod.escape(trend)}</span>')
-    if reason:
-        parts.append(f'<div class="sr-score-reason">{_htmlmod.escape(reason)}</div>')
-    parts.append("</div>")
-    return "".join(parts)
-
-
-def _sr_body(row: Optional[Dict[str, Any]], label: str) -> str:
-    if row is None:
-        return (
-            '<div class="sr-empty">'
-            f"还没有 {_htmlmod.escape(label)} 的 AI 分析报告。<br>"
-            "点下面的按钮生成一份：读取本站行情库的最新快照，"
-            "跑一遍 9 种内置策略的历史回测，再交给 AI 解读。"
-            "</div>"
-        )
-    return _dr_render.md_to_html(row.get("content_md"))
-
-
 def _sr_actions(row: Optional[Dict[str, Any]]) -> str:
     if row is not None:
         return ""
@@ -859,14 +829,29 @@ def page_stock_report(code: str, request: Request):
 
     art_title = (row.get("title") if row else "") or f"{label} 数据解读"
     date_txt = str(row.get("report_date")) if row else ""
+    # 页面上的行情/回测模块都从这份快照渲染 —— 它是生成报告时喂给模型的同一份
+    # 数据,所以"页面上的数字"和"正文里的说法"永远同源,不会各说各话
+    ctx = _sr_render.parse_context(row)
+    if not ctx:
+        # 还没有报告(或快照坏了):现查一份轻量行情,让页面至少能告诉访客
+        # 这只股票是谁、现在多少钱 —— 只有一个生成按钮的空页面没人愿意点。
+        # with_backtest=False:这里不值得为一个 noindex 页面跑 9 次回测。
+        try:
+            ctx = _sr_context.build_context(norm, with_backtest=False)
+        except Exception as e:
+            logger.info("个股页轻量快照取失败(%s，页面照常出): %s", norm, e)
+            ctx = {}
     return _html(
         request, "stock_report.html",
         replacements={
             "<!--SR_HEAD-->": _sr_head(row, norm, name, canonical),
+            "<!--SR_HEADER-->": _sr_render.header_html(ctx, norm, name),
             "<!--SR_TITLE-->": _htmlmod.escape(art_title),
             "<!--SR_META-->": (f"数据截至 {_htmlmod.escape(date_txt)}" if date_txt else ""),
-            "<!--SR_SCORE-->": _sr_score(row),
-            "<!--SR_BODY-->": _sr_body(row, label),
+            "<!--SR_SCORE-->": _sr_render.score_html(row),
+            "<!--SR_METRICS-->": _sr_render.metrics_html(ctx),
+            "<!--SR_BACKTEST-->": _sr_render.backtest_html(ctx),
+            "<!--SR_BODY-->": _sr_render.body_html(row, label),
             "<!--SR_ACTIONS-->": _sr_actions(row),
             "<!--SR_INIT-->": (
                 f'<span id="srInit" hidden data-code="{_htmlmod.escape(norm, quote=True)}" '

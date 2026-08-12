@@ -11,7 +11,7 @@ from datetime import date
 import pandas as pd
 import pytest
 
-from app.stock_report import context, db, runner, service
+from app.stock_report import context, db, render, runner, service
 
 
 # ── 模型输出清洗 ─────────────────────────────────────────────────────────────
@@ -178,3 +178,87 @@ def test_量比按5日均量算():
     q = context._fetch_quote("000001", df)
     # 最后一天 200 万,近5日均量 = (100+100+100+100+200)/5 = 120 万
     assert q["volume_ratio_vs_5d"] == pytest.approx(1.67, abs=0.01)
+
+
+# ── 页面渲染(render.py) ──────────────────────────────────────────────────────
+#
+# 这层在拼 HTML，而 basic.name / industry 来自外部数据源(baostock/akshare)，
+# 不是本站自己生成的枚举 —— 所以转义必须有测试钉着。
+
+def test_坏的context_json不炸页面():
+    """快照解析不了时页面要照常出，只是少几个模块 —— 不能整页 500。"""
+    assert render.parse_context({"context_json": "不是json"}) == {}
+    assert render.parse_context({"context_json": "[1,2]"}) == {}   # 合法 JSON 但不是对象
+    assert render.parse_context({"context_json": None}) == {}
+    assert render.parse_context(None) == {}
+
+
+def test_名称里的尖括号被转义():
+    ctx = {"basic": {"name": '<img src=x onerror=alert(1)>', "code": "000001"},
+           "quote": {"close": 10.0}}
+    html = render.header_html(ctx, "000001", "")
+    assert "<img" not in html
+    assert "&lt;img" in html
+
+
+def test_行业名里的引号被转义():
+    ctx = {"basic": {"industry_sw1": '"><script>', "code": "000001"}, "quote": {}}
+    html = render.header_html(ctx, "000001", "")
+    assert "<script>" not in html
+
+
+def test_评分理由被转义():
+    row = {"score": 60, "trend": "震荡", "score_reason": "<b>x</b>"}
+    assert "<b>" not in render.score_html(row)
+
+
+@pytest.mark.parametrize("v,want", [
+    (3.5, "+3.50%"), (-2.0, "-2.00%"), (0.0, "+0.00%"), (None, "—"),
+])
+def test_涨跌数字带正负号(v, want):
+    assert render._signed(v) == want
+
+
+@pytest.mark.parametrize("v,cls", [
+    (1.0, "sr-up"), (-1.0, "sr-down"), (0.0, "sr-flat"), (None, "sr-flat"),
+])
+def test_涨跌配色_A股红涨绿跌(v, cls):
+    assert render._updown_class(v) == cls
+
+
+def test_没有回测数据就不出这一块():
+    """新股/数据不足时 backtest 是空的，页面不该出一个空表框。"""
+    assert render.backtest_html({}) == ""
+    assert render.backtest_html({"backtest": {"strategies": []}}) == ""
+
+
+def test_没有行情就不出指标网格():
+    assert render.metrics_html({}) == ""
+
+
+def test_策略条形宽度按最大值归一():
+    ctx = {"backtest": {
+        "buy_and_hold_return_pct": 10.0,
+        "strategies": [
+            {"strategy_name": "A", "total_return_pct": 50.0, "win_rate_pct": 60.0,
+             "max_drawdown_pct": -10.0, "trade_count": 8},
+            {"strategy_name": "B", "total_return_pct": -25.0, "win_rate_pct": 30.0,
+             "max_drawdown_pct": -30.0, "trade_count": 3},
+        ],
+    }}
+    html = render.backtest_html(ctx)
+    assert "width:100.0%" in html      # 收益最高的那条占满
+    assert "width:50.0%" in html       # -25 的绝对值是 50 的一半
+    assert "sr-thin" in html           # B 只有 3 笔，要标"样本少"
+    assert "+50.00%" in html and "-25.00%" in html
+
+
+def test_市值过万亿换单位():
+    assert render._fmt_cap(16832.35) == "1.68万亿"
+    assert render._fmt_cap(2185.0) == "2185亿"
+    assert render._fmt_cap(None) == "—"
+
+
+@pytest.mark.parametrize("rsi,note", [(75, "超买区"), (25, "超卖区"), (55, ""), (None, "")])
+def test_rsi极值给出提示(rsi, note):
+    assert render._rsi_note(rsi) == note

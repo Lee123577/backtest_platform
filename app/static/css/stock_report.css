@@ -1,74 +1,385 @@
 /* 个股 AI 分析报告页
-   正文排版复用 daily_review.css 的 .md-body,这里只补本页特有的:
-   标题行、评分条、生成按钮、免责声明。 */
+   ====================
+   页面结构是"数据在前、解读在后"：身份 → 评分 → 行情指标 → 策略实测 → AI 正文。
+   正文排版复用 daily_review.css 的 .md-body。
 
-.sr-head {
+   配色一律走 style.css 的 CSS 变量，只额外定义一组涨跌色 —— A 股是红涨绿跌，
+   跟国际习惯相反，写死在这里避免各处手抖写反。 */
+
+.sr-panel {
+  --sr-up: #c0392b;      /* 涨 —— 红 */
+  --sr-down: #1a7f37;    /* 跌 —— 绿 */
+  --sr-flat: var(--txt2, #57606a);
+}
+.sr-up   { color: var(--sr-up); }
+.sr-down { color: var(--sr-down); }
+.sr-flat { color: var(--sr-flat); }
+
+/* ── 头部：名称 / 代码 / 行业 / 现价 ─────────────────────────────────── */
+
+.sr-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border, #d0d7de);
+}
+.sr-name {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.25;
+  color: var(--txt, #24292f);
+}
+.sr-tags {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+.sr-code {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .5px;
+  color: var(--txt2, #57606a);
+}
+.sr-tag {
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 1px 8px;
+  border-radius: 999px;
+  color: var(--accent, #185FA5);
+  background: var(--accent-light, #E6F1FB);
+}
+.sr-tag-warn {
+  color: #9a6700;
+  background: #fff8c5;
+}
+.sr-price {
   display: flex;
   align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-.sr-meta {
-  font-size: 12px;
-  color: var(--txt2, #8a929c);
+  gap: 8px;
   flex: none;
 }
+.sr-price-num {
+  font-size: 26px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.sr-price-chg {
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
 
-/* 评分条:分数 + 趋势 + 一句话依据。趋势用色区分,但不用纯红绿 ——
-   A 股红涨绿跌,和"看多=绿"的国际习惯正好相反,容易读反。 */
+/* ── 评分卡 ──────────────────────────────────────────────────────────── */
+
 .sr-score {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 20px;
   flex-wrap: wrap;
-  margin: 14px 0 18px;
-  padding: 12px 16px;
+  margin: 16px 0;
+  padding: 14px 16px;
   border: 1px solid var(--border, #d0d7de);
-  border-radius: 8px;
+  border-radius: 10px;
   background: var(--bg2, #f6f8fa);
 }
+.sr-score-main { flex: none; min-width: 150px; }
 .sr-score-num {
-  font-size: 30px;
+  font-size: 32px;
   font-weight: 700;
   line-height: 1;
+  font-variant-numeric: tabular-nums;
   color: var(--txt, #24292f);
 }
 .sr-score-num small {
   font-size: 13px;
   font-weight: 400;
-  color: var(--txt2, #8a929c);
+  color: var(--txt2, #57606a);
   margin-left: 2px;
+}
+/* 进度条 + 50 分中性刻度：光给个 62 分，读者无从判断这算高还是低 */
+.sr-score-bar {
+  position: relative;
+  height: 6px;
+  margin-top: 8px;
+  border-radius: 999px;
+  background: var(--bg3, #f0f2f5);
+  overflow: hidden;
+}
+.sr-score-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent, #185FA5);
+}
+.sr-score-mid {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: 1px;
+  height: 100%;
+  background: var(--bg, #fff);
+  opacity: .9;
+}
+.sr-score-side {
+  flex: 1 1 240px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
 }
 .sr-trend {
   flex: none;
   font-size: 13px;
   font-weight: 600;
-  padding: 3px 10px;
+  padding: 2px 12px;
   border-radius: 999px;
   border: 1px solid currentColor;
 }
-.sr-trend-up   { color: #c0392b; }   /* 看多 —— 按 A 股习惯用红 */
-.sr-trend-flat { color: #8a929c; }
-.sr-trend-down { color: #1a7f37; }   /* 看空 —— 绿 */
+.sr-trend-up   { color: var(--sr-up); }
+.sr-trend-flat { color: var(--sr-flat); }
+.sr-trend-down { color: var(--sr-down); }
 .sr-score-reason {
-  flex: 1 1 260px;
   font-size: 13px;
-  line-height: 1.6;
-  color: var(--txt2, #8a929c);
+  line-height: 1.65;
+  color: var(--txt2, #57606a);
 }
 
+/* ── 行情指标网格 ────────────────────────────────────────────────────── */
+
+.sr-metrics { margin: 16px 0 20px; }
+.sr-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+  gap: 1px;
+  background: var(--border, #d0d7de);
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.sr-metric {
+  padding: 10px 12px;
+  background: var(--bg, #fff);
+}
+.sr-metric-label {
+  font-size: 11px;
+  color: var(--txt2, #57606a);
+  white-space: nowrap;
+}
+.sr-metric-value {
+  margin-top: 3px;
+  font-size: 17px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--txt, #24292f);
+}
+.sr-metric-note {
+  margin-top: 1px;
+  font-size: 11px;
+  color: var(--txt2, #57606a);
+}
+
+/* 60 日区间位置：画出来比让 AI 用文字描述"处于高位"可靠得多 */
+.sr-range { margin-top: 14px; }
+.sr-range-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--txt2, #57606a);
+}
+.sr-range-pct {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--txt, #24292f);
+}
+.sr-range-bar {
+  position: relative;
+  height: 6px;
+  margin: 6px 0 4px;
+  border-radius: 999px;
+  background: linear-gradient(90deg,
+    rgba(26, 127, 55, .25), var(--bg3, #f0f2f5), rgba(192, 57, 43, .25));
+}
+.sr-range-dot {
+  position: absolute;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  margin-left: -5px;
+  border-radius: 50%;
+  background: var(--accent, #185FA5);
+  border: 2px solid var(--bg, #fff);
+  transform: translateY(-50%);
+  box-shadow: 0 0 0 1px var(--border, #d0d7de);
+}
+.sr-range-ends {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--txt2, #57606a);
+}
+.sr-ma {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--txt2, #57606a);
+}
+.sr-ma strong { color: var(--txt, #24292f); }
+
+/* ── 策略实测表 ──────────────────────────────────────────────────────── */
+
+.sr-backtest {
+  margin: 22px 0;
+  padding: 16px;
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 10px;
+}
+.sr-bt-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.sr-bt-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--txt, #24292f);
+}
+.sr-bt-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--txt2, #57606a);
+  font-variant-numeric: tabular-nums;
+}
+.sr-bt-beat {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--accent-light, #E6F1FB);
+  color: var(--accent, #185FA5);
+  font-weight: 600;
+}
+/* 窄屏放不下 6 列时表格自己横向滚，不去挤压页面其它部分 */
+.sr-bt-scroll { overflow-x: auto; }
+.sr-bt-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.sr-bt-table th {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--txt2, #57606a);
+  text-align: right;
+  padding: 0 8px 6px;
+  border-bottom: 1px solid var(--border, #d0d7de);
+  white-space: nowrap;
+}
+.sr-bt-table th:first-child { text-align: left; }
+.sr-bt-table td {
+  padding: 7px 8px;
+  border-bottom: 1px solid rgba(128, 128, 128, .12);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.sr-bt-table tr:last-child td { border-bottom: none; }
+.sr-bt-name {
+  text-align: left !important;
+  color: var(--txt, #24292f);
+  white-space: nowrap;
+}
+/* 对比条：一眼看出哪些跑赢、哪些是负的，比读一串数字快得多 */
+.sr-bt-bar {
+  width: 40%;
+  min-width: 90px;
+  padding: 7px 8px !important;
+}
+.sr-bt-fill {
+  display: block;
+  height: 8px;
+  min-width: 2px;
+  border-radius: 3px;
+  background: currentColor;
+  opacity: .55;
+}
+.sr-bt-ret { font-weight: 600; }
+.sr-bt-win, .sr-bt-dd, .sr-bt-n { color: var(--txt2, #57606a); }
+.sr-thin {
+  font-size: 10px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: #fff8c5;
+  color: #9a6700;
+  cursor: help;
+}
+.sr-bt-note {
+  margin: 10px 0 0;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--txt2, #57606a);
+}
+
+/* ── AI 正文 ─────────────────────────────────────────────────────────── */
+
+.sr-report { margin-top: 22px; }
+.sr-report-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.sr-report-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.4;
+  color: var(--txt, #24292f);
+}
+.sr-meta {
+  flex: none;
+  font-size: 12px;
+  color: var(--txt2, #57606a);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 空状态 / 生成按钮 ───────────────────────────────────────────────── */
+
 .sr-empty {
-  padding: 28px 16px;
+  padding: 32px 16px;
   text-align: center;
-  color: var(--txt2, #8a929c);
+  color: var(--txt2, #57606a);
+  border: 1px dashed var(--border, #d0d7de);
+  border-radius: 10px;
+}
+.sr-empty-icon { font-size: 30px; line-height: 1; }
+.sr-empty p { margin: 10px 0 0; font-size: 14px; color: var(--txt, #24292f); }
+.sr-empty-sub {
+  font-size: 12px !important;
   line-height: 1.8;
+  color: var(--txt2, #57606a) !important;
+  max-width: 420px;
+  margin: 6px auto 0 !important;
 }
 .sr-actions {
-  margin-top: 18px;
+  margin-top: 16px;
   display: flex;
   gap: 10px;
   align-items: center;
+  justify-content: center;
   flex-wrap: wrap;
 }
 .sr-gen-btn {
@@ -78,13 +389,15 @@
   background: var(--accent, #185FA5);
   border: none;
   border-radius: 6px;
-  padding: 8px 18px;
+  padding: 9px 20px;
   cursor: pointer;
+  transition: background-color 120ms ease-out;
 }
+.sr-gen-btn:hover:not([disabled]) { background: var(--accent-dark, #0C447C); }
 .sr-gen-btn[disabled] { opacity: .55; cursor: default; }
 .sr-hint {
   font-size: 12px;
-  color: var(--txt2, #8a929c);
+  color: var(--txt2, #57606a);
 }
 
 .sr-disclaimer {
@@ -93,11 +406,15 @@
   border-top: 1px solid var(--border, #d0d7de);
   font-size: 12px;
   line-height: 1.8;
-  color: var(--txt2, #8a929c);
+  color: var(--txt2, #57606a);
 }
 
 @media (max-width: 600px) {
-  .sr-score { gap: 10px; }
-  .sr-score-num { font-size: 26px; }
+  .sr-name { font-size: 19px; }
+  .sr-price-num { font-size: 22px; }
+  .sr-score { gap: 12px; padding: 12px; }
+  .sr-score-num { font-size: 28px; }
+  .sr-metric-value { font-size: 15px; }
+  .sr-backtest { padding: 12px; }
   .sr-gen-btn { min-height: 44px; }
 }

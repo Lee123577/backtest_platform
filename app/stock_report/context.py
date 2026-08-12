@@ -350,8 +350,14 @@ def _fetch_backtest(code: str, end_date: _Date) -> Dict[str, Any]:
 
 # ── 组装 ─────────────────────────────────────────────────────────────────────
 
-def build_context(code: str, end_date: Optional[_Date] = None) -> Dict[str, Any]:
-    """聚合一只股票的完整快照。数据不够(新股/退市/代码不存在)抛 StockDataNotReady。"""
+def build_context(code: str, end_date: Optional[_Date] = None,
+                  with_backtest: bool = True) -> Dict[str, Any]:
+    """聚合一只股票的完整快照。数据不够(新股/退市/代码不存在)抛 StockDataNotReady。
+
+    with_backtest=False 用于"还没有报告"的页面:那里只需要股票是谁、现在多少钱,
+    不必为此跑 9 次回测。爬虫会访问大量无报告页面(都是 noindex 的),
+    每次都触发回测纯属浪费。
+    """
     end_date = end_date or _Date.today()
     basic = _fetch_basic(code)
 
@@ -372,5 +378,5 @@ def build_context(code: str, end_date: Optional[_Date] = None) -> Dict[str, Any]
         "quote": _fetch_quote(code, df),
         "technical": _fetch_technical(df),
         "finance": _fetch_finance(code),
-        "backtest": _fetch_backtest(code, end_date),
+        "backtest": _fetch_backtest(code, end_date) if with_backtest else {},
     }
