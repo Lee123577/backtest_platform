@@ -488,6 +488,42 @@ def _safe(row, col):
         return None
 
 
+_FIN_SUFFIX_MULT = {"亿": 1e8, "万": 1e4}
+
+
+def _safe_money_or_pct(row, col):
+    """解析 THS 摘要接口的金额/百分比字符串(如 "823.20亿"/"16.42%")。
+
+    2026-08-12 修复：这里原来直接对这些字段用 _safe()(即 float(v)),但 THS
+    返回的是带单位后缀的字符串,float() 一律 ValueError 被吃掉变 None ——
+    revenue/net_profit/debt_ratio 全表 26 万行只有 <4% 有值,不是数据源缺失,
+    是这个解析漏了后缀。eps/bvps 恰好是不带后缀的纯数字,躲过了这个坑,
+    所以看起来"财务数据大部分能取到"是假象。历史数据的回填见
+    scripts/backfill_stock_finance.py。
+    """
+    v = row.get(col)
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return None
+    s = str(v).strip()
+    if not s or s in ("--", "-", "nan", "None"):
+        return None
+    if s.endswith("%"):
+        try:
+            return float(s[:-1])
+        except ValueError:
+            return None
+    for suf, mult in _FIN_SUFFIX_MULT.items():
+        if s.endswith(suf):
+            try:
+                return float(s[:-len(suf)]) * mult
+            except ValueError:
+                return None
+    try:
+        return float(s)
+    except (TypeError, ValueError):
+        return None
+
+
 def _safe_int(row, col):
     v = row.get(col)
     if v is None or (isinstance(v, float) and pd.isna(v)):
@@ -550,11 +586,14 @@ def import_stock_finance(conn, resume: bool):
                     continue
                 rows.append((
                     code, rd, _guess_report_type(rd),
-                    _safe(r, "营业总收入"),
-                    _safe(r, "净利润"),
-                    _safe(r, "基本每股收益"),
-                    _safe(r, "每股净资产"),
-                    _safe(r, "资产负债率"),
+                    _safe_money_or_pct(r, "营业总收入"),
+                    _safe_money_or_pct(r, "净利润"),
+                    _safe_money_or_pct(r, "基本每股收益"),
+                    _safe_money_or_pct(r, "每股净资产"),
+                    _safe_money_or_pct(r, "资产负债率"),
+                    # THS 按报告期摘要没有"经营活动产生的现金流量净额"这一列
+                    # (只有每股口径的"每股经营现金流",与本列总额语义不符),
+                    # row.get() 取不到列本来就是 None,不是解析问题,不用改
                     _safe(r, "经营活动产生的现金流量净额"),
                 ))
 
