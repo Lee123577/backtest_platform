@@ -23,7 +23,7 @@ import json
 import logging
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from ..data import stock_search
 from ..data.data_loader import _get_pool
@@ -154,6 +154,59 @@ def delete_ip_layout(ip_key: str) -> None:
         raise RuntimeError("数据库连接不可用")
     with conn.cursor() as cur:
         cur.execute("DELETE FROM board_layout_by_ip WHERE ip_key=%s", (ip_key,))
+
+
+def _count_cards(layout_json: Any) -> int:
+    """一份布局里有几张卡片,纯展示用,坏数据算 0 张。"""
+    try:
+        doc = json.loads(layout_json) or {}
+    except (TypeError, ValueError):
+        return 0
+    cards = doc.get("cards") if isinstance(doc, dict) else None
+    return len(cards) if isinstance(cards, list) else 0
+
+
+def list_ip_layouts(limit: int) -> List[Dict[str, Any]]:
+    """访客布局清单,最近更新在前 —— 给维护者的只读预览面板用。
+
+    只回 ip_key / updated_at / 卡片数:layout_json 是 MEDIUMTEXT,清单根本用不着
+    整份文档,几百行乘近 1KB 白占内存(生产机 3.6G,app 和 mysqld 挤一台)。
+    卡片数在 Python 侧数 —— 列是 MEDIUMTEXT 不是 JSON 列,交给 MySQL 的
+    JSON_LENGTH 只要碰上一行坏数据就把整条查询打挂,为个展示字段不值当。
+    """
+    conn = _get_pool()
+    if conn is None:
+        return []
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT ip_key, layout_json, updated_at
+              FROM board_layout_by_ip
+             ORDER BY updated_at DESC
+             LIMIT %s
+            """,
+            (int(limit),),
+        )
+        rows = cur.fetchall() or []
+    return [
+        {
+            "ip_key": row["ip_key"],
+            "updated_at": row["updated_at"],
+            "cards": _count_cards(row["layout_json"]),
+        }
+        for row in rows
+    ]
+
+
+def count_ip_layouts() -> int:
+    """访客布局总行数(可能大于清单的 limit,面板要如实说只显示了最近几份)。"""
+    conn = _get_pool()
+    if conn is None:
+        return 0
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) AS c FROM board_layout_by_ip")
+        row = cur.fetchone()
+    return int(row["c"]) if row else 0
 
 
 # 清理是顺带做的:每次保存都跑一遍 DELETE 太浪费,一个进程一小时跑一次足够。

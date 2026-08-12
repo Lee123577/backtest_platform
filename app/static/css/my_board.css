@@ -100,6 +100,49 @@ body.spx-shell .site-footer.mb-footer { max-width: none; margin-top: 24px; }
   line-height: 1.6;
 }
 
+/* 管理员看访客看板:清单弹层 + 预览横幅。清单可能有几十上百条,给个高度上限
+   自己滚,别把工具栏底下顶出一整屏。 */
+.mb-guest-pop {
+  min-width: 240px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.mb-gp-ip {
+  display: block;
+  font-size: 13px;
+  color: var(--txt, #24292f);
+  word-break: break-all;      /* IPv6 的 /64 前缀比弹层还宽,断行不撑破 */
+}
+.mb-gp-meta {
+  display: block;
+  font-size: 11px;
+  color: var(--txt2, #8a929c);
+  margin-top: 2px;
+}
+.mb-gp-note {
+  font-size: 12px;
+  color: var(--txt2, #8a929c);
+  padding: 10px;
+  line-height: 1.6;
+}
+.mb-preview-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+  padding: 8px 12px;
+  border: 1px solid rgba(var(--mb-accent-rgb), .25);
+  border-left: 3px solid var(--mb-accent);
+  border-radius: 6px;
+  background: rgba(var(--mb-accent-rgb), .08);
+  font-size: 12px;
+  color: var(--txt, #24292f);
+}
+.mb-preview-bar[hidden] { display: none; }
+.mb-preview-bar b { word-break: break-all; }
+
 /* 自由拖拽画布:JS 给 .mb-grid 加 mb-canvas-mode 后,卡片改为绝对定位,
    可以自由拖动摆放(横向/纵向比对);高度由 JS 按内容动态写入 style.height。
    窄屏(<=760px)不开启画布,退回原来的堆叠布局。 */

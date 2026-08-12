@@ -46,6 +46,9 @@ SCOPE_IP = "ip"
 # 读全站默认布局的只读副本,写一律拒绝 —— 绝不能让它退回去写全站默认那一行,
 # 那正是本模块一直在防的内容投毒面。
 SCOPE_EPHEMERAL = "ephemeral"
+# 维护者正在看别人那份。resolve_scope 永远不会返回它 —— 它不是一种身份,
+# 而是"这次读的不是自己的布局"这个状态,只由 API 层在预览请求上贴出来。
+SCOPE_PREVIEW = "preview"
 
 MAX_CARDS = 10   # 与前端 my_board.js 的 MAX_BOARD_CARDS 保持一致
 MAX_COMPARE_CODES = 6
@@ -136,6 +139,56 @@ def get_layout(
     if scope == SCOPE_EPHEMERAL:
         return db.load_layout(db.GUEST_USER_ID)
     return db.load_layout(_key_for(user))
+
+
+# ── 维护者只读预览访客看板 ───────────────────────────────────────────────────
+#
+# 用来看"访客把看板摆成了什么样",纯读。这里刻意不提供对应的写入路径:看板每拖
+# 一下就 POST 一次,给维护者开个"写别人那一行"的口子,等于给误操作发通行证 ——
+# 想改的是自己的布局,退出预览就是了。
+
+PREVIEW_LIST_LIMIT = 200
+IP_KEY_MAX_LEN = 45          # board_layout_by_ip.ip_key 的列宽
+
+
+def list_ip_layouts(limit: int = PREVIEW_LIST_LIMIT) -> Dict[str, Any]:
+    """访客布局清单(最近更新在前)+ 总数。"""
+    db.ensure_tables()
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        limit = PREVIEW_LIST_LIMIT
+    limit = max(1, min(limit, PREVIEW_LIST_LIMIT))
+    items = []
+    for row in db.list_ip_layouts(limit):
+        ts = row.get("updated_at")
+        items.append({
+            "ip_key": row.get("ip_key") or "",
+            "cards": int(row.get("cards") or 0),
+            # 面板上只显示到分钟就够了,秒和时区在这没有信息量
+            "updated_at": ts.strftime("%Y-%m-%d %H:%M") if hasattr(ts, "strftime") else (ts or ""),
+        })
+    return {"items": items, "total": db.count_ip_layouts(), "limit": limit}
+
+
+def get_ip_layout(ip_or_key: str) -> Optional[Dict[str, Any]]:
+    """按 ip_key 取一份访客布局;这个键从没存过则返回 None(由 API 层翻成 404)。
+
+    先按原样查:面板回传的就是库里的 ip_key 原文,而 IPv6 那种
+    "2408:xxxx::/64" 再过一次 ip_key() 只会失败 —— 它是个网段,不是地址。
+    查不到再当普通 IP 归一一次,这样手输一个完整 IPv6 地址也能对上它的 /64 行。
+    """
+    key = (ip_or_key or "").strip()
+    if not key or len(key) > IP_KEY_MAX_LEN:
+        return None
+    db.ensure_tables()
+    found = db.load_ip_layout(key)
+    if found is not None:
+        return found
+    norm = ip_key(key)
+    if norm and norm != key:
+        return db.load_ip_layout(norm)
+    return None
 
 
 def _clean_positions(positions: Any) -> Dict[str, Any]:

@@ -38,6 +38,15 @@
     </div>
     <button type="button" class="mb-reset-btn" id="mbTidyLayout" title="按卡片实际大小自动重新排列，消除重叠和空隙">一键整理</button>
     <button type="button" class="mb-reset-btn" id="mbResetLayout">重置布局</button>
+    <!-- 只有管理白名单 IP 会看到（GET /api/my_board/layout 的 can_preview） -->
+    <div class="mb-add-wrap" id="mbGuestWrap" hidden>
+      <button type="button" class="mb-reset-btn" id="mbGuestBoards" title="查看访客各自存下的看板布局（只读）">访客看板</button>
+      <div class="mb-add-pop mb-guest-pop" id="mbGuestPop" hidden></div>
+    </div>
+  </div>
+  <div class="mb-preview-bar" id="mbPreviewBar" hidden>
+    <span>正在预览访客 <b id="mbPreviewIp"></b> 的看板 · 只读，任何调整都不会保存</span>
+    <button type="button" class="mb-reset-btn" id="mbExitPreview">退出预览</button>
   </div>
   <div class="mb-grid" id="mbGrid"></div>
 </main>

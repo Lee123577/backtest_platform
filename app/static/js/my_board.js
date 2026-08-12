@@ -477,7 +477,7 @@
     });
   }
 
-  document.addEventListener("click", function () { closeAllPops(null); closeAddMenu(); });
+  document.addEventListener("click", function () { closeAllPops(null); closeAddMenu(); closeGuestMenu(); });
 
   /* ── 多股对比卡片(同时对比多支股票/指数区间涨跌幅曲线) ──────────────────
      卡片本身比行情卡片大一圈(见 CSS .mb-compare-card),方便看清多条曲线;
@@ -1079,12 +1079,49 @@
   // scope 见后端 my_board/service.py:user | site_default | ip | ephemeral
   var wasLoggedIn = false;
   var boardScope = "ip";
+  var canPreview = false;   // 管理白名单 IP 才为真,决定显不显示"访客看板"入口
+
+  /* ── 维护者只读预览访客看板 ─────────────────────────────────────────────
+     预览目标存在 sessionStorage 而不是 URL 里:访客 IP 不该进浏览器历史、
+     分享出去的链接、以及外链的 Referer。换 tab 就是独立的一次预览,关掉即失效,
+     刷新则保持 —— 正好是 sessionStorage 的语义。 */
+  var PREVIEW_KEY = "mbPreviewIp";
+  var previewIp = "";
+  try { previewIp = sessionStorage.getItem(PREVIEW_KEY) || ""; } catch (e) { /* 隐私模式下读不了,当作没预览 */ }
+
+  function enterPreview(ip) {
+    try { sessionStorage.setItem(PREVIEW_KEY, ip); } catch (e) { /* 存不下就退化成只在本次加载里生效 */ }
+    previewIp = ip;
+    window.location.reload();
+  }
+
+  // keepPage=true 用于"预览目标已经打不开了"的兜底:清掉状态但不刷新,
+  // 让本次加载直接退回自己的看板,不然会变成刷新一次才看到东西。
+  function exitPreview(keepPage) {
+    try { sessionStorage.removeItem(PREVIEW_KEY); } catch (e) { /* 忽略 */ }
+    previewIp = "";
+    if (!keepPage) window.location.reload();
+  }
 
   function fetchBoard() {
-    return fetch("/api/my_board/layout")
-      .then(function (r) { return r.ok ? r.json() : { layout: {} }; })
+    var url = "/api/my_board/layout" +
+      (previewIp ? "?as_ip=" + encodeURIComponent(previewIp) : "");
+    return fetch(url)
+      .then(function (r) {
+        // 预览打不开(那行被保留策略清了 / 自己掉出白名单):退回自己的看板,
+        // 别把页面卡在一个空预览上
+        if (previewIp && !r.ok) {
+          exitPreview(true);
+          showToast("这份访客看板已经不在了，已退回你自己的看板", 6000);
+          return fetch("/api/my_board/layout").then(function (r2) {
+            return r2.ok ? r2.json() : { layout: {} };
+          });
+        }
+        return r.ok ? r.json() : { layout: {} };
+      })
       .then(function (j) {
         wasLoggedIn = !!j.logged_in;
+        canPreview = !!j.can_preview;
         if (j.scope) boardScope = j.scope;
         return j.layout || {};
       })
@@ -1130,7 +1167,8 @@
   }
 
   function doSaveBoard() {
-    if (saveForbidden) return Promise.resolve();
+    // 预览的是别人那一份,后端也没有写它的接口 —— 拖动只是本地把玩,不落库
+    if (previewIp || saveForbidden) return Promise.resolve();
     return fetch("/api/my_board/layout", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1147,6 +1185,7 @@
   }
 
   function queueSaveBoard() {
+    if (previewIp) return;
     clearTimeout(saveTimer);
     saveTimer = setTimeout(function () {
       saveTimer = null;
@@ -1157,6 +1196,7 @@
   // 防抖计时器还没触发时用户就关闭/切走页面,会丢最后一次拖动/切换/增删 ——
   // 页面隐藏前用 sendBeacon 补发一次(不受页面卸载影响,比 fetch 更可靠)。
   function flushSaveBoard() {
+    if (previewIp) return;       // 预览态压根没排过保存,这里也别用 beacon 补发
     if (saveTimer == null) return;
     clearTimeout(saveTimer);
     saveTimer = null;
@@ -1657,6 +1697,88 @@
     });
   }
 
+  /* ── "访客看板"清单(只有管理白名单 IP 看得到) ───────────────────────── */
+
+  function guestListHtml(data) {
+    var items = (data && data.items) || [];
+    if (!items.length) return '<div class="mb-gp-note">还没有访客存过自己的看板</div>';
+    var html = '<div class="mb-add-label">访客看板（只读）</div>';
+    items.forEach(function (it) {
+      var ip = it.ip_key || "";
+      html += '<button type="button" class="mb-add-item" data-preview-ip="' + esc(ip) + '">' +
+        '<span class="mb-gp-ip">' + esc(ip) + "</span>" +
+        '<span class="mb-gp-meta">' + (it.cards || 0) + " 张卡片 · " + esc(it.updated_at || "") +
+        "</span></button>";
+    });
+    var total = data.total || items.length;
+    if (total > items.length) {
+      html += '<div class="mb-gp-note">共 ' + total + " 份，这里只列最近 " + items.length + " 份</div>";
+    }
+    return html;
+  }
+
+  function openGuestMenu() {
+    closeAllPops(null);
+    closeAddMenu();
+    var pop = $("mbGuestPop");
+    if (!pop) return;
+    // 现拉现渲染:访客随时在存新的布局,缓存一份旧清单没意义
+    pop.innerHTML = '<div class="mb-gp-note">加载中…</div>';
+    pop.hidden = false;
+    fetch("/api/my_board/layouts")
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        pop.innerHTML = j ? guestListHtml(j) : '<div class="mb-gp-note">清单加载失败，稍后再试</div>';
+      })
+      .catch(function () {
+        pop.innerHTML = '<div class="mb-gp-note">清单加载失败，稍后再试</div>';
+      });
+  }
+
+  function closeGuestMenu() {
+    var p = $("mbGuestPop");
+    if (p) p.hidden = true;
+  }
+
+  function bindGuestBoards() {
+    var btn = $("mbGuestBoards"), pop = $("mbGuestPop");
+    if (!btn || !pop) return;
+    btn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      if (pop.hidden) openGuestMenu(); else closeGuestMenu();
+    });
+    pop.addEventListener("click", function (e) {
+      e.stopPropagation();
+      var item = e.target.closest("[data-preview-ip]");
+      if (!item) return;
+      var ip = item.getAttribute("data-preview-ip");
+      if (ip && ip !== previewIp) enterPreview(ip);
+      else closeGuestMenu();
+    });
+    var exit = $("mbExitPreview");
+    if (exit) exit.addEventListener("click", function () { exitPreview(false); });
+  }
+
+  // 预览态下这几个按钮全是"改布局"的入口,留着只会让人以为改动存下去了;
+  // "重置布局"更要藏 —— 它 POST 的是一份空布局,而 POST 从来只认自己的身份,
+  // 看着别人的看板按下去,删掉的是自己那一份。要改,先退出预览。
+  function applyPreviewChrome() {
+    var wrap = $("mbGuestWrap");
+    if (wrap) wrap.hidden = !canPreview;
+
+    ["mbAddCard", "mbTidyLayout", "mbResetLayout"].forEach(function (id) {
+      var el = $(id);
+      if (el) el.hidden = !!previewIp;
+    });
+
+    var bar = $("mbPreviewBar");
+    if (!bar) return;
+    if (!previewIp) { bar.hidden = true; return; }
+    var ipEl = $("mbPreviewIp");
+    if (ipEl) ipEl.textContent = previewIp;
+    bar.hidden = false;
+  }
+
   /* ── 入口 ──────────────────────────────────────────────────────────── */
 
   function cardHtmlFor(card) {
@@ -1673,6 +1795,7 @@
     bindResetButton();
     bindTidyButton();
     bindAddMenu();
+    bindGuestBoards();
     grid.addEventListener("click", function (e) {
       var btn = e.target.closest("[data-remove-card]");
       if (!btn) return;
@@ -1690,6 +1813,7 @@
     });
 
     fetchBoard().then(function (saved) {
+      applyPreviewChrome();   // 身份/预览目标这时才确定,工具栏按它重新排布
       var savedCards = Array.isArray(saved.cards)
         ? saved.cards.filter(function (c) {
             return c && typeof c.id === "string" && (c.kind === "stock" || c.kind === "rank" ||
