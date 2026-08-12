@@ -44,6 +44,8 @@ def _validate_date_range(start: str, end: str) -> None:
 from .auth import deps as _auth_deps
 from .daily_review import db as _dr_db
 from .daily_review import render as _dr_render
+from .stock_report import db as _sr_db
+from .stock_report import service as _sr_service
 from .data.calendar import count_trading_days, next_n_trading_days
 from .data.data_loader import get_kline_data, get_stock_name, normalize_code
 from .data.market_data import (
@@ -212,6 +214,10 @@ app.include_router(sectors_router)
 # 数据看板卡片拖拽布局(登录用户各自一份,访客共享默认布局)
 from .my_board.api import router as my_board_router  # noqa: E402
 app.include_router(my_board_router)
+
+# 个股 AI 分析报告(DeepSeek 解读本站行情库快照 + 9 种策略的回测实证)
+from .stock_report.api import router as stock_report_router  # noqa: E402
+app.include_router(stock_report_router)
 
 # 转化埋点与漏斗(自建,不引入 GA4/神策 —— 访问日志表本来就在跑)
 from .analytics.api import router as analytics_router  # noqa: E402
@@ -718,6 +724,158 @@ def _daily_review_page(request: Request, d: Optional[_date]) -> Response:
     )
 
 
+# ── 个股 AI 分析报告：服务端直出(SEO)──────────────────────────────────────
+# 全站 5000+ 只股票各一个 URL,是目前最大的可收录内容源。三条约束:
+#   1. 正文必须直出 —— 靠 JS 拉的话爬虫抓到的是空壳,等于白做;
+#   2. 页面渲染**绝不触发生成** —— 生成一次就是一次 DeepSeek 调用,
+#      让 GET 顺手生成,爬虫爬一遍就能把额度烧穿(见 stock_report/service.py);
+#   3. 还没有报告的股票出 noindex —— 一个只有"生成"按钮的空页面是薄内容,
+#      放进索引只会拉低整站质量评分。有报告了自然会被重新抓到。
+_SR_CODE_RE = re.compile(r"^\d{6}$")
+
+_TREND_CLASS = {"看多": "sr-trend-up", "震荡": "sr-trend-flat", "看空": "sr-trend-down"}
+
+
+def _sr_desc_fallback(label: str) -> str:
+    return f"{label} 的技术面、估值与量化策略回测实证，AI 基于本站行情库自动解读。"
+
+
+def _sr_head(row: Optional[Dict[str, Any]], code: str, name: str, canonical: str) -> str:
+    """个股报告页 <head>。没有报告时带 noindex。"""
+    label = f"{name}({code})" if name else code
+    if row is None:
+        title = f"{label} AI 数据分析 | shoupan"
+        desc = (f"{label} 的技术面、估值与 9 种量化策略历史回测实证，"
+                "数据来自本站行情库，AI 自动解读。")
+        head = [
+            f"<title>{_htmlmod.escape(title)}</title>",
+            '<meta name="robots" content="noindex,follow">',
+        ]
+    else:
+        art_title = (row.get("title") or f"{label} 数据解读").strip()
+        title = f"{art_title} | shoupan"
+        desc = (_dr_render.plain_text(row.get("content_md"), limit=140)
+                or _sr_desc_fallback(label))
+        head = [f"<title>{_htmlmod.escape(title)}</title>"]
+
+    esc_desc = _htmlmod.escape(desc, quote=True)
+    esc_title = _htmlmod.escape(title, quote=True)
+    head += [
+        f'<meta name="description" content="{esc_desc}">',
+        f'<link rel="canonical" href="{canonical}">',
+        '<meta property="og:type" content="article">',
+        '<meta property="og:site_name" content="收盘 shoupan">',
+        f'<meta property="og:title" content="{esc_title}">',
+        f'<meta property="og:description" content="{esc_desc}">',
+        f'<meta property="og:url" content="{canonical}">',
+        '<meta name="twitter:card" content="summary">',
+    ]
+    if row is not None:
+        d = str(row.get("report_date"))
+        article = {
+            "@context": "https://schema.org",
+            "@type": "Article",
+            "headline": (row.get("title") or f"{label} 数据解读").strip()[:110],
+            "description": desc,
+            "datePublished": d,
+            "dateModified": d,
+            "inLanguage": "zh-CN",
+            "mainEntityOfPage": {"@type": "WebPage", "@id": canonical},
+            "publisher": {"@type": "Organization", "name": "收盘 shoupan",
+                          "url": _SITE_ORIGIN},
+        }
+        head.append(
+            '<script type="application/ld+json">'
+            + json.dumps(article, ensure_ascii=False)
+            + "</script>"
+        )
+    return "\n  ".join(head)
+
+
+def _sr_score(row: Optional[Dict[str, Any]]) -> str:
+    if row is None:
+        return ""
+    score, trend, reason = row.get("score"), row.get("trend"), row.get("score_reason")
+    if score is None and not trend:
+        return ""
+    parts = ['<div class="sr-score">']
+    if score is not None:
+        parts.append(f'<div class="sr-score-num">{int(score)}<small>/100</small></div>')
+    if trend:
+        cls = _TREND_CLASS.get(trend, "sr-trend-flat")
+        parts.append(f'<span class="sr-trend {cls}">{_htmlmod.escape(trend)}</span>')
+    if reason:
+        parts.append(f'<div class="sr-score-reason">{_htmlmod.escape(reason)}</div>')
+    parts.append("</div>")
+    return "".join(parts)
+
+
+def _sr_body(row: Optional[Dict[str, Any]], label: str) -> str:
+    if row is None:
+        return (
+            '<div class="sr-empty">'
+            f"还没有 {_htmlmod.escape(label)} 的 AI 分析报告。<br>"
+            "点下面的按钮生成一份：读取本站行情库的最新快照，"
+            "跑一遍 9 种内置策略的历史回测，再交给 AI 解读。"
+            "</div>"
+        )
+    return _dr_render.md_to_html(row.get("content_md"))
+
+
+def _sr_actions(row: Optional[Dict[str, Any]]) -> str:
+    if row is not None:
+        return ""
+    return (
+        '<button type="button" class="sr-gen-btn" id="srGenBtn">生成 AI 分析</button>'
+        '<span class="sr-hint" id="srGenHint">约需 30 秒</span>'
+    )
+
+
+@app.get("/stock/{code}", include_in_schema=False)
+def page_stock_report(code: str, request: Request):
+    """个股 AI 分析报告页。已有报告则正文直出,没有则出生成入口 + noindex。"""
+    try:
+        norm = normalize_code(code)
+    except ValueError:
+        raise HTTPException(404, "页面不存在")
+    if not _SR_CODE_RE.match(norm):
+        raise HTTPException(404, "页面不存在")
+
+    try:
+        row = _sr_service.get_report(norm)
+    except Exception as e:
+        # 这些 URL 会进索引,DB 抖一下就回 404 等于告诉爬虫"页面没了"。
+        # 连不上就 503,爬虫会择期重试(与复盘页同一套考量)。
+        logger.warning("个股报告页取数失败(%s): %s", norm, e)
+        raise HTTPException(503, "数据服务暂时不可用，请稍后再试")
+
+    name = ""
+    try:
+        name = get_stock_name(norm) or ""
+    except Exception:
+        pass          # 名字只影响标题好看程度,取不到就用代码顶上
+    label = f"{name}({norm})" if name else norm
+    canonical = f"{_SITE_ORIGIN}/stock/{norm}"
+
+    art_title = (row.get("title") if row else "") or f"{label} 数据解读"
+    date_txt = str(row.get("report_date")) if row else ""
+    return _html(
+        request, "stock_report.html",
+        replacements={
+            "<!--SR_HEAD-->": _sr_head(row, norm, name, canonical),
+            "<!--SR_TITLE-->": _htmlmod.escape(art_title),
+            "<!--SR_META-->": (f"数据截至 {_htmlmod.escape(date_txt)}" if date_txt else ""),
+            "<!--SR_SCORE-->": _sr_score(row),
+            "<!--SR_BODY-->": _sr_body(row, label),
+            "<!--SR_ACTIONS-->": _sr_actions(row),
+            "<!--SR_INIT-->": (
+                f'<span id="srInit" hidden data-code="{_htmlmod.escape(norm, quote=True)}" '
+                f'data-ssr="{"1" if row is not None else "0"}"></span>'
+            ),
+        },
+    )
+
+
 # (路径, 更新频率, 优先级) —— 仅收录面向用户的功能页；/admin/tasks、/tasks 是运维监控页不收录
 # /subscribe 在这里是**有意为之**:它不在侧边栏(入口走场景内引导,见 shell.js 的
 # NAV 注释),但页面正常收单,该吃的搜索流量要吃。别因为"侧边栏里没有"就摘掉。
@@ -760,6 +918,36 @@ def _sitemap_review_urls() -> str:
     return xml
 
 
+# 个股报告的 URL 数量随生成量增长(上限 5000+),每次请求都查库会被爬虫拖累。
+# 缓存 10 分钟 —— 报告一天更新一轮,这个新鲜度绰绰有余。
+_SITEMAP_SR_CACHE: Dict[str, Any] = {}
+_SITEMAP_SR_TTL = 600.0
+
+
+def _sitemap_stock_urls() -> str:
+    """只收录**已经生成过报告**的股票。
+
+    没有报告的页面是一个只有生成按钮的空壳(而且自带 noindex),
+    把 5000 个空壳塞进 sitemap 只会稀释抓取预算、拉低整站质量评分。
+    """
+    now = time.time()
+    if _SITEMAP_SR_CACHE and now - _SITEMAP_SR_CACHE["ts"] < _SITEMAP_SR_TTL:
+        return _SITEMAP_SR_CACHE["xml"]
+    try:
+        rows = _sr_db.list_codes_with_report(5000)
+    except Exception as e:
+        logger.info("sitemap 取个股报告列表失败(本次跳过个股条目): %s", e)
+        return ""
+    xml = "".join(
+        f"  <url><loc>{_SITE_ORIGIN}/stock/{r['code']}</loc>"
+        f"<lastmod>{r['report_date']}</lastmod>"
+        f"<changefreq>weekly</changefreq><priority>0.6</priority></url>\n"
+        for r in rows if r.get("code")
+    )
+    _SITEMAP_SR_CACHE.update(ts=now, xml=xml)
+    return xml
+
+
 @app.get("/robots.txt", include_in_schema=False)
 async def robots_txt():
     body = (
@@ -787,6 +975,7 @@ def sitemap_xml():
         '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
         f"{urls}"
         f"{_sitemap_review_urls()}"
+        f"{_sitemap_stock_urls()}"
         "</urlset>\n"
     )
     return Response(body, media_type="application/xml")

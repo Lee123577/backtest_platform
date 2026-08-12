@@ -1,0 +1,103 @@
+/* 个股 AI 分析报告页
+   正文排版复用 daily_review.css 的 .md-body,这里只补本页特有的:
+   标题行、评分条、生成按钮、免责声明。 */
+
+.sr-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.sr-meta {
+  font-size: 12px;
+  color: var(--txt2, #8a929c);
+  flex: none;
+}
+
+/* 评分条:分数 + 趋势 + 一句话依据。趋势用色区分,但不用纯红绿 ——
+   A 股红涨绿跌,和"看多=绿"的国际习惯正好相反,容易读反。 */
+.sr-score {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin: 14px 0 18px;
+  padding: 12px 16px;
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 8px;
+  background: var(--bg2, #f6f8fa);
+}
+.sr-score-num {
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--txt, #24292f);
+}
+.sr-score-num small {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--txt2, #8a929c);
+  margin-left: 2px;
+}
+.sr-trend {
+  flex: none;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+}
+.sr-trend-up   { color: #c0392b; }   /* 看多 —— 按 A 股习惯用红 */
+.sr-trend-flat { color: #8a929c; }
+.sr-trend-down { color: #1a7f37; }   /* 看空 —— 绿 */
+.sr-score-reason {
+  flex: 1 1 260px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--txt2, #8a929c);
+}
+
+.sr-empty {
+  padding: 28px 16px;
+  text-align: center;
+  color: var(--txt2, #8a929c);
+  line-height: 1.8;
+}
+.sr-actions {
+  margin-top: 18px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.sr-gen-btn {
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent, #185FA5);
+  border: none;
+  border-radius: 6px;
+  padding: 8px 18px;
+  cursor: pointer;
+}
+.sr-gen-btn[disabled] { opacity: .55; cursor: default; }
+.sr-hint {
+  font-size: 12px;
+  color: var(--txt2, #8a929c);
+}
+
+.sr-disclaimer {
+  margin-top: 22px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border, #d0d7de);
+  font-size: 12px;
+  line-height: 1.8;
+  color: var(--txt2, #8a929c);
+}
+
+@media (max-width: 600px) {
+  .sr-score { gap: 10px; }
+  .sr-score-num { font-size: 26px; }
+  .sr-gen-btn { min-height: 44px; }
+}

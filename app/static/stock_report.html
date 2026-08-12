@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27><text y=%27.9em%27 font-size=%2790%27>%F0%9F%95%90</text></svg>">
+  <!-- title / description / canonical / OG / JSON-LD 由服务端按个股注入,
+       见 app/main.py 的 _sr_head() —— 每只股票的标题和摘要都不一样。
+       直接打开本文件(不经路由)时下面这些是空的。 -->
+  <!--SR_HEAD-->
+  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="stylesheet" href="/static/css/paper_trading.css">
+  <link rel="stylesheet" href="/static/css/daily_review.css">
+  <link rel="stylesheet" href="/static/css/stock_report.css">
+  <link rel="stylesheet" href="/static/css/auth.css">
+  <link rel="stylesheet" href="/static/css/feedback.css">
+  <link rel="stylesheet" href="/static/css/shell.css">
+</head>
+<body class="spx-shell">
+
+<header>
+  <h1>📈 A股量化回测平台</h1>
+  <nav class="header-nav">
+    <a class="nav-btn" href="/" style="text-decoration:none;display:inline-flex;align-items:center;">单股策略</a>
+    <a class="nav-btn" href="/daily_review" style="text-decoration:none;display:inline-flex;align-items:center;">每日复盘</a>
+  </nav>
+</header>
+
+<main>
+  <article class="panel" id="srArticle">
+    <!--SR_INIT-->
+    <div class="sr-head">
+      <h1 class="panel-title" id="srTitle"><!--SR_TITLE--></h1>
+      <div class="sr-meta" id="srMeta"><!--SR_META--></div>
+    </div>
+
+    <!--SR_SCORE-->
+
+    <div class="md-body" id="srContent"><!--SR_BODY--></div>
+
+    <div class="sr-actions" id="srActions"><!--SR_ACTIONS--></div>
+
+    <p class="sr-disclaimer">
+      本页内容由 AI 基于本站行情库与回测引擎的数据自动生成，只是对历史数据的解读，
+      <strong>不构成任何投资建议</strong>。回测结果基于历史行情，不代表未来收益。
+      股市有风险，决策请独立判断。
+    </p>
+  </article>
+</main>
+
+<!--FOOTER-->
+
+<script src="/static/js/util.js"></script>
+<script src="/static/js/auth.js"></script>
+<script src="/static/js/feedback.js"></script>
+<script src="/static/js/stock_report.js"></script>
+<script src="/static/js/shell.js"></script>
+</body>
+</html>

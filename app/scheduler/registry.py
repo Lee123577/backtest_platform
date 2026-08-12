@@ -135,6 +135,17 @@ TASKS: Dict[str, TaskDef] = {
     },
     # 自选盯盘:17:20 对订阅用户的自选股×盯盘策略跑当日信号,命中落站内提醒。
     # 只依赖 daily_update(当日K线已入库);纯本地计算,不联网。
+    # 个股 AI 报告:18:10 按成交额挑最活跃的 50 只预生成。
+    # 排在 daily_review(17:45)之后 —— 两个都要调 DeepSeek,岔开跑避免撞在
+    # 一起触发频率限制。依赖 daily_update:当日 K 线没入库,快照就是昨天的。
+    # 预生成只覆盖头部,长尾靠访客在页面上按需触发(见 stock_report/service.py)。
+    "stock_report_batch": {
+        "cmd": ["python", "scripts/stock_report_batch.py", "--limit", "50"],
+        "schedule": "weekday:18:10",
+        "timeout_sec": 40 * 60,   # 50 只 × (最长 90s 调用 + 2s 间隔) 的上限
+        "depends_on": "daily_update",
+        "description": "个股 AI 分析报告批量预生成(18:10,成交额前50,依赖daily_update)",
+    },
     "watchlist_alert_scan": {
         "cmd": ["python", "scripts/scan_watchlist_alerts.py"],
         "schedule": "weekday:17:20",
