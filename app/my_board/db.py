@@ -132,6 +132,14 @@ def load_ip_layout(ip_key: str) -> Optional[Dict[str, Any]]:
 
 
 def save_ip_layout(ip_key: str, layout: Dict[str, Any]) -> None:
+    """写入访客布局。
+
+    updated_at 必须显式赋值,不能只靠列上的 ON UPDATE CURRENT_TIMESTAMP：
+    MySQL 在"新值与旧值完全相同"时根本不写这一行,ON UPDATE 也就不触发。
+    而访客每次打开看板都会保存一次布局,内容常常一模一样 —— 靠 ON UPDATE 的话,
+    一个每天都来但从不调整布局的人,updated_at 会永远停在第一次保存那天,
+    180 天后被保留策略当成"半年没回来"清掉。
+    """
     conn = _get_pool()
     if conn is None:
         raise RuntimeError("数据库连接不可用")
@@ -140,7 +148,8 @@ def save_ip_layout(ip_key: str, layout: Dict[str, Any]) -> None:
         cur.execute(
             """
             INSERT INTO board_layout_by_ip (ip_key, layout_json) VALUES (%s, %s)
-            ON DUPLICATE KEY UPDATE layout_json=VALUES(layout_json)
+            ON DUPLICATE KEY UPDATE layout_json=VALUES(layout_json),
+                                    updated_at=NOW()
             """,
             (ip_key, payload),
         )

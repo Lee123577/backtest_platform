@@ -44,6 +44,10 @@
       <div class="mb-add-pop mb-guest-pop" id="mbGuestPop" hidden></div>
     </div>
   </div>
+  <!-- 白名单 IP 未登录时改的是全站默认布局（新访客的初始画布），得明说 -->
+  <div class="mb-preview-bar mb-site-bar" id="mbSiteDefaultBar" hidden>
+    <span>你正在编辑<b>全站默认布局</b> · 这里的样子就是新访客第一次打开看板时看到的画布</span>
+  </div>
   <div class="mb-preview-bar" id="mbPreviewBar" hidden>
     <span>正在预览访客 <b id="mbPreviewIp"></b> 的看板 · 只读，任何调整都不会保存</span>
     <button type="button" class="mb-reset-btn" id="mbExitPreview">退出预览</button>

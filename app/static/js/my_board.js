@@ -1759,10 +1759,11 @@
     if (exit) exit.addEventListener("click", function () { exitPreview(false); });
   }
 
-  // 预览态下这几个按钮全是"改布局"的入口,留着只会让人以为改动存下去了;
+  // 按身份和预览态调整工具栏与提示条。
+  // 预览态下那几个按钮全是"改布局"的入口,留着只会让人以为改动存下去了;
   // "重置布局"更要藏 —— 它 POST 的是一份空布局,而 POST 从来只认自己的身份,
   // 看着别人的看板按下去,删掉的是自己那一份。要改,先退出预览。
-  function applyPreviewChrome() {
+  function applyBoardChrome() {
     var wrap = $("mbGuestWrap");
     if (wrap) wrap.hidden = !canPreview;
 
@@ -1770,6 +1771,12 @@
       var el = $(id);
       if (el) el.hidden = !!previewIp;
     });
+
+    // 维护者(白名单 IP 未登录)拖的是全站默认布局 —— 改动会成为所有新访客的
+    // 初始画布,不提示的话很容易在不知情的情况下改掉。预览别人看板时不算,
+    // 那种情况下本来就什么都存不下去。
+    var siteBar = $("mbSiteDefaultBar");
+    if (siteBar) siteBar.hidden = !(boardScope === "site_default" && !previewIp);
 
     var bar = $("mbPreviewBar");
     if (!bar) return;
@@ -1813,7 +1820,7 @@
     });
 
     fetchBoard().then(function (saved) {
-      applyPreviewChrome();   // 身份/预览目标这时才确定,工具栏按它重新排布
+      applyBoardChrome();   // 身份/预览目标这时才确定,工具栏和提示条按它重新排布
       var savedCards = Array.isArray(saved.cards)
         ? saved.cards.filter(function (c) {
             return c && typeof c.id === "string" && (c.kind === "stock" || c.kind === "rank" ||

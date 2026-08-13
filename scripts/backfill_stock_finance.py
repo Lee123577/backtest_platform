@@ -21,6 +21,7 @@ op_cash_flow 不在这次回填范围内 —— 原代码映射的"经营活动�
 
 用法：
     python scripts/backfill_stock_finance.py                  # 全量重跑(约1-2小时)
+    python scripts/backfill_stock_finance.py --only-missing    # 只补有缺口的(定时任务用)
     python scripts/backfill_stock_finance.py --codes 600519,000001   # 小范围验证
     python scripts/backfill_stock_finance.py --limit 20        # 只跑前20只(冒烟测试)
 """
@@ -196,10 +197,46 @@ def run(codes: list[str], workers: int, sleep_sec: float) -> list[str]:
     return failed_codes
 
 
+def codes_with_gaps(within_days: int = 400) -> list[str]:
+    """最近一年的报告期里、关键字段还缺着的股票 —— 给定时任务用的增量模式。
+
+    为什么需要它:daily_update 每天走东财 stock_yjbb_em 补新报告期,营收和净利
+    是全的,但 debt_ratio 覆盖率极低(实测 2026-06-30 那期只有 71/677)。更麻烦的是
+    它一旦发现某报告期覆盖率过 90% 就不再补抓 —— 缺的那部分会永久留在库里。
+    这里用 THS 源把这些缺口找出来单独补,不必每月全量重跑 5497 只(那要 45 分钟)。
+    """
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT DISTINCT code FROM stock_finance
+                 WHERE report_date >= DATE_SUB(CURDATE(), INTERVAL %s DAY)
+                   AND (revenue IS NULL OR net_profit IS NULL OR debt_ratio IS NULL)
+                """,
+                (int(within_days),),
+            )
+            gaps = {r[0] for r in cur.fetchall()}
+            # 一条财务记录都没有的股票(次新股)也算缺口
+            cur.execute(
+                """
+                SELECT i.code FROM stock_info i
+                 WHERE i.delist_date IS NULL
+                   AND NOT EXISTS (SELECT 1 FROM stock_finance f WHERE f.code = i.code)
+                """
+            )
+            gaps |= {r[0] for r in cur.fetchall()}
+    finally:
+        conn.close()
+    return sorted(gaps)
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description="回填 stock_finance revenue/net_profit/debt_ratio")
     p.add_argument("--codes", type=str, default="", help="指定股票代码,逗号分隔(用于验证)")
     p.add_argument("--limit", type=int, default=0, help="只跑前 N 只(冒烟测试)")
+    p.add_argument("--only-missing", action="store_true",
+                   help="只补最近一年报告期里字段有缺口的股票(定时任务用)")
     p.add_argument("--workers", type=int, default=DEFAULT_WORKERS)
     p.add_argument("--sleep", type=float, default=DEFAULT_SLEEP)
     p.add_argument("--max-retries", type=int, default=2,
@@ -208,6 +245,9 @@ def main() -> None:
 
     if args.codes:
         codes = [c.strip() for c in args.codes.split(",") if c.strip()]
+    elif args.only_missing:
+        codes = codes_with_gaps()
+        log.info("增量模式：%d 只股票的最近报告期存在字段缺口", len(codes))
     else:
         conn = get_conn()
         try:

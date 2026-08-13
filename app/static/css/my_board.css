@@ -143,6 +143,15 @@ body.spx-shell .site-footer.mb-footer { max-width: none; margin-top: 24px; }
 .mb-preview-bar[hidden] { display: none; }
 .mb-preview-bar b { word-break: break-all; }
 
+/* 编辑全站默认布局时的提示。用警示黄而不是蓝 —— 蓝色跟"预览中"那条太像,
+   而这两件事的后果完全不同:预览改不动任何东西,这里改的是所有新访客看到的画布。 */
+.mb-site-bar {
+  border-color: #d4a72c;
+  border-left-color: #bf8700;
+  background: #fff8c5;
+  color: #24292f;
+}
+
 /* 自由拖拽画布:JS 给 .mb-grid 加 mb-canvas-mode 后,卡片改为绝对定位,
    可以自由拖动摆放(横向/纵向比对);高度由 JS 按内容动态写入 style.height。
    窄屏(<=760px)不开启画布,退回原来的堆叠布局。 */

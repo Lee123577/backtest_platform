@@ -135,6 +135,40 @@ TASKS: Dict[str, TaskDef] = {
     },
     # 自选盯盘:17:20 对订阅用户的自选股×盯盘策略跑当日信号,命中落站内提醒。
     # 只依赖 daily_update(当日K线已入库);纯本地计算,不联网。
+    # 行业分类/股本:每月 1 号 04:00 刷一遍。stock_info 的 industry_sw1/
+    # total_share 不在 daily_update 的更新范围里(它只写 code/name/market),
+    # 不定期兜底的话,新上市的股票永远没有行业归属 —— 个股页会一直显示行业缺失。
+    # 走 baostock 批量接口,全市场一次调用,几秒钟的事,月度足够。
+    "backfill_stock_industry": {
+        "cmd": ["python", "scripts/backfill_stock_industry.py"],
+        "schedule": "monthly:01:04:00",
+        "timeout_sec": 20 * 60,
+        "depends_on": None,
+        "description": "回填 stock_info 行业分类与股本(每月 1 号 04:00)",
+    },
+    # 财务字段补缺:每月 8 号 04:30(月初财报密集披露之后)。
+    # daily_update 走东财 stock_yjbb_em 每天补新报告期,营收/净利是全的,但
+    # debt_ratio 覆盖率极低,且它一旦发现某报告期覆盖率过 90% 就不再补抓,
+    # 缺口会永久留着。这里用 THS 源只补有缺口的股票(--only-missing),
+    # 不是每月全量重跑 5497 只(那要 45 分钟)。
+    "backfill_stock_finance": {
+        "cmd": ["python", "scripts/backfill_stock_finance.py", "--only-missing"],
+        "schedule": "monthly:08:04:30",
+        "timeout_sec": 90 * 60,
+        "depends_on": None,
+        "description": "补齐 stock_finance 缺失字段(每月 8 号 04:30,仅补缺口)",
+    },
+    # 访客看板保留策略:每天 04:20 兜一次底。
+    # 清理原本只在 save_ip_layout 里顺带触发(每进程每小时一次),前提是"一直有人
+    # 在存布局"—— 而真实情况是访客量小、可能整天没人保存,于是 180 天/2 万行的
+    # 策略实际上从不执行。两条 DELETE 而已,每天跑没有负担。
+    "purge_board_layouts": {
+        "cmd": ["python", "scripts/purge_board_layouts.py"],
+        "schedule": "daily:04:20",
+        "timeout_sec": 10 * 60,
+        "depends_on": None,
+        "description": "清理过期的访客看板布局(每天 04:20)",
+    },
     # 个股 AI 报告:18:10 按成交额挑最活跃的 50 只预生成。
     # 排在 daily_review(17:45)之后 —— 两个都要调 DeepSeek,岔开跑避免撞在
     # 一起触发频率限制。依赖 daily_update:当日 K 线没入库,快照就是昨天的。
