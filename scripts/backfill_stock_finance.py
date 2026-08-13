@@ -117,13 +117,26 @@ def get_conn():
     )
 
 
+# 每个字段都用 COALESCE(新值, 旧值) —— **绝不能写成 x=VALUES(x)**。
+#
+# 这一条是踩出来的:2026-08-13 首次跑 --only-missing 时,THS 对刚开始披露的
+# 半年报(2026-06-30)还没有净利数据、返回 NULL,而 x=VALUES(x) 会拿这个 NULL
+# 去覆盖 daily_update 从东财写好的有效值 —— 那一期的 net_profit 当场从
+# 677 行掉到 274 行。
+#
+# 本脚本的定位是"补缺口",不是"以 THS 为准重写全表"。两个数据源各有各的
+# 覆盖盲区(东财的 debt_ratio 稀疏、THS 的最新一期滞后),谁也不该抹掉对方
+# 已经拿到的数据。COALESCE 让写入只增不减:新值有就更新,没有就保留原样。
 SQL = """
     INSERT INTO stock_finance
         (code, report_date, report_type, revenue, net_profit, eps, bvps, debt_ratio)
     VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
     ON DUPLICATE KEY UPDATE
-        revenue=VALUES(revenue), net_profit=VALUES(net_profit),
-        eps=VALUES(eps), bvps=VALUES(bvps), debt_ratio=VALUES(debt_ratio)
+        revenue=COALESCE(VALUES(revenue), revenue),
+        net_profit=COALESCE(VALUES(net_profit), net_profit),
+        eps=COALESCE(VALUES(eps), eps),
+        bvps=COALESCE(VALUES(bvps), bvps),
+        debt_ratio=COALESCE(VALUES(debt_ratio), debt_ratio)
 """
 
 

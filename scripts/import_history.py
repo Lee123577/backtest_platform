@@ -560,9 +560,12 @@ def import_stock_finance(conn, resume: bool):
              eps, bvps, debt_ratio, op_cash_flow)
         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
         ON DUPLICATE KEY UPDATE
-            revenue=VALUES(revenue), net_profit=VALUES(net_profit),
-            eps=VALUES(eps), bvps=VALUES(bvps),
-            debt_ratio=VALUES(debt_ratio), op_cash_flow=VALUES(op_cash_flow)
+            revenue=COALESCE(VALUES(revenue), revenue),
+            net_profit=COALESCE(VALUES(net_profit), net_profit),
+            eps=COALESCE(VALUES(eps), eps),
+            bvps=COALESCE(VALUES(bvps), bvps),
+            debt_ratio=COALESCE(VALUES(debt_ratio), debt_ratio),
+            op_cash_flow=COALESCE(VALUES(op_cash_flow), op_cash_flow)
     """
 
     total = len(codes)

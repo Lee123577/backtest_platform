@@ -1090,15 +1090,23 @@ def update_stock_finance(conn, trade_date: str):
         log.warning("stock_info 为空，跳过 stock_finance 更新")
         return
 
+    # 每个字段都用 COALESCE(新值, 旧值) —— 不能写成 x=VALUES(x)。
+    # stock_finance 由两个源共同填充,各有各的盲区:这里的东财 stock_yjbb_em
+    # 营收/净利齐全但 debt_ratio 极稀疏(实测 2026-06-30 那期 677 行里只有 71 行有),
+    # 而 backfill_stock_finance.py 走的 THS 源 debt_ratio 齐全、最新一期却滞后。
+    # 用 VALUES() 的话两个源会互相把对方补好的字段抹回 NULL,每天来回拉锯。
     sql = """
         INSERT INTO stock_finance
             (code, report_date, report_type, revenue, net_profit,
              eps, bvps, debt_ratio, op_cash_flow)
         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
         ON DUPLICATE KEY UPDATE
-            revenue=VALUES(revenue), net_profit=VALUES(net_profit),
-            eps=VALUES(eps), bvps=VALUES(bvps),
-            debt_ratio=VALUES(debt_ratio), op_cash_flow=VALUES(op_cash_flow)
+            revenue=COALESCE(VALUES(revenue), revenue),
+            net_profit=COALESCE(VALUES(net_profit), net_profit),
+            eps=COALESCE(VALUES(eps), eps),
+            bvps=COALESCE(VALUES(bvps), bvps),
+            debt_ratio=COALESCE(VALUES(debt_ratio), debt_ratio),
+            op_cash_flow=COALESCE(VALUES(op_cash_flow), op_cash_flow)
     """
 
     for qe in _quarter_ends(target, look_back=4):
