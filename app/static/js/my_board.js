@@ -1075,16 +1075,18 @@
   var zCounter = 100;       // 每次拖拽/缩放递增,保证"最后操作的卡片在最上层"
 
   // 进页面时的身份。拿它是为了在保存被拒(403)时能说对话 —— 三种情况的原因
-  // 完全不同:登录态中途失效 / 识别不到网络地址 / 跨站请求被拦。
+  // 完全不同:登录态中途失效 / 连访客标识都识别不到 / 跨站请求被拦。
   // scope 见后端 my_board/service.py:user | site_default | ip | ephemeral
+  // ("ip" 是匿名访客私有的那一档,后端实际按 sp_sid cookie 存,取不到才退回 IP)
   var wasLoggedIn = false;
   var boardScope = "ip";
   var canPreview = false;   // 管理白名单 IP 才为真,决定显不显示"访客看板"入口
 
   /* ── 维护者只读预览访客看板 ─────────────────────────────────────────────
-     预览目标存在 sessionStorage 而不是 URL 里:访客 IP 不该进浏览器历史、
-     分享出去的链接、以及外链的 Referer。换 tab 就是独立的一次预览,关掉即失效,
-     刷新则保持 —— 正好是 sessionStorage 的语义。 */
+     预览目标存在 sessionStorage 而不是 URL 里:访客标识(浏览器 sid 或 IP)
+     不该进浏览器历史、分享出去的链接、以及外链的 Referer。换 tab 就是独立的
+     一次预览,关掉即失效,刷新则保持 —— 正好是 sessionStorage 的语义。
+     变量名里的 "ip" 是按 IP 存那会儿留下的,现在装的是后端给的存储键。 */
   var PREVIEW_KEY = "mbPreviewIp";
   var previewIp = "";
   try { previewIp = sessionStorage.getItem(PREVIEW_KEY) || ""; } catch (e) { /* 隐私模式下读不了,当作没预览 */ }
@@ -1154,14 +1156,14 @@
 
   // 403 是身份问题、重试多少次都一样,所以本次会话直接停掉保存:卡片照样能拖
   // 能缩放(纯前端状态),只是不落库。和真正的保存失败区分开,别反复弹错。
-  // 正常访客现在存的是自己 IP 那一份,不会再撞 403 —— 只剩会话失效、拿不到
-  // 网络地址、跨站请求这几种边角情况。
+  // 正常访客现在存的是自己那一份,不会再撞 403 —— 只剩会话失效、连 sp_sid
+  // 和 IP 都拿不到、跨站请求这几种边角情况。
   var saveForbidden = false;
 
   function forbiddenMessage() {
     if (wasLoggedIn) return "登录状态已失效，布局无法保存。请重新登录后再调整。";
     if (boardScope === "ephemeral") {
-      return "识别不到你的网络地址，布局无法保存。你的调整本次浏览有效，刷新后恢复。";
+      return "识别不到你的身份（浏览器禁用了 Cookie？），布局无法保存。你的调整本次浏览有效，刷新后恢复。";
     }
     return "布局无法保存。你的调整本次浏览有效，刷新后恢复。";
   }
@@ -1178,6 +1180,12 @@
       if (r.status === 403) {
         saveForbidden = true;
         showToast(forbiddenMessage(), 6000);
+        return;
+      }
+      // 429 是暂时的(同一 IP 短时间内新建了太多访客布局),别像 403 那样
+      // 把本次会话的保存停掉 —— 继续拖动就是下一次重试。
+      if (r.status === 429) {
+        showToast("保存过于频繁，稍后继续调整会自动重试。", 5000);
         return;
       }
       if (!r.ok) notifySaveError();
@@ -1704,9 +1712,12 @@
     if (!items.length) return '<div class="mb-gp-note">还没有访客存过自己的看板</div>';
     var html = '<div class="mb-add-label">访客看板（只读）</div>';
     items.forEach(function (it) {
+      // 预览要用库里的键原文(data-preview-ip),但屏幕上显示的是后端处理过的
+      // label —— sid 那种 32 位十六进制既没信息量,又是能冒充该访客的令牌。
       var ip = it.ip_key || "";
+      var label = it.label || ip;
       html += '<button type="button" class="mb-add-item" data-preview-ip="' + esc(ip) + '">' +
-        '<span class="mb-gp-ip">' + esc(ip) + "</span>" +
+        '<span class="mb-gp-ip">' + esc(label) + "</span>" +
         '<span class="mb-gp-meta">' + (it.cards || 0) + " 张卡片 · " + esc(it.updated_at || "") +
         "</span></button>";
     });

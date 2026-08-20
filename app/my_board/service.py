@@ -1,5 +1,5 @@
 """
-数据看板布局 —— 每个访客一份,身份按"登录用户 > IP"降级。
+数据看板布局 —— 每个访客一份,身份按"登录用户 > sp_sid > IP"降级。
 
 三种归属(scope),读写用的是同一套判定,所见即所存:
 
@@ -7,15 +7,31 @@
   site_default  白名单 IP   → user_board_layout 的 user_id=0 那一行,也就是
                              全站默认布局。维护者摆好的样子 = 新访客看到的
                              样子,这是既有的产品行为,保持不变。
-  ip            普通访客    → board_layout_by_ip 里 ip_key 那一行。第一次来
-                             没有自己的行,读到的是全站默认布局(当模板用);
+  ip            普通访客    → board_layout_by_ip 里 visitor_key 那一行。第一次
+                             来没有自己的行,读到的是全站默认布局(当模板用);
                              一旦拖动保存,就落到自己那一行,与别人隔离。
+                             (scope 值仍叫 "ip" 是历史原因 —— 它表示的是
+                             "匿名访客私有的那一档",与用什么键无关。)
 
-IP 当身份是有损的,这点必须清楚:同一出口 IP(公司/学校 NAT)的多个人会共用
-一份看板;换 WiFi/切流量则等于换了个人,原来的看板找不回来。之所以还这么做,
-是因为平台目前 user_session 表为空、没有任何登录态可用,按 IP 存至少让绝大
-多数家庭宽带/固定办公网的访客能把看板留住 —— 比现在"谁都存不下"强。
-真要稳,后续应改用已经在下发的 sp_sid cookie(见 analytics/attribution)。
+访客那一档的键由 visitor_key() 定,两级降级:
+
+  sid:<32hex>   请求带得到 sp_sid cookie 时用它。这个 cookie 由 visit_log
+                中间件对每个非静态响应补发(见 analytics/attribution),
+                浏览器级稳定、一年有效,HttpOnly 前端读不到。
+  <ip 归一值>   拿不到 sp_sid 时(首次进站那一个响应、禁用 cookie、脚本
+                直连)退回 IP,行为与切换前完全一致。
+
+为什么要从 IP 换成 sp_sid:IP 当身份两头都不准 —— 同一出口 IP(公司/学校
+NAT)的多个人共用一份看板,而换 WiFi/切流量的同一个人却找不回自己那份。
+sp_sid 一人一份、跨网络不变,正好把这两个方向都修掉。
+
+存量数据不丢:一个浏览器第一次带 sid 来时,它的 sid 行还不存在,这时会读
+它所在 IP 的那一行当模板(见 get_layout),下次保存才落到自己的 sid 行 ——
+旧的 IP 行不动,由保留策略在 180 天后自然清掉。唯一会顺手删掉 IP 行的是
+"重置为默认":不删的话下次打开又从 IP 行继承回来,等于重置没生效。
+
+sid 来自客户端 cookie,能伪造 —— 但 IP(经 XFF)同样能,而 sid 是 128bit
+随机、不可枚举,这一档的抗冒充能力只增不减。布局本身也不是敏感数据。
 
 存储的布局是一份 {"cards": [...], "positions": {...}} 文档:
 - cards:    当前画布上有哪些卡片、什么类型(stock/rank/compare/review/hotsector/indices),
@@ -34,13 +50,20 @@ IP 当身份是有损的,这点必须清楚:同一出口 IP(公司/学校 NAT)�
 from __future__ import annotations
 
 import ipaddress
+import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from ..analytics import attribution
+from ..ratelimit import SlidingWindowLimiter
 from . import db
+
+logger = logging.getLogger(__name__)
 
 SCOPE_USER = "user"
 SCOPE_SITE = "site_default"
+# 匿名访客私有的那一档。值沿用 "ip" 不改 —— 前端按它决定保存失败时的说法,
+# 换个值只会让还缓存着旧 my_board.js 的浏览器认不出来,而这一档的含义并没变。
 SCOPE_IP = "ip"
 # 连 IP 都拿不到(request.client 缺失/伪造成垃圾值):没有任何可持久化的身份。
 # 读全站默认布局的只读副本,写一律拒绝 —— 绝不能让它退回去写全站默认那一行,
@@ -81,6 +104,28 @@ class LayoutForbidden(Exception):
     pass
 
 
+class LayoutRateLimited(Exception):
+    """同一 IP 短时间内建了太多访客行,像在灌库(由 API 层翻成 429)。"""
+
+    def __init__(self, retry_after: int = 60) -> None:
+        super().__init__("保存过于频繁，请稍后再试")
+        self.retry_after = retry_after
+
+
+# 灌库防护:只数"新建了一行"的次数,按请求 IP 算。
+#
+# 按 IP 存的年代,一个 IP 最多占一行,表的行数天然被公网 IP 数封住;换成 sp_sid
+# 之后这个上限没了 —— 一个脚本每次带个新的随机 sid 来 POST,就能一直往表里加行,
+# 把保留策略的 20000 上限顶满,再由 LRU 把真实访客的布局挤掉。
+#
+# 正常访客几乎不会连着新建行(新建 = 第一次保存/换浏览器/清了 cookie),
+# 10 分钟 20 次给公司或校园 NAT 出口留足了余量;更新已有行完全不受限,
+# 拖多少次都行。窗口取 10 分钟而不是 1 小时,是为了让误伤的人等得起 ——
+# Retry-After 最多 600 秒,而不是让人干等一小时。
+_new_row_limiter = SlidingWindowLimiter(limit=20, window_sec=600.0,
+                                        name="my_board_new_visitor")
+
+
 def ip_key(ip: Optional[str]) -> Optional[str]:
     """把请求 IP 归一成看板的存储键;拿不到可用身份时返回 None。
 
@@ -102,23 +147,51 @@ def ip_key(ip: Optional[str]) -> Optional[str]:
     return str(addr)
 
 
+# 访客键的 sid 前缀。带前缀是为了让 sid 行和 IP 行能共用一张表(和同一套保留
+# 策略、同一个预览面板),同时两种键永远不会撞车 —— IP 里不可能出现 ":" 开头
+# 的这种前缀,而 "sid:" + 32hex = 36 字符,也没超过 ip_key 的 45 列宽。
+SID_PREFIX = "sid:"
+
+
+def sid_key(sid: Optional[str]) -> Optional[str]:
+    """sp_sid cookie → 存储键;不是自己签发的格式一律当没有。
+
+    valid_sid 的白名单校验不能省:这个值直接进 SQL 参数和维护者面板,
+    放任意字符串进来等于让客户端自选主键。"""
+    sid = (sid or "").strip()
+    if not attribution.valid_sid(sid):
+        return None
+    return SID_PREFIX + sid
+
+
+def visitor_key(sid: Optional[str], ip: Optional[str]) -> Optional[str]:
+    """匿名访客这一档到底存哪一行:sp_sid 优先,拿不到才退回 IP。
+
+    两个都没有 → None,调用方按 SCOPE_EPHEMERAL 处理(只读全站默认,不落库)。"""
+    return sid_key(sid) or ip_key(ip)
+
+
 def _key_for(user: Optional[Dict[str, Any]]) -> int:
     return int(user["id"]) if user else db.GUEST_USER_ID
 
 
 def resolve_scope(
-    user: Optional[Dict[str, Any]], is_site_editor: bool, ip: Optional[str]
+    user: Optional[Dict[str, Any]],
+    is_site_editor: bool,
+    ip: Optional[str],
+    sid: Optional[str] = None,
 ) -> Tuple[str, Optional[str]]:
-    """定位这次请求该读写哪一份布局,返回 (scope, ip_key)。
+    """定位这次请求该读写哪一份布局,返回 (scope, visitor_key)。
 
-    ip_key 只在 scope == SCOPE_IP 时有意义。判定顺序是固定的:
-    登录态最可信,其次是白名单(维护者改的是全站默认),最后才落到 IP。
+    visitor_key 只在 scope == SCOPE_IP 时有意义。判定顺序是固定的:
+    登录态最可信,其次是白名单(维护者改的是全站默认),最后才落到访客那一档
+    —— 那一档内部再按 sp_sid > IP 降级(见 visitor_key)。
     """
     if user is not None:
         return SCOPE_USER, None
     if is_site_editor:
         return SCOPE_SITE, None
-    key = ip_key(ip)
+    key = visitor_key(sid, ip)
     if key is None:
         return SCOPE_EPHEMERAL, None
     return SCOPE_IP, key
@@ -128,12 +201,21 @@ def get_layout(
     user: Optional[Dict[str, Any]] = None,
     is_site_editor: bool = False,
     ip: Optional[str] = None,
+    sid: Optional[str] = None,
 ) -> Dict[str, Any]:
     db.ensure_tables()
-    scope, key = resolve_scope(user, is_site_editor, ip)
+    scope, key = resolve_scope(user, is_site_editor, ip, sid)
     if scope == SCOPE_IP:
         saved = db.load_ip_layout(key)
-        # 这个 IP 从没存过 → 拿全站默认布局当开局模板(区别于存过一份空的,
+        if saved is None and key.startswith(SID_PREFIX):
+            # 这个浏览器还没有自己的行 —— 可能是按 IP 存的那个年代留下来的
+            # 老访客。读他所在 IP 的那一行当模板,人就感觉不到身份换过。
+            # 只读不搬:等他下次保存自然落到 sid 行,IP 行留给同 IP 的其他
+            # 设备继续用,到期由保留策略清掉。
+            legacy = ip_key(ip)
+            if legacy:
+                saved = db.load_ip_layout(legacy)
+        # 从没存过 → 拿全站默认布局当开局模板(区别于存过一份空的,
         # 那是用户主动"重置为默认",不该再把默认卡片塞回去)
         return saved if saved is not None else db.load_layout(db.GUEST_USER_ID)
     if scope == SCOPE_EPHEMERAL:
@@ -149,10 +231,24 @@ def get_layout(
 
 PREVIEW_LIST_LIMIT = 200
 IP_KEY_MAX_LEN = 45          # board_layout_by_ip.ip_key 的列宽
+# 面板上 sid 只露前几位:32 位十六进制看不出任何信息,而完整值等于一枚能冒充
+# 该访客的令牌 —— 预览用的是清单里回传的原文,展示层没必要把它印在屏幕上。
+SID_LABEL_KEEP = 8
+
+
+def key_label(key: str) -> str:
+    """存储键 → 面板上显示的样子。IP 原样,sid 截断成 "浏览器 9f3a1b2c…"。"""
+    key = key or ""
+    if key.startswith(SID_PREFIX):
+        return "浏览器 " + key[len(SID_PREFIX):len(SID_PREFIX) + SID_LABEL_KEEP] + "…"
+    return key
 
 
 def list_ip_layouts(limit: int = PREVIEW_LIST_LIMIT) -> Dict[str, Any]:
-    """访客布局清单(最近更新在前)+ 总数。"""
+    """访客布局清单(最近更新在前)+ 总数。
+
+    键有两种(sid: 开头的浏览器标识 / IP),kind 告诉前端这是哪种,label 是
+    已经处理好的展示文案;ip_key 仍回原文,预览要拿它当参数。"""
     db.ensure_tables()
     try:
         limit = int(limit)
@@ -162,8 +258,11 @@ def list_ip_layouts(limit: int = PREVIEW_LIST_LIMIT) -> Dict[str, Any]:
     items = []
     for row in db.list_ip_layouts(limit):
         ts = row.get("updated_at")
+        key = row.get("ip_key") or ""
         items.append({
-            "ip_key": row.get("ip_key") or "",
+            "ip_key": key,
+            "kind": "sid" if key.startswith(SID_PREFIX) else "ip",
+            "label": key_label(key),
             "cards": int(row.get("cards") or 0),
             # 面板上只显示到分钟就够了,秒和时区在这没有信息量
             "updated_at": ts.strftime("%Y-%m-%d %H:%M") if hasattr(ts, "strftime") else (ts or ""),
@@ -172,11 +271,12 @@ def list_ip_layouts(limit: int = PREVIEW_LIST_LIMIT) -> Dict[str, Any]:
 
 
 def get_ip_layout(ip_or_key: str) -> Optional[Dict[str, Any]]:
-    """按 ip_key 取一份访客布局;这个键从没存过则返回 None(由 API 层翻成 404)。
+    """按存储键取一份访客布局;这个键从没存过则返回 None(由 API 层翻成 404)。
 
-    先按原样查:面板回传的就是库里的 ip_key 原文,而 IPv6 那种
-    "2408:xxxx::/64" 再过一次 ip_key() 只会失败 —— 它是个网段,不是地址。
-    查不到再当普通 IP 归一一次,这样手输一个完整 IPv6 地址也能对上它的 /64 行。
+    先按原样查:面板回传的就是库里的键原文,"sid:xxxx" 和 IPv6 的
+    "2408:xxxx::/64" 都只有原样才查得到 —— 再过一次 ip_key() 只会失败
+    (一个不是地址,一个是网段)。查不到再当普通 IP 归一一次,这样手输一个
+    完整 IPv6 地址也能对上它的 /64 行。
     """
     key = (ip_or_key or "").strip()
     if not key or len(key) > IP_KEY_MAX_LEN:
@@ -309,6 +409,7 @@ def save_layout(
     layout: Dict[str, Any],
     is_site_editor: bool = False,
     ip: Optional[str] = None,
+    sid: Optional[str] = None,
 ) -> None:
     if not isinstance(layout, dict):
         raise LayoutError("布局格式不对")
@@ -323,19 +424,46 @@ def save_layout(
         clean = _clean_positions(layout)
 
     db.ensure_tables()
-    scope, key = resolve_scope(user, is_site_editor, ip)
+    scope, key = resolve_scope(user, is_site_editor, ip, sid)
     if scope == SCOPE_EPHEMERAL:
-        raise LayoutForbidden("识别不到你的网络地址,布局无法保存")
+        raise LayoutForbidden("识别不到你的身份,布局无法保存")
     if scope == SCOPE_IP:
         if not clean:
             # 前端"重置为默认"发的就是空布局。对访客而言删掉自己那一行,
             # 下次打开重新回退到全站默认 —— 这才是"默认"该有的意思,
             # 顺带把不再需要的行清掉,不留空壳。
             db.delete_ip_layout(key)
+            # 连同他所在 IP 的老行一起删。get_layout 在 sid 行缺失时会去
+            # 继承 IP 行,只删 sid 行的话下次打开又把老布局继承回来,
+            # 用户会看到"重置了个寂寞"。
+            legacy = ip_key(ip) if key.startswith(SID_PREFIX) else None
+            if legacy and legacy != key:
+                db.delete_ip_layout(legacy)
         else:
-            db.save_ip_layout(key, clean)
+            created = db.save_ip_layout(key, clean)
+            if created:
+                _guard_new_row(key, ip)
         return
     db.save_layout(_key_for(user), clean)
+
+
+def _guard_new_row(key: str, ip: Optional[str]) -> None:
+    """刚新建的那一行是不是灌进来的?是就立刻删掉并拒绝。
+
+    先写后判,不是先判后写:正常保存的绝大多数是更新已有行,没必要为了
+    识别"新建"在每次保存前多打一次库 —— upsert 的 rowcount 已经把这件事
+    白送了。误删风险也不存在:删的就是这次刚建的那一行,老数据碰不到。
+    """
+    # 按 IP 分桶(而不是按 sid):sid 正是攻击者能随意换的那个东西。
+    # 连 IP 都拿不到时归到同一个桶里,宁可严一点。
+    bucket = ip_key(ip) or "_noip"
+    if _new_row_limiter.allow(bucket):
+        return
+    try:
+        db.delete_ip_layout(key)
+    except Exception as e:      # 删不掉就留着,保留策略最终会收走
+        logger.warning("回滚超限的访客布局失败(忽略) key=%s: %s", key, e)
+    raise LayoutRateLimited(_new_row_limiter.retry_after(bucket))
 
 
 def search(q: str) -> List[Dict[str, str]]:

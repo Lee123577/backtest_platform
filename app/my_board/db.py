@@ -7,15 +7,19 @@
   user_board_layout   —— 登录用户各自一份(user_id + layout_json)。
                          user_id=0 是"全站默认布局"的哨兵值:维护者在未登录
                          状态下摆好的样子,就是新访客第一次打开时看到的画布。
-  board_layout_by_ip  —— 未登录访客各自一份,按 IP 维度存。
+  board_layout_by_ip  —— 未登录访客各自一份,一行一个访客。
 
-为什么要按 IP 分行:平台至今 user_session 表为空(一次登录都没发生过),
+为什么要给访客分行:平台至今 user_session 表为空(一次登录都没发生过),
 所有真实访客都是未登录态。原先未登录一律共用 user_id=0 那一行,又只允许
 白名单 IP 写,等于普通访客根本存不下自己的看板 —— 拖完刷新就没了。
-按 IP 拆行之后每个访客写自己的行,互不覆盖,全站默认布局也不会被路人改掉。
+拆行之后每个访客写自己的行,互不覆盖,全站默认布局也不会被路人改掉。
 
-IP 作为身份是有损的(同一出口 IP 的多人会共用一份、换网络就换人),
-这是 ip_key() 的归一规则要处理的事,见 service.ip_key。
+ip_key 这一列存的是访客的**存储键**,两种形态共处一张表:
+  "sid:<32hex>"  —— sp_sid cookie,浏览器级稳定,现在的主力
+  "<IP 归一值>"   —— 拿不到 cookie 时的兜底,也是切换前的存量数据
+表名和列名沿用按 IP 存那会儿的叫法,没跟着改 —— 一张几百行的表为了改名
+做迁移不划算,键的判定统一在 service.visitor_key,那里是唯一的真相。
+两种键共用这一张表也就共用了同一套保留策略和维护者预览面板。
 """
 from __future__ import annotations
 
@@ -34,6 +38,9 @@ GUEST_USER_ID = 0
 
 # 访客布局的保留策略:半年没回来的行清掉,总行数封顶(小内存生产机,
 # 不能让扫描器/一次性访客把表撑爆)。超限时按 updated_at 升序淘汰最旧的。
+# 键换成 sp_sid 之后行数天然比按 IP 存时多(同一人换浏览器/清 cookie 各占一行),
+# 上限没跟着调 —— 20000 行离现在的量级还很远,真顶到了先看是不是被灌的
+# (service 那边对"新建行"另有按 IP 的限流)。
 IP_LAYOUT_MAX_AGE_DAYS = 180
 IP_LAYOUT_MAX_ROWS = 20000
 
@@ -55,7 +62,7 @@ DDL_STATEMENTS = [
                                   ON UPDATE CURRENT_TIMESTAMP,
         KEY idx_updated (updated_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-      COMMENT='未登录访客的看板布局(按 IP 维度,IPv6 归一到 /64 前缀)'
+      COMMENT='未登录访客的看板布局(键为 sid:<32hex> 或 IP,IPv6 归一到 /64 前缀)'
     """,
 ]
 
@@ -106,13 +113,13 @@ def save_layout(user_id: int, layout: Dict[str, Any]) -> None:
         )
 
 
-# ── 访客布局(IP 维度) ───────────────────────────────────────────────────────
+# ── 访客布局(一行一个访客) ───────────────────────────────────────────────────────
 
 def load_ip_layout(ip_key: str) -> Optional[Dict[str, Any]]:
-    """取该 IP 存过的布局。
+    """取该访客(存储键见模块头)存过的布局。
 
     返回 None 和返回 {} 是两件事,调用方要靠它决定要不要回退到全站默认:
-      None —— 这个 IP 从没存过,第一次来 → 应该看到全站默认布局
+      None —— 这个键从没存过,第一次来 → 应该看到全站默认布局
       {}   —— 存过,而且存的就是空(用户点了"重置为默认")→ 尊重它,别再回退
     """
     conn = _get_pool()
@@ -131,8 +138,8 @@ def load_ip_layout(ip_key: str) -> Optional[Dict[str, Any]]:
         return {}
 
 
-def save_ip_layout(ip_key: str, layout: Dict[str, Any]) -> None:
-    """写入访客布局。
+def save_ip_layout(ip_key: str, layout: Dict[str, Any]) -> bool:
+    """写入访客布局,返回这次是不是**新建**了一行(调用方拿它做灌库防护)。
 
     updated_at 必须显式赋值,不能只靠列上的 ON UPDATE CURRENT_TIMESTAMP：
     MySQL 在"新值与旧值完全相同"时根本不写这一行,ON UPDATE 也就不触发。
@@ -153,11 +160,15 @@ def save_ip_layout(ip_key: str, layout: Dict[str, Any]) -> None:
             """,
             (ip_key, payload),
         )
+        # MySQL 的 upsert 用 rowcount 区分:1=插入了新行,2=更新了已有行。
+        # 老访客每次保存都是 2,只有真正多出一行时才是 1。
+        created = (cur.rowcount == 1)
     _maybe_purge_ip_layouts()
+    return created
 
 
 def delete_ip_layout(ip_key: str) -> None:
-    """删掉该 IP 的布局行 —— 访客点"重置为默认"时用,下次打开回退全站默认。"""
+    """删掉该访客的布局行 —— 点"重置为默认"时用,下次打开回退全站默认。"""
     conn = _get_pool()
     if conn is None:
         raise RuntimeError("数据库连接不可用")
@@ -178,7 +189,7 @@ def _count_cards(layout_json: Any) -> int:
 def list_ip_layouts(limit: int) -> List[Dict[str, Any]]:
     """访客布局清单,最近更新在前 —— 给维护者的只读预览面板用。
 
-    只回 ip_key / updated_at / 卡片数:layout_json 是 MEDIUMTEXT,清单根本用不着
+    只回存储键 / updated_at / 卡片数:layout_json 是 MEDIUMTEXT,清单根本用不着
     整份文档,几百行乘近 1KB 白占内存(生产机 3.6G,app 和 mysqld 挤一台)。
     卡片数在 Python 侧数 —— 列是 MEDIUMTEXT 不是 JSON 列,交给 MySQL 的
     JSON_LENGTH 只要碰上一行坏数据就把整条查询打挂,为个展示字段不值当。
