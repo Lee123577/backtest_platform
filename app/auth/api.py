@@ -2,8 +2,8 @@
 账号/登录 API
 =============
 
-POST /api/auth/send_code  {phone}          — 发送验证码(console 后端下发到日志)
-POST /api/auth/login      {phone, code}     — 校验登录，成功下发会话 cookie
+POST /api/auth/send_code  {email}          — 发送邮箱验证码
+POST /api/auth/login      {email, code}     — 校验登录，成功下发会话 cookie
 POST /api/auth/logout                       — 退出，清 cookie
 GET  /api/auth/me                           — 当前登录用户({user:null} 表示未登录)
 """
@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from ..visit_log import _client_ip, _is_from_trusted_proxy
 from . import service
 from .deps import get_current_user
-from .sms import SmsError
+from .mailer import MailError
 
 logger = logging.getLogger(__name__)
 
@@ -25,17 +25,17 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
 class SendCodeReq(BaseModel):
-    phone: str
+    email: str
 
 
 class LoginReq(BaseModel):
-    phone: str
+    email: str
     code: str
 
 
 def _user_out(user: dict) -> dict:
     """只透出前端需要的字段(不含内部状态/时间戳)。"""
-    return {"id": user["id"], "phone": user["phone"]}
+    return {"id": user["id"], "email": user["email"]}
 
 
 def _cookie_secure(request: Request) -> bool:
@@ -52,10 +52,10 @@ def _cookie_secure(request: Request) -> bool:
 @router.post("/send_code")
 def send_code(req: SendCodeReq, request: Request):
     try:
-        result = service.send_code(req.phone, _client_ip(request))
+        result = service.send_code(req.email, _client_ip(request))
     except service.AuthError as e:
         raise HTTPException(400, str(e))
-    except SmsError as e:
+    except MailError as e:
         logger.error("验证码下发失败: %s", e)
         raise HTTPException(502, "验证码发送失败，请稍后重试")
     return {"ok": True, **result}
@@ -64,7 +64,7 @@ def send_code(req: SendCodeReq, request: Request):
 @router.post("/login")
 def login(req: LoginReq, request: Request, response: Response):
     try:
-        user, token, ttl = service.login(req.phone, req.code)
+        user, token, ttl = service.login(req.email, req.code)
     except service.AuthError as e:
         raise HTTPException(400, str(e))
     response.set_cookie(

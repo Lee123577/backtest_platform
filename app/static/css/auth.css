@@ -27,7 +27,9 @@
 /* 弹窗 */
 .sp-modal {
   position: relative;
-  width: 360px;
+  /* 360 → 400：邮箱比手机号长得多，360px 下输入框只剩 175px(约 22 字符)，
+     稍长一点的地址就看不全。max-width 兜住窄屏，不影响手机。 */
+  width: 400px;
   max-width: calc(100vw - 32px);
   background: #fff;
   color: #1f2328;
@@ -151,4 +153,20 @@
   color: #aab1ba;
   line-height: 1.6;
   text-align: center;
+}
+
+/* ── 响应式（≤480px 手机）───────────────────────────────────────────────
+   邮箱登录带来的两处必要调整（手机号时代不需要，11 位数字怎么挤都够看）：
+
+   1) 换行堆叠：桌面端邮箱框和"获取验证码"按钮并排，在 375px 屏上只剩
+      173px，`a.very.long+tag@subdomain.example.com` 这种地址打到一半就
+      看不见开头了。改成输入框独占一行、按钮落到下一行整宽。
+   2) 字号顶到 16px：iOS Safari 对 font-size < 16px 的输入框会在聚焦时
+      自动放大整个页面，放大后还不会自己缩回去 —— 登录弹窗现在是主转化
+      路径，不能在第一次点输入框就把版面搞乱。style.css:730 已经为首页
+      回测表单做过同样处理，这里是当时没覆盖到的另一处。 */
+@media (max-width: 480px) {
+  .sp-field { flex-wrap: wrap; }
+  .sp-field input { flex: 1 1 100%; font-size: 16px; }
+  .sp-code-btn { width: 100%; }
 }

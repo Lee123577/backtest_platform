@@ -15,7 +15,14 @@
     });
   }
   var $ = function (id) { return document.getElementById(id); };
-  function maskPhone(p) { return String(p || "").replace(/(\d{3})\d{4}(\d{4})/, "$1****$2"); }
+  // 账号展示脱敏：foo@qq.com → fo***@qq.com
+  function maskEmail(addr) {
+    var s = String(addr || "");
+    var at = s.indexOf("@");
+    if (at < 1) return s;
+    var name = s.slice(0, at);
+    return name.slice(0, name.length <= 2 ? 1 : 2) + "***" + s.slice(at);
+  }
 
   var SHORTCUTS = [
     { href: "/daily_review", ico: "📈", label: "每日复盘", desc: "AI 收盘复盘" },
@@ -56,7 +63,7 @@
 
   function renderHero(user) {
     if (user) {
-      $("dashHello").textContent = "欢迎回来，" + maskPhone(user.phone);
+      $("dashHello").textContent = "欢迎回来，" + maskEmail(user.email);
       $("dashHeroSub").textContent = "这里是你的账户概览";
       $("dashHeroAction").innerHTML = "";
     } else {

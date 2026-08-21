@@ -88,8 +88,13 @@
   }
 
   // ── 账户区 ────────────────────────────────────────────────────────────
-  function maskPhone(p) {
-    return String(p || "").replace(/(\d{3})\d{4}(\d{4})/, "$1****$2");
+  // 账号展示脱敏：foo@qq.com → fo***@qq.com
+  function maskEmail(addr) {
+    var s = String(addr || "");
+    var at = s.indexOf("@");
+    if (at < 1) return s;
+    var name = s.slice(0, at);
+    return name.slice(0, name.length <= 2 ? 1 : 2) + "***" + s.slice(at);
   }
 
   function renderAccount(user) {
@@ -105,10 +110,10 @@
       return;
     }
     slot.innerHTML =
-      '<button class="spx-account-btn" id="spxAcctBtn">👤 ' + esc(maskPhone(user.phone)) +
+      '<button class="spx-account-btn" id="spxAcctBtn">👤 ' + esc(maskEmail(user.email)) +
       ' ▾</button>' +
       '<div class="spx-menu" id="spxMenu" hidden>' +
-      '<div class="spx-menu-sub">' + esc(maskPhone(user.phone)) + "</div>" +
+      '<div class="spx-menu-sub">' + esc(maskEmail(user.email)) + "</div>" +
       '<a href="/dashboard">仪表盘</a>' +
       '<a href="/watchlist">自选盯盘</a>' +
       '<button id="spxLogout">退出登录</button>' +

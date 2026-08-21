@@ -65,6 +65,14 @@
 - ECharts treemap,按行业 / 板块聚类
 - 60s 进程缓存,数据来源 stock_kline 表
 
+**账号体系(邮箱验证码登录)**
+- 无密码:输邮箱 → 收 6 位验证码 → 登录,首次登录自动建号(少一套密码存储/找回/强度校验)
+- 验证码 5 分钟有效、最多错 5 次、用过即作废(防重放);同址 60s 冷却 + 单址单日 10 条 + 单 IP 每小时 20 条
+- 会话 cookie 存原始 token、库里只存 sha256,库泄漏也无法直接冒用
+- 投递走 SMTP(`app/auth/mailer.py`),验证码同时进邮件标题 —— 手机推送不点开就能读到
+- **投递失败会向上抛 502,不会静默"只写日志"**:上一版短信登录就是因为只有 console 后端能跑,
+  账号体系挂了几个月没人发现。`MAIL_PROVIDER` 漏配时按 `SMTP_HOST` 自动切到真实投递
+
 **安全**
 - IP 白名单写操作隔离(`paper_admin_ip` 表)
 - `TRUSTED_PROXIES` 环境变量配可信反代,防 `X-Forwarded-For` 伪造
@@ -107,6 +115,16 @@ MYSQL_DATABASE=back_test
 | `TRUSTED_PROXIES` | (空) | 可信反代 IP/CIDR,逗号分隔。空 = 一律忽略代理头 |
 | `PAPER_ADMIN_INITIAL_IPS` | (空) | 启动时往白名单写入的 IP(避免首次锁死) |
 | `DEEPSEEK_API_KEY` | (空) | AI 热门板块用的 DeepSeek API Key,不配则该功能不产出预测 |
+| `MAIL_PROVIDER` | 自动 | 验证码投递后端:`smtp` 真发信 / `console` 只打日志。**留空时按有没有配 `SMTP_HOST` 自动判断** |
+| `SMTP_HOST` | (空) | 发信 SMTP 主机,如 `smtp.qq.com`。配了它就等于开启真实投递 |
+| `SMTP_PORT` | 按安全模式 | 465(ssl) / 587(starttls) / 25(none) |
+| `SMTP_SECURITY` | `ssl` | `ssl` / `starttls` / `none` |
+| `SMTP_USER` | (空) | SMTP 登录账号。QQ 邮箱填完整地址,密码用**授权码**不是登录密码 |
+| `SMTP_PASSWORD` | (空) | SMTP 密码/授权码 |
+| `SMTP_FROM` | 同 `SMTP_USER` | 发件地址 |
+| `SMTP_FROM_NAME` | 站点名 | 发件人显示名 |
+| `SMTP_TIMEOUT` | 10 | SMTP 连接/读写超时(秒) |
+| `SITE_NAME` | `收盘 shoupan` | 邮件标题与落款里的站点名 |
 
 ### 初始化历史数据
 

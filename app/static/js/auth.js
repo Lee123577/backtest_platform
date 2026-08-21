@@ -1,7 +1,7 @@
 /**
  * 登录组件(各页共用)
  * ====================
- * 手机验证码登录弹窗 + 导航账号入口。任何页面引入 auth.css + auth.js 即可：
+ * 邮箱验证码登录弹窗 + 导航账号入口。任何页面引入 auth.css + auth.js 即可：
  *   - 页面 header 里放一个 <span id="spAuthSlot"></span>，本脚本渲染"登录/我的"
  *   - 需要登录才可用的操作里调 window.SPAuth.requireLogin().then(user => ...)
  *
@@ -29,7 +29,21 @@ window.SPAuth = (function () {
   }
 
   // ── 弹窗 DOM(懒建，全站一个) ─────────────────────────────────────────────
-  var mask = null, phoneInput, codeInput, codeBtn, submitBtn, msgEl;
+  var mask = null, emailInput, codeInput, codeBtn, submitBtn, msgEl;
+
+  // 邮箱校验与后端 service.normalize_email 同口径(宽松但拒空白/控制字符)
+  var EMAIL_RE = /^[A-Za-z0-9!#$%&'*+/=?^_`{|}~.-]{1,64}@[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/;
+
+  function validEmail(v) { return v.length <= 190 && EMAIL_RE.test(v); }
+
+  // 账号展示脱敏：foo@qq.com → fo***@qq.com
+  function maskEmail(addr) {
+    var s = String(addr || "");
+    var at = s.indexOf("@");
+    if (at < 1) return s;
+    var name = s.slice(0, at);
+    return name.slice(0, name.length <= 2 ? 1 : 2) + "***" + s.slice(at);
+  }
 
   function buildModal() {
     if (mask) return;
@@ -42,10 +56,10 @@ window.SPAuth = (function () {
       '  <div class="sp-modal-head">' +
       '    <div class="sp-logo">📈</div>' +
       '    <h3>登录 / 注册</h3>' +
-      '    <p class="sp-sub">手机号验证码登录，未注册将自动创建账号</p>' +
+      '    <p class="sp-sub">邮箱验证码登录，未注册将自动创建账号</p>' +
       '  </div>' +
       '  <div class="sp-field">' +
-      '    <input id="spPhone" type="tel" maxlength="11" placeholder="请输入手机号" autocomplete="tel">' +
+      '    <input id="spEmail" type="email" maxlength="190" placeholder="请输入邮箱" autocomplete="email" inputmode="email">' +
       '    <button class="sp-code-btn" id="spCodeBtn">获取验证码</button>' +
       '  </div>' +
       '  <div class="sp-field">' +
@@ -57,7 +71,7 @@ window.SPAuth = (function () {
       '</div>';
     document.body.appendChild(mask);
 
-    phoneInput = mask.querySelector("#spPhone");
+    emailInput = mask.querySelector("#spEmail");
     codeInput = mask.querySelector("#spCode");
     codeBtn = mask.querySelector("#spCodeBtn");
     submitBtn = mask.querySelector("#spSubmit");
@@ -69,6 +83,9 @@ window.SPAuth = (function () {
     submitBtn.addEventListener("click", onSubmit);
     codeInput.addEventListener("keydown", function (e) {
       if (e.key === "Enter") onSubmit();
+    });
+    emailInput.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" && !codeBtn.disabled) onSendCode();
     });
   }
 
@@ -95,12 +112,14 @@ window.SPAuth = (function () {
   }
 
   function onSendCode() {
-    var phone = (phoneInput.value || "").trim();
-    if (!/^1[3-9]\d{9}$/.test(phone)) { setMsg("请输入正确的手机号"); return; }
+    var email = (emailInput.value || "").trim().toLowerCase();
+    if (!validEmail(email)) { setMsg("请输入正确的邮箱地址"); return; }
     codeBtn.disabled = true;
-    postJson("/api/auth/send_code", { phone: phone })
+    postJson("/api/auth/send_code", { email: email })
       .then(function (j) {
-        setMsg("验证码已发送", true);
+        // 明确提示去垃圾箱找 —— 邮箱验证码最常见的失败不是没发出去，
+        // 而是发出去了但用户在收件箱里找不到。
+        setMsg("验证码已发送，请查收邮件（也看一下垃圾箱）", true);
         startCooldown(j.cooldown || 60);
         codeInput.focus();
       })
@@ -111,12 +130,12 @@ window.SPAuth = (function () {
   }
 
   function onSubmit() {
-    var phone = (phoneInput.value || "").trim();
+    var email = (emailInput.value || "").trim().toLowerCase();
     var code = (codeInput.value || "").trim();
-    if (!/^1[3-9]\d{9}$/.test(phone)) { setMsg("请输入正确的手机号"); return; }
+    if (!validEmail(email)) { setMsg("请输入正确的邮箱地址"); return; }
     if (!/^\d{6}$/.test(code)) { setMsg("请输入 6 位验证码"); return; }
     submitBtn.disabled = true;
-    postJson("/api/auth/login", { phone: phone, code: code })
+    postJson("/api/auth/login", { email: email, code: code })
       .then(function (j) {
         currentUser = j.user;
         renderSlot();
@@ -134,7 +153,7 @@ window.SPAuth = (function () {
     setMsg("");
     submitBtn.disabled = false;
     mask.hidden = false;
-    phoneInput.focus();
+    emailInput.focus();
   }
 
   function close() {
@@ -150,7 +169,7 @@ window.SPAuth = (function () {
     var slot = document.getElementById("spAuthSlot");
     if (!slot) return;
     if (currentUser) {
-      var masked = String(currentUser.phone).replace(/(\d{3})\d{4}(\d{4})/, "$1****$2");
+      var masked = maskEmail(currentUser.email);
       slot.innerHTML =
         '<span class="sp-auth-btn nav-btn" id="spAcct">' + esc(masked) + '</span>';
       slot.querySelector("#spAcct").addEventListener("click", function () {
