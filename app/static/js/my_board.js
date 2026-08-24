@@ -477,7 +477,7 @@
     });
   }
 
-  document.addEventListener("click", function () { closeAllPops(null); closeAddMenu(); closeGuestMenu(); });
+  document.addEventListener("click", function () { closeAllPops(null); closeAddMenu(); });
 
   /* ── 多股对比卡片(同时对比多支股票/指数区间涨跌幅曲线) ──────────────────
      卡片本身比行情卡片大一圈(见 CSS .mb-compare-card),方便看清多条曲线;
@@ -1074,56 +1074,21 @@
   var saveTimer = null;
   var zCounter = 100;       // 每次拖拽/缩放递增,保证"最后操作的卡片在最上层"
 
-  // 进页面时的身份。拿它是为了在保存被拒(403)时能说对话 —— 三种情况的原因
-  // 完全不同:登录态中途失效 / 连访客标识都识别不到 / 跨站请求被拦。
-  // scope 见后端 my_board/service.py:user | site_default | ip | ephemeral
-  // ("ip" 是匿名访客私有的那一档,后端实际按 sp_sid cookie 存,取不到才退回 IP)
+  // 进页面时的身份,决定要不要发保存请求、以及提示条说什么话。
+  // scope 见后端 my_board/service.py:user | site_default | guest
   var wasLoggedIn = false;
-  var boardScope = "ip";
-  var canPreview = false;   // 管理白名单 IP 才为真,决定显不显示"访客看板"入口
-
-  /* ── 维护者只读预览访客看板 ─────────────────────────────────────────────
-     预览目标存在 sessionStorage 而不是 URL 里:访客标识(浏览器 sid 或 IP)
-     不该进浏览器历史、分享出去的链接、以及外链的 Referer。换 tab 就是独立的
-     一次预览,关掉即失效,刷新则保持 —— 正好是 sessionStorage 的语义。
-     变量名里的 "ip" 是按 IP 存那会儿留下的,现在装的是后端给的存储键。 */
-  var PREVIEW_KEY = "mbPreviewIp";
-  var previewIp = "";
-  try { previewIp = sessionStorage.getItem(PREVIEW_KEY) || ""; } catch (e) { /* 隐私模式下读不了,当作没预览 */ }
-
-  function enterPreview(ip) {
-    try { sessionStorage.setItem(PREVIEW_KEY, ip); } catch (e) { /* 存不下就退化成只在本次加载里生效 */ }
-    previewIp = ip;
-    window.location.reload();
-  }
-
-  // keepPage=true 用于"预览目标已经打不开了"的兜底:清掉状态但不刷新,
-  // 让本次加载直接退回自己的看板,不然会变成刷新一次才看到东西。
-  function exitPreview(keepPage) {
-    try { sessionStorage.removeItem(PREVIEW_KEY); } catch (e) { /* 忽略 */ }
-    previewIp = "";
-    if (!keepPage) window.location.reload();
-  }
+  var boardScope = "guest";
+  // 能不能落库(后端 can_save)。未登录访客为 false —— 卡片照样能拖能缩放
+  // (纯前端状态),只是一次请求都不发:与其让人拖完半天再弹一次失败,
+  // 不如进来就用提示条讲清楚。
+  var canSave = false;
 
   function fetchBoard() {
-    var url = "/api/my_board/layout" +
-      (previewIp ? "?as_ip=" + encodeURIComponent(previewIp) : "");
-    return fetch(url)
-      .then(function (r) {
-        // 预览打不开(那行被保留策略清了 / 自己掉出白名单):退回自己的看板,
-        // 别把页面卡在一个空预览上
-        if (previewIp && !r.ok) {
-          exitPreview(true);
-          showToast("这份访客看板已经不在了，已退回你自己的看板", 6000);
-          return fetch("/api/my_board/layout").then(function (r2) {
-            return r2.ok ? r2.json() : { layout: {} };
-          });
-        }
-        return r.ok ? r.json() : { layout: {} };
-      })
+    return fetch("/api/my_board/layout")
+      .then(function (r) { return r.ok ? r.json() : { layout: {} }; })
       .then(function (j) {
         wasLoggedIn = !!j.logged_in;
-        canPreview = !!j.can_preview;
+        canSave = !!j.can_save;
         if (j.scope) boardScope = j.scope;
         return j.layout || {};
       })
@@ -1156,21 +1121,18 @@
 
   // 403 是身份问题、重试多少次都一样,所以本次会话直接停掉保存:卡片照样能拖
   // 能缩放(纯前端状态),只是不落库。和真正的保存失败区分开,别反复弹错。
-  // 正常访客现在存的是自己那一份,不会再撞 403 —— 只剩会话失效、连 sp_sid
-  // 和 IP 都拿不到、跨站请求这几种边角情况。
+  // 未登录访客根本不会走到这里(canSave=false,压根不发请求),剩下的只有
+  // "登录态中途失效"和跨站请求被拦这两种边角情况。
   var saveForbidden = false;
 
   function forbiddenMessage() {
     if (wasLoggedIn) return "登录状态已失效，布局无法保存。请重新登录后再调整。";
-    if (boardScope === "ephemeral") {
-      return "识别不到你的身份（浏览器禁用了 Cookie？），布局无法保存。你的调整本次浏览有效，刷新后恢复。";
-    }
     return "布局无法保存。你的调整本次浏览有效，刷新后恢复。";
   }
 
   function doSaveBoard() {
-    // 预览的是别人那一份,后端也没有写它的接口 —— 拖动只是本地把玩,不落库
-    if (previewIp || saveForbidden) return Promise.resolve();
+    // 未登录 / 已知没权限:纯本地把玩,一次请求都不发
+    if (!canSave || saveForbidden) return Promise.resolve();
     return fetch("/api/my_board/layout", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1182,18 +1144,12 @@
         showToast(forbiddenMessage(), 6000);
         return;
       }
-      // 429 是暂时的(同一 IP 短时间内新建了太多访客布局),别像 403 那样
-      // 把本次会话的保存停掉 —— 继续拖动就是下一次重试。
-      if (r.status === 429) {
-        showToast("保存过于频繁，稍后继续调整会自动重试。", 5000);
-        return;
-      }
       if (!r.ok) notifySaveError();
     }).catch(function () { /* 网络抖动是暂时的,静默,下次保存自然重试 */ });
   }
 
   function queueSaveBoard() {
-    if (previewIp) return;
+    if (!canSave) return;
     clearTimeout(saveTimer);
     saveTimer = setTimeout(function () {
       saveTimer = null;
@@ -1204,7 +1160,7 @@
   // 防抖计时器还没触发时用户就关闭/切走页面,会丢最后一次拖动/切换/增删 ——
   // 页面隐藏前用 sendBeacon 补发一次(不受页面卸载影响,比 fetch 更可靠)。
   function flushSaveBoard() {
-    if (previewIp) return;       // 预览态压根没排过保存,这里也别用 beacon 补发
+    if (!canSave) return;        // 未登录压根没排过保存,这里也别用 beacon 补发
     if (saveTimer == null) return;
     clearTimeout(saveTimer);
     saveTimer = null;
@@ -1493,6 +1449,8 @@
       btn.disabled = true;
       clearTimeout(saveTimer);   // 丢弃还没发出的旧防抖保存,避免它在重置之后又把布局改回去
       saveTimer = null;
+      // 未登录本来就什么都没存过,刷新即回到默认 —— 不必白打一次注定 403 的请求
+      if (!canSave) { window.location.reload(); return; }
       fetch("/api/my_board/layout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1705,96 +1663,31 @@
     });
   }
 
-  /* ── "访客看板"清单(只有管理白名单 IP 看得到) ───────────────────────── */
-
-  function guestListHtml(data) {
-    var items = (data && data.items) || [];
-    if (!items.length) return '<div class="mb-gp-note">还没有访客存过自己的看板</div>';
-    var html = '<div class="mb-add-label">访客看板（只读）</div>';
-    items.forEach(function (it) {
-      // 预览要用库里的键原文(data-preview-ip),但屏幕上显示的是后端处理过的
-      // label —— sid 那种 32 位十六进制既没信息量,又是能冒充该访客的令牌。
-      var ip = it.ip_key || "";
-      var label = it.label || ip;
-      html += '<button type="button" class="mb-add-item" data-preview-ip="' + esc(ip) + '">' +
-        '<span class="mb-gp-ip">' + esc(label) + "</span>" +
-        '<span class="mb-gp-meta">' + (it.cards || 0) + " 张卡片 · " + esc(it.updated_at || "") +
-        "</span></button>";
-    });
-    var total = data.total || items.length;
-    if (total > items.length) {
-      html += '<div class="mb-gp-note">共 ' + total + " 份，这里只列最近 " + items.length + " 份</div>";
-    }
-    return html;
-  }
-
-  function openGuestMenu() {
-    closeAllPops(null);
-    closeAddMenu();
-    var pop = $("mbGuestPop");
-    if (!pop) return;
-    // 现拉现渲染:访客随时在存新的布局,缓存一份旧清单没意义
-    pop.innerHTML = '<div class="mb-gp-note">加载中…</div>';
-    pop.hidden = false;
-    fetch("/api/my_board/layouts")
-      .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (j) {
-        pop.innerHTML = j ? guestListHtml(j) : '<div class="mb-gp-note">清单加载失败，稍后再试</div>';
-      })
-      .catch(function () {
-        pop.innerHTML = '<div class="mb-gp-note">清单加载失败，稍后再试</div>';
-      });
-  }
-
-  function closeGuestMenu() {
-    var p = $("mbGuestPop");
-    if (p) p.hidden = true;
-  }
-
-  function bindGuestBoards() {
-    var btn = $("mbGuestBoards"), pop = $("mbGuestPop");
-    if (!btn || !pop) return;
-    btn.addEventListener("click", function (e) {
-      e.stopPropagation();
-      if (pop.hidden) openGuestMenu(); else closeGuestMenu();
-    });
-    pop.addEventListener("click", function (e) {
-      e.stopPropagation();
-      var item = e.target.closest("[data-preview-ip]");
-      if (!item) return;
-      var ip = item.getAttribute("data-preview-ip");
-      if (ip && ip !== previewIp) enterPreview(ip);
-      else closeGuestMenu();
-    });
-    var exit = $("mbExitPreview");
-    if (exit) exit.addEventListener("click", function () { exitPreview(false); });
-  }
-
-  // 按身份和预览态调整工具栏与提示条。
-  // 预览态下那几个按钮全是"改布局"的入口,留着只会让人以为改动存下去了;
-  // "重置布局"更要藏 —— 它 POST 的是一份空布局,而 POST 从来只认自己的身份,
-  // 看着别人的看板按下去,删掉的是自己那一份。要改,先退出预览。
+  // 按身份调整提示条。
+  // 两条提示条互斥,而且都只在"这一份布局不是你以为的那一份"时才出现:
+  //   site_default —— 白名单 IP 未登录,拖的是全站默认(所有人的初始画布)
+  //   guest        —— 未登录访客,怎么拖都不落库
+  // 登录用户两条都不显示 —— 存自己那一份是默认预期,不需要解释。
   function applyBoardChrome() {
-    var wrap = $("mbGuestWrap");
-    if (wrap) wrap.hidden = !canPreview;
-
-    ["mbAddCard", "mbTidyLayout", "mbResetLayout"].forEach(function (id) {
-      var el = $(id);
-      if (el) el.hidden = !!previewIp;
-    });
-
-    // 维护者(白名单 IP 未登录)拖的是全站默认布局 —— 改动会成为所有新访客的
-    // 初始画布,不提示的话很容易在不知情的情况下改掉。预览别人看板时不算,
-    // 那种情况下本来就什么都存不下去。
     var siteBar = $("mbSiteDefaultBar");
-    if (siteBar) siteBar.hidden = !(boardScope === "site_default" && !previewIp);
+    if (siteBar) siteBar.hidden = (boardScope !== "site_default");
 
-    var bar = $("mbPreviewBar");
-    if (!bar) return;
-    if (!previewIp) { bar.hidden = true; return; }
-    var ipEl = $("mbPreviewIp");
-    if (ipEl) ipEl.textContent = previewIp;
-    bar.hidden = false;
+    var guestBar = $("mbGuestBar");
+    if (guestBar) guestBar.hidden = canSave;
+  }
+
+  // 提示条上的"登录后保存"：走全站共用的登录弹窗，登录成功后重新加载 ——
+  // 身份变了,该读的是这个账号自己那一份布局,而不是把当前画布顺手存过去
+  // (那会把访客随手拖出来的样子当成他的初始看板)。
+  function bindGuestLogin() {
+    var btn = $("mbGuestLogin");
+    if (!btn) return;
+    btn.addEventListener("click", function () {
+      if (!window.SPAuth) return;
+      window.SPAuth.requireLogin().then(function (u) {
+        if (u) window.location.reload();
+      });
+    });
   }
 
   /* ── 入口 ──────────────────────────────────────────────────────────── */
@@ -1813,7 +1706,7 @@
     bindResetButton();
     bindTidyButton();
     bindAddMenu();
-    bindGuestBoards();
+    bindGuestLogin();
     grid.addEventListener("click", function (e) {
       var btn = e.target.closest("[data-remove-card]");
       if (!btn) return;

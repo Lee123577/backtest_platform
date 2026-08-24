@@ -159,16 +159,6 @@ TASKS: Dict[str, TaskDef] = {
         "description": "补齐 stock_finance 缺失字段(每月 8 号 04:30,仅补缺口)",
     },
     # 访客看板保留策略:每天 04:20 兜一次底。
-    # 清理原本只在 save_ip_layout 里顺带触发(每进程每小时一次),前提是"一直有人
-    # 在存布局"—— 而真实情况是访客量小、可能整天没人保存,于是 180 天/2 万行的
-    # 策略实际上从不执行。两条 DELETE 而已,每天跑没有负担。
-    "purge_board_layouts": {
-        "cmd": ["python", "scripts/purge_board_layouts.py"],
-        "schedule": "daily:04:20",
-        "timeout_sec": 10 * 60,
-        "depends_on": None,
-        "description": "清理过期的访客看板布局(每天 04:20)",
-    },
     # 个股 AI 报告:18:10 按成交额挑最活跃的 50 只预生成。
     # 排在 daily_review(17:45)之后 —— 两个都要调 DeepSeek,岔开跑避免撞在
     # 一起触发频率限制。依赖 daily_update:当日 K 线没入库,快照就是昨天的。

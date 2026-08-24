@@ -100,31 +100,7 @@ body.spx-shell .site-footer.mb-footer { max-width: none; margin-top: 24px; }
   line-height: 1.6;
 }
 
-/* 管理员看访客看板:清单弹层 + 预览横幅。清单可能有几十上百条,给个高度上限
-   自己滚,别把工具栏底下顶出一整屏。 */
-.mb-guest-pop {
-  min-width: 240px;
-  max-height: 320px;
-  overflow-y: auto;
-}
-.mb-gp-ip {
-  display: block;
-  font-size: 13px;
-  color: var(--txt, #24292f);
-  word-break: break-all;      /* IPv6 的 /64 前缀比弹层还宽,断行不撑破 */
-}
-.mb-gp-meta {
-  display: block;
-  font-size: 11px;
-  color: var(--txt2, #8a929c);
-  margin-top: 2px;
-}
-.mb-gp-note {
-  font-size: 12px;
-  color: var(--txt2, #8a929c);
-  padding: 10px;
-  line-height: 1.6;
-}
+/* 页面顶部的身份提示条(编辑全站默认 / 未登录不保存)。两条互斥,同一套骨架。 */
 .mb-preview-bar {
   display: flex;
   align-items: center;
@@ -143,14 +119,18 @@ body.spx-shell .site-footer.mb-footer { max-width: none; margin-top: 24px; }
 .mb-preview-bar[hidden] { display: none; }
 .mb-preview-bar b { word-break: break-all; }
 
-/* 编辑全站默认布局时的提示。用警示黄而不是蓝 —— 蓝色跟"预览中"那条太像,
-   而这两件事的后果完全不同:预览改不动任何东西,这里改的是所有新访客看到的画布。 */
+/* 编辑全站默认布局时的提示。用警示黄而不是蓝 —— 这里改的是所有人打开看板
+   时看到的初始画布,后果比"你自己的布局存不下"重得多,值得更醒目的一档。 */
 .mb-site-bar {
   border-color: #d4a72c;
   border-left-color: #bf8700;
   background: #fff8c5;
   color: #24292f;
 }
+
+/* 未登录访客:布局不落库。用中性蓝(.mb-preview-bar 的默认色)就够 ——
+   这不是警告,是一句说明 + 一个注册入口,不该比"改全站默认"更刺眼。 */
+.mb-guest-bar .mb-reset-btn { flex: none; }
 
 /* 自由拖拽画布:JS 给 .mb-grid 加 mb-canvas-mode 后,卡片改为绝对定位,
    可以自由拖动摆放(横向/纵向比对);高度由 JS 按内容动态写入 style.height。
