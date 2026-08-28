@@ -1,16 +1,22 @@
 """
-数据看板布局 —— 只有登录用户能保存,访客只读全站默认布局。
+数据看板布局 —— 按登录账号存,未登录的所有人共用同一份只读配置。
 
-两种可写归属(scope),读写用的是同一套判定,所见即所存:
+两档身份,读写用的是同一套判定,所见即所存:
 
-  user          已登录     → user_board_layout 里自己那一行,自由保存
-  site_default  白名单 IP   → user_board_layout 的 user_id=0 那一行,也就是
-                             全站默认布局。维护者摆好的样子 = 所有人打开
-                             看板时看到的初始画布。
+  user   已登录  → user_board_layout 里自己那一行,拖完自动保存
+  guest  未登录  → 统一读同一份"初始配置"。拖动/增删在本次浏览里照常生效
+                  (不然连试都试不了),但一律不落库,刷新即回到初始状态。
+                  前端常驻一条提示把这件事说在前头,别让人拖了半天才发现。
 
-  guest         普通访客    → 只读全站默认布局。拖动/增删在本次浏览里照常
-                             生效(不然连试都试不了),但一律不落库,刷新即回到
-                             默认。前端会常驻一条"登录后才会保存"的提示。
+那份"初始配置"是**管理员账号自己的看板**(ADMIN_EMAILS,见 app/auth/admin.py)。
+管理员摆好自己的看板,新访客第一眼看到的就是这一份 —— 不再有独立的"全站默认"
+概念要单独维护。管理员还没注册/还没存过,就回退到 user_id=0 那一行(历史遗留的
+全站默认),所以换过来的过程中访客看到的东西不会突然变空。
+
+**为什么不再有"维护者"这一档**:以前维护者是**白名单 IP + 未登录**才成立的身份,
+写的是 user_id=0 那一行。管理身份改成登录账号之后这个组合不可能再出现(管理员
+必然是登录态),这一档就只剩下"谁也进不来的死代码"。索性合并:管理员的看板就是
+访客看到的那份。
 
 **为什么去掉按访客存的那一档**:此前未登录访客各自按 sp_sid cookie(更早是 IP)
 在 board_layout_by_ip 里占一行。那是"平台一个登录用户都没有"时的权宜之计 ——
@@ -51,10 +57,8 @@ from . import db
 logger = logging.getLogger(__name__)
 
 SCOPE_USER = "user"
-SCOPE_SITE = "site_default"
-# 未登录且不在白名单:读全站默认布局的只读副本,写一律拒绝。绝不能让它退回去
-# 写全站默认那一行 —— 那是本模块一直在防的内容投毒面(任何路人都能改掉所有人
-# 看到的初始画布)。
+# 未登录:读初始配置的只读副本,写一律拒绝。绝不能让它退回去写任何共享的那一行 ——
+# 那是本模块一直在防的内容投毒面(任何路人都能改掉所有人看到的初始画布)。
 SCOPE_GUEST = "guest"
 
 MAX_CARDS = 10   # 与前端 my_board.js 的 MAX_BOARD_CARDS 保持一致
@@ -88,46 +92,40 @@ class LayoutForbidden(Exception):
     pass
 
 
-def _key_for(user: Optional[Dict[str, Any]]) -> int:
-    """写入用的行键:登录用户是自己的 id,维护者是 0(全站默认那一行)。"""
-    return int(user["id"]) if user else db.GUEST_USER_ID
+def resolve_scope(user: Optional[Dict[str, Any]]) -> str:
+    """定位这次请求该读写哪一份布局。登录即自己那一份,否则只读。"""
+    return SCOPE_USER if user is not None else SCOPE_GUEST
 
 
-def resolve_scope(
-    user: Optional[Dict[str, Any]],
-    is_site_editor: bool,
-) -> str:
-    """定位这次请求该读写哪一份布局。
+def _initial_layout() -> Dict[str, Any]:
+    """未登录访客统一看到的那一份,也是新用户的开局模板。
 
-    判定顺序是固定的:登录态最可信,其次是白名单(维护者改的是全站默认),
-    其余一律是只读访客。登录优先于白名单 —— 维护者自己登录之后拖的是他
-    自己那一份,不会顺手把全站默认改掉。
+    优先取管理员账号自己的看板 —— 管理员摆好的样子就是新人第一眼看到的样子。
+    取不到(没配 ADMIN_EMAILS / 管理员还没注册 / 他还没存过看板 / DB 抖)就回退到
+    user_id=0 那一行,即换成账号制之前的全站默认,不会突然变成空画布。
     """
-    if user is not None:
-        return SCOPE_USER
-    if is_site_editor:
-        return SCOPE_SITE
-    return SCOPE_GUEST
+    try:
+        from ..auth.admin import admin_user_ids
+        for uid in sorted(admin_user_ids()):
+            saved = db.load_layout(uid)
+            if saved:
+                return saved
+    except Exception as e:
+        logger.info("取管理员看板作为初始配置失败,回退全站默认: %s", e)
+    return db.load_layout(db.GUEST_USER_ID) or {}
 
 
-def get_layout(
-    user: Optional[Dict[str, Any]] = None,
-    is_site_editor: bool = False,
-) -> Dict[str, Any]:
-    """取这次请求该看到的布局。
-
-    登录用户读自己那一行;其余(维护者和访客)读的都是 user_id=0 的全站默认 ——
-    维护者是要编辑它,访客是拿它当只读画布,两者读到的内容本来就该一样。
-    """
+def get_layout(user: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """取这次请求该看到的布局。"""
     db.ensure_tables()
-    if resolve_scope(user, is_site_editor) == SCOPE_USER:
+    if user is not None:
         saved = db.load_layout(int(user["id"]))
-        # 没存过 → 拿全站默认当开局模板。新注册的人第一次打开看板,看到的
+        # 没存过 → 拿初始配置当开局模板。新注册的人第一次打开看板,看到的
         # 应该还是他刚才作为访客看到的那份画布,而不是突然变成另一个样子;
         # 存过一份空的是另一回事(主动重置),要尊重。
         if saved is not None:
             return saved
-    return db.load_layout(db.GUEST_USER_ID) or {}
+    return _initial_layout()
 
 
 def _clean_positions(positions: Any) -> Dict[str, Any]:
@@ -246,7 +244,6 @@ def _clean_cards(cards: Any) -> List[Dict[str, str]]:
 def save_layout(
     user: Optional[Dict[str, Any]],
     layout: Dict[str, Any],
-    is_site_editor: bool = False,
 ) -> None:
     if not isinstance(layout, dict):
         raise LayoutError("布局格式不对")
@@ -261,11 +258,11 @@ def save_layout(
         clean = _clean_positions(layout)
 
     db.ensure_tables()
-    if resolve_scope(user, is_site_editor) == SCOPE_GUEST:
+    if user is None:
         raise LayoutForbidden("登录后才能保存看板布局")
-    # 走到这里只剩两种身份,写的都是 user_board_layout:登录用户写自己那一行,
-    # 白名单维护者写 user_id=0(全站默认)。
-    key = _key_for(user)
+    # 走到这里只剩登录用户一种身份,写的永远是他自己那一行 —— 没有任何路径
+    # 能让一个请求写到别人或共享的行上。
+    key = int(user["id"])
     if not clean:
         # 前端"重置布局"发的就是一份空 layout({})。删掉这一行,下次打开回退到
         # 全站默认 —— 这才是"重置为默认"该有的意思。存一份空的会让人重置完

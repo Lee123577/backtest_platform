@@ -41,9 +41,8 @@
     <div class="panel-title">
       小市值策略 · 模拟账户
       <span class="tip-badge" id="paramsBadge">仅产出建议，未真实下单</span>
-      <!-- 权限徽章：绿=admin，灰=只读 -->
+      <!-- 权限徽章：绿=管理员账号，灰=只读 -->
       <span class="admin-chip admin-chip-loading" id="adminChip" title="权限状态">检测中…</span>
-      <button class="params-toggle" id="adminMgmtBtn" style="display:none;margin-left:8px">🔑 管理白名单</button>
       <!-- 初始 disabled：事件绑定已提前到数据加载前，靠 applyAdminGuards() 拉起，避免守卫生效前被点开 -->
       <button class="params-toggle" id="paramsToggleBtn" disabled>⚙ 调整策略参数</button>
     </div>
@@ -205,27 +204,6 @@
       <button class="modal-close" id="runDetailCloseBtn">×</button>
     </div>
     <div class="modal-content" id="modalContent">加载中…</div>
-  </div>
-</div>
-
-<!-- 白名单管理弹窗（仅 admin 能打开）-->
-<div id="adminModal" class="modal" style="display:none">
-  <div class="modal-mask" id="adminModalMask"></div>
-  <div class="modal-body">
-    <div class="modal-head">
-      <div class="modal-title">管理 IP 白名单</div>
-      <button class="modal-close" id="adminModalCloseBtn">×</button>
-    </div>
-    <div class="modal-content">
-      <div class="admin-current" id="adminCurrent">当前 IP：—</div>
-      <div class="admin-add-row">
-        <input type="text" id="adminAddIp" placeholder="新增 IP，如 1.2.3.4">
-        <input type="text" id="adminAddNote" placeholder="备注（可选，如 同事电脑）">
-        <button class="params-btn-save" id="adminAddBtn">添加</button>
-      </div>
-      <div class="admin-msg" id="adminMsg"></div>
-      <div id="adminList" class="admin-list">加载中…</div>
-    </div>
   </div>
 </div>
 

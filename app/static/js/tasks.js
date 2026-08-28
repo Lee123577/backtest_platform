@@ -2,18 +2,22 @@
 
 const REFRESH_MS = 30_000;   // 任务状态几分钟才变一次，15s 轮询太激进（配合 N+1 修复前更明显）
 let _timer = null;
-let _adminInfo = { ip: '—', is_admin: false, whitelist_empty: false };
+let _isAdmin = false;
 let _allRuns = [];       // 缓存当前过滤条件下的全量记录，详情弹窗直接复用，避免二次请求
 let _allTasks = [];      // 缓存任务清单，给 schedule 解析 / 下次运行计算用
 
 // ── 权限检测 ────────────────────────────────────────────────────────────────
+// 管理身份来自登录账号(ADMIN_EMAILS),不再是来源 IP。接口只回一个布尔值,
+// 不透出管理员是谁、也不透出名单。
 
 async function loadAdminStatus() {
   try {
-    const res = await fetch('/api/admin/ip/me');
-    _adminInfo = await res.json();
+    const res = await fetch('/api/admin/me');
+    const j = await res.json();
+    _isAdmin = !!j.is_admin;
   } catch (e) {
     console.error('admin status:', e);
+    _isAdmin = false;
   }
   renderAdminChip();
 }
@@ -21,24 +25,22 @@ async function loadAdminStatus() {
 function renderAdminChip() {
   const chip = document.getElementById('adminChip');
   if (!chip) return;
-  if (_adminInfo.is_admin) {
-    chip.textContent = `✓ 管理员 (${_adminInfo.ip})`;
+  if (_isAdmin) {
+    chip.textContent = '✓ 管理员';
     chip.className = 'admin-chip admin-chip-admin';
-    chip.title = '你的 IP 在白名单中，可手动触发任务';
+    chip.title = '当前登录账号是管理员，可手动触发任务';
   } else {
-    chip.textContent = `○ 只读 (${_adminInfo.ip})`;
+    chip.textContent = '○ 只读';
     chip.className = 'admin-chip admin-chip-guest';
-    chip.title = _adminInfo.whitelist_empty
-      ? '白名单为空。首次触发任务的 IP 将被自动加入。'
-      : '你的 IP 不在白名单中，「立即重跑」按钮被禁用。请到实盘观察页通过管理弹窗添加。';
+    chip.title = '当前账号不是管理员，「立即重跑」按钮被禁用。';
   }
 }
 
 // 给每个任务卡片上的「立即重跑」按钮加锁
 function applyAdminGuards() {
-  const lockTip = '你的 IP 不在白名单中，无法触发任务。请联系管理员添加你的 IP。';
+  const lockTip = '当前账号不是管理员，无法触发任务。';
   document.querySelectorAll('.rerun-btn').forEach(btn => {
-    if (_adminInfo.is_admin) {
+    if (_isAdmin) {
       btn.disabled = false;
       btn.removeAttribute('data-locked');
       btn.title = '';
@@ -283,8 +285,8 @@ function closeDetail() {
 }
 
 async function triggerRun(name, btn) {
-  if (!_adminInfo.is_admin) {
-    alert('你的 IP 不在白名单中，无法触发任务。');
+  if (!_isAdmin) {
+    alert('当前账号不是管理员，无法触发任务。');
     return;
   }
   if (!confirm(`确认要立即重跑 ${name} 吗？`)) return;
@@ -292,9 +294,10 @@ async function triggerRun(name, btn) {
   btn.textContent = '提交中…';
   try {
     const res = await fetch(`/api/tasks/${encodeURIComponent(name)}/run`, { method: 'POST' });
-    if (res.status === 403) {
+    if (res.status === 401 || res.status === 403) {
       const d = await res.json().catch(() => ({}));
-      throw new Error(d.detail || 'IP 不在白名单');
+      throw new Error(d.detail ||
+        (res.status === 401 ? '请先登录管理员账号' : '当前账号不是管理员'));
     }
     if (!res.ok) throw new Error(await res.text());
     const data = await res.json();
@@ -510,8 +513,8 @@ function renderTraffic(data) {
 
 async function triggerDailyRefresh() {
   const btn = document.getElementById('dsRefreshAll');
-  if (!_adminInfo.is_admin) {
-    alert('IP 不在白名单，无权限触发。请到「实盘观察」页通过管理弹窗加白名单。');
+  if (!_isAdmin) {
+    alert('当前账号不是管理员，无权限触发。');
     return;
   }
   if (!confirm('将触发 daily_update 全量补齐（K 线 / stock_info / 因子等），约 15-30 分钟。确定？')) return;
@@ -541,21 +544,33 @@ async function triggerDailyRefresh() {
 function renderNoPermission() {
   const main = document.querySelector('main');
   if (!main) return;
+  const loggedIn = !!(window.SPAuth && window.SPAuth.me());
   main.innerHTML = `
     <div class="panel">
       <div class="panel-title">无访问权限</div>
       <div class="no-data" style="padding:32px 0;text-align:center;line-height:1.9;">
-        「定时任务」是运维页面，仅限管理员访问。<br>
-        <span style="font-size:12px;color:#8a929c;">你的 IP：${esc(_adminInfo.ip || '—')}</span>
+        「定时任务」是运维页面，仅限管理员账号访问。<br>
+        <span style="font-size:12px;color:#8a929c;">${
+          loggedIn ? '当前登录的账号没有管理员权限。'
+                   : '你还没有登录。'}</span>
+        ${loggedIn ? '' : '<br><button class="btn" id="noPermLogin" style="margin-top:14px;">登录</button>'}
       </div>
     </div>`;
+  const btn = document.getElementById('noPermLogin');
+  if (btn) {
+    btn.addEventListener('click', () => {
+      // 登录成功后重新走一遍权限判定,不用手动刷新页面
+      if (window.SPAuth) window.SPAuth.requireLogin().then(u => { if (u) load(); });
+    });
+  }
 }
 
 async function load() {
-  // 权限先拉，避免按钮一闪一锁
+  // 权限先拉，避免按钮一闪一锁。
+  // 不再有"白名单为空就放行"的自举分支 —— 管理员名单在 .env 里,漏配的正确
+  // 表现就是谁都进不来,而不是"第一个访问的人成为管理员"。
   await loadAdminStatus();
-  // 白名单为空时放行(全新部署的自举场景，见 admin_ip 模块说明)
-  if (!_adminInfo.is_admin && !_adminInfo.whitelist_empty) {
+  if (!_isAdmin) {
     renderNoPermission();
     return;
   }

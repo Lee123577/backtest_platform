@@ -269,6 +269,16 @@ def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
         return cur.fetchone()
 
 
+def get_user_by_email(email: str) -> Optional[Dict[str, Any]]:
+    """按邮箱取用户(不建号)。管理员名单是邮箱，反查 id 时用。"""
+    conn = _get_pool()
+    if conn is None:
+        return None
+    with conn.cursor() as cur:
+        cur.execute("SELECT * FROM app_user WHERE email=%s", ((email or "").lower(),))
+        return cur.fetchone()
+
+
 def set_display_name(user_id: int, name: Optional[str]) -> None:
     """写昵称。None = 清空，回到按邮箱生成的默认展示名。"""
     conn = _get_pool()

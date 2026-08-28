@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 # ─────────────────────────── 可信代理白名单 ───────────────────────────
 # 安全要点:不能裸信 X-Forwarded-For —— 它是请求方自己写的,谁都能伪造
-# (admin_ip 也用同一函数取 IP,等于把白名单鉴权 bypass 给任何外部客户端)。
+# (访问日志的地域统计、个股报告的按 IP 限额都用同一函数,伪造 XFF 就能绕过)。
 #
 # 配置方式:环境变量 TRUSTED_PROXIES,逗号分隔的 IP 或 CIDR,例如:
 #   TRUSTED_PROXIES="127.0.0.1,10.0.0.0/8,fd00::/8"
@@ -166,7 +166,7 @@ def _client_ip(request: Request) -> str:
     """
     取请求方真实 IP。
       - 直连 IP 在 TRUSTED_PROXIES 内 → 用 XFF/X-Real-IP(反代场景)
-      - 否则一律用直连 IP(防 XFF 伪造绕过 admin_ip 白名单)
+      - 否则一律用直连 IP(防 XFF 伪造绕过按 IP 计的限额/统计)
     """
     direct = (request.client.host
               if request.client and request.client.host
@@ -451,15 +451,24 @@ class VisitLogMiddleware:
         device, os_name, browser = _parse_ua(ua)
         ip = _client_ip(request)[:45]
 
-        # 管理员 IP 不入库：自己用 backtest 平台时频繁刷新 / 触发任务
-        # 会污染 PV/UV 统计。is_admin_cached 走 60s 进程内缓存，几乎零成本
+        # 管理员自己的访问不入库：频繁刷新 / 触发任务会污染 PV/UV 统计。
+        #
+        # 判据从"来源 IP 在白名单里"换成了"这次请求的登录账号是管理员"。
+        # 顺带修掉老判据的一个副作用:按 IP 过滤会把**同一个出口 IP 下的所有人**
+        # 一起从统计里抹掉(家里/公司其他人的真实访问也不算数)。按账号只抹管理员
+        # 自己那一份。代价是管理员退出登录后的访问会照常计入 —— 那本来也确实是
+        # 一次匿名访问。
+        #
+        # user_id 这里就要解出来(下面的 payload 也用同一个值),_resolve_user_id
+        # 自带 5 分钟缓存,不会逐请求打库。
+        user_id = _resolve_user_id(request.cookies.get(_SESSION_COOKIE_NAME))
         try:
-            from .paper_trading.admin_ip import is_admin_cached
-            if is_admin_cached(ip):
+            from .auth.admin import is_admin_user_id
+            if is_admin_user_id(user_id):
                 return
         except Exception as e:
-            # 缓存查询失败不阻塞访问日志正常流程
-            logger.debug("admin 缓存查询失败（忽略）: %s", e)
+            # 判不出来不阻塞访问日志正常流程,最多是多记一条自己的访问
+            logger.debug("管理员判定失败（忽略）: %s", e)
 
         country, region, city, isp = _lookup_geo(ip)
 
@@ -489,9 +498,7 @@ class VisitLogMiddleware:
             "region":  (region[:64] if region else None),
             "city":    (city[:64] if city else None),
             "isp":     (isp[:128] if isp else None),
-            "user_id": _resolve_user_id(
-                request.cookies.get(_SESSION_COOKIE_NAME)
-            ),
+            "user_id": user_id,
             "sid":     sid,
         }
         for col in ("utm_source", "utm_medium", "utm_campaign"):

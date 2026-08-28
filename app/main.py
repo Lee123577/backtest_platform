@@ -65,7 +65,7 @@ from .data import stock_search
 from .engine.backtest import calc_benchmark, run_backtest
 from .engine.portfolio_backtest import run_portfolio_backtest
 from .engine.robustness import compute_oos_split, compute_param_sensitivity
-from .paper_trading import admin_ip as paper_admin_ip
+from .auth.admin import get_admin, require_admin
 from .paper_trading import db as paper_db
 from .scheduler import db as scheduler_db
 from .scheduler import registry as scheduler_registry
@@ -1168,7 +1168,7 @@ class StrategyParamsPatch(BaseModel):
 @app.post("/api/paper_trading/strategy_params")
 def api_paper_update_strategy_params(
     patch: StrategyParamsPatch,
-    admin: str = Depends(paper_admin_ip.require_admin_ip),
+    admin: dict = Depends(require_admin),
 ):
     """
     保存策略参数。校验范围后 merge 到 paper_account.strategy_params。
@@ -1286,7 +1286,7 @@ def api_tasks_summary():
 def api_tasks_runs(
     task: Optional[str] = None, status: Optional[str] = None,
     limit: int = 30, offset: int = 0,
-    _admin: str = Depends(paper_admin_ip.require_admin_ip),
+    _admin: dict = Depends(require_admin),
 ):
     """运行明细仅管理员可读:内含 stdout/stderr 尾巴与报错细节，不对外。
     (/api/tasks/summary 保持公开 —— 实盘观察页要用它显示扫描状态徽章)"""
@@ -1326,7 +1326,7 @@ def api_tasks_runs(
 def api_tasks_run(
     name: str,
     force: bool = False,
-    admin: str = Depends(paper_admin_ip.require_admin_ip),
+    admin: dict = Depends(require_admin),
 ):
     """
     手动触发一个任务。
@@ -1403,78 +1403,24 @@ async def page_tasks_legacy_redirect():
     return RedirectResponse("/admin/tasks", status_code=307)
 
 
-# ── 管理员 IP 白名单 ──────────────────────────────────────────────────────────
-# 实盘观察 / 定时任务页的所有"写"操作（改策略参数、手动触发任务、增删 IP）
-# 都受白名单保护。读操作（GET）全部公开。
+# ── 管理员身份 ────────────────────────────────────────────────────────────────
+# 实盘观察 / 定时任务页的所有"写"操作(改策略参数、手动触发任务)以及运维数据
+# 的读取,都要求**管理员账号**登录(ADMIN_EMAILS,见 app/auth/admin.py)。
+# 普通读接口(GET)照常公开。
+#
+# 这里原本是一整套 IP 白名单的增删改查(/api/admin/ip 四个端点 + 首次访问自举)。
+# 换成账号之后那些全没了:管理员名单在 .env 里,加人靠改配置重启,不该有一个
+# 能从公网改动"谁是管理员"的接口 —— 那正是这类系统最值钱的攻击目标。
 
-class AdminIpAddRequest(BaseModel):
-    ip: str
-    note: Optional[str] = None
 
+@app.get("/api/admin/me")
+def api_admin_me(request: Request):
+    """公开端点:当前登录账号是不是管理员。前端据此决定显不显示运维入口。
 
-@app.get("/api/admin/ip/me")
-def api_admin_ip_me(request: Request):
+    不透出管理员名单,也不区分"没登录"和"登录了但不是管理员" —— 对外只有
+    一个布尔值。想知道自己是不是管理员的人,登录一下就知道了。
     """
-    公开端点：返回当前请求 IP 和它是否在白名单。前端用它决定按钮禁不禁用。
-    DB 未就绪时降级到只返回 IP，is_admin=False。
-    """
-    ip = paper_admin_ip.get_request_ip(request)
-    try:
-        paper_admin_ip.ensure_table()
-    except Exception as e:
-        return {"ip": ip, "is_admin": False, "whitelist_empty": True,
-                "error": f"DB 未就绪：{e}"}
-    # 这是全站访问量最高的接口之一（几乎每次翻页都会调），改用 60s TTL 的
-    # 进程内缓存，同一份缓存顺带算出 whitelist_empty，不再各查一次 DB
-    return {
-        "ip": ip,
-        "is_admin": paper_admin_ip.is_admin_cached(ip),
-        "whitelist_empty": paper_admin_ip.whitelist_empty_cached(),
-    }
-
-
-@app.get("/api/admin/ip")
-def api_admin_ip_list(admin: str = Depends(paper_admin_ip.require_admin_ip)):
-    """列出全部白名单 IP（仅 admin 可见）。"""
-    return {
-        "current_ip": admin,
-        "ips": _json_safe(paper_admin_ip.list_ips()),
-    }
-
-
-@app.post("/api/admin/ip")
-def api_admin_ip_add(
-    payload: AdminIpAddRequest,
-    admin: str = Depends(paper_admin_ip.require_admin_ip),
-):
-    """添加 IP 到白名单（仅 admin）。"""
-    try:
-        paper_admin_ip.add_ip(payload.ip, payload.note or "", admin)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    return {"ok": True, "ip": payload.ip}
-
-
-@app.delete("/api/admin/ip/{ip}")
-def api_admin_ip_delete(
-    ip: str,
-    admin: str = Depends(paper_admin_ip.require_admin_ip),
-):
-    """
-    从白名单删除 IP（仅 admin）。
-    安全保护：
-      - 不允许在只剩自己的情况下删除自己 → 会把自己锁在外面
-      - 允许 admin 删除其他 IP（包括同事的 IP，由 admin 自行负责）
-    """
-    if ip == admin and paper_admin_ip.count_ips() <= 1:
-        raise HTTPException(
-            400, "不能删除最后一个白名单 IP（会把自己锁在外面）。"
-                 "请先添加另一个 IP 再删除当前 IP。"
-        )
-    removed = paper_admin_ip.remove_ip(ip)
-    if not removed:
-        raise HTTPException(404, f"IP {ip} 不在白名单中")
-    return {"ok": True, "ip": ip}
+    return {"is_admin": get_admin(request) is not None}
 
 
 # ── 旧分组：paper trading equity ──────────────────────────────────────────────

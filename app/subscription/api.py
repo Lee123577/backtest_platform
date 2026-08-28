@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from ..auth.deps import get_current_user, require_login
-from ..paper_trading import admin_ip as paper_admin_ip
+from ..auth.admin import require_admin
 from . import db, service
 
 logger = logging.getLogger(__name__)
@@ -81,9 +81,9 @@ def _record_event(event: str, user: dict, request: Request, meta=None) -> None:
 def dev_activate(
     req: DevActivateReq,
     request: Request,
-    _admin: str = Depends(paper_admin_ip.require_admin_ip),
+    _admin: dict = Depends(require_admin),
 ):
-    """仅管理员 IP：把指定订单标记为已支付并开通会员(QQ 人工开通的履约动作)。"""
+    """仅管理员账号：把指定订单标记为已支付并开通会员(QQ 人工开通的履约动作)。"""
     try:
         activated, order = service.fulfill_order(req.order_no, trade_no="MANUAL-QQ")
     except service.SubscriptionError as e:

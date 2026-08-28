@@ -31,7 +31,7 @@
 
 <main class="mb-main">
   <div class="mb-hint-row">
-    <div class="mb-hint">行情走势、多股对比、板块排行、复盘摘要等卡片自由组合的个人看板（数据来自本站行情库，仅供研究，不构成投资建议）· 卡片可拖动、缩放、增删；登录后布局按账号自动保存</div>
+    <div class="mb-hint">行情走势、多股对比、板块排行、复盘摘要等卡片自由组合的个人看板（数据来自本站行情库，仅供研究，不构成投资建议）· 卡片可拖动、缩放、增删；登录后布局按账号自动保存，未登录仅能试玩不保存</div>
     <div class="mb-add-wrap">
       <button type="button" class="mb-add-btn" id="mbAddCard">+ 添加卡片</button>
       <div class="mb-add-pop" id="mbAddPop" hidden></div>
@@ -39,14 +39,13 @@
     <button type="button" class="mb-reset-btn" id="mbTidyLayout" title="按卡片实际大小自动重新排列，消除重叠和空隙">一键整理</button>
     <button type="button" class="mb-reset-btn" id="mbResetLayout">重置布局</button>
   </div>
-  <!-- 白名单 IP 未登录时改的是全站默认布局（新访客的初始画布），得明说 -->
-  <div class="mb-preview-bar mb-site-bar" id="mbSiteDefaultBar" hidden>
-    <span>你正在编辑<b>全站默认布局</b> · 这里的样子就是新访客第一次打开看板时看到的画布</span>
-  </div>
-  <!-- 未登录访客：进来就说清楚，别让人拖了半天才发现存不下（can_save=false） -->
+  <!-- 未登录访客：进来就说清楚，别让人拖了半天才发现存不下（can_save=false）。
+       "统一配置"这句是有意写明的：未登录的所有人看到的是同一份初始画布，
+       不是"你上次留下的那份" —— 不写清楚就会有人以为自己的布局丢了。 -->
   <div class="mb-preview-bar mb-guest-bar" id="mbGuestBar" hidden>
-    <span>未登录 · 你可以随意调整看着玩，但<b>布局不会保存</b>，刷新就回到默认</span>
-    <button type="button" class="mb-reset-btn" id="mbGuestLogin">登录后保存</button>
+    <span>未登录 · 当前是所有访客<b>统一的初始配置</b>，你可以随意拖动试玩，但
+      <b>卡片布局不会保存</b>，刷新或下次打开都会回到这一份</span>
+    <button type="button" class="mb-reset-btn" id="mbGuestLogin">登录后按账号保存</button>
   </div>
   <div class="mb-grid" id="mbGrid"></div>
 </main>

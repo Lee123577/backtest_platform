@@ -28,15 +28,14 @@ let _lastAccountData = null;  // 最近一次 /account 响应，用于 equity �
 let _lastAccountLoadAt = 0;   // loadAccount 最近一次发起时间，节流 visibilitychange 抢跑
 let _lastScanLoadAt = 0;      // loadScanStatus 同上
 
-// 全局权限状态：load() 时拉一次；admin=true 解锁所有写按钮
-let _adminInfo = { ip: '—', is_admin: false, whitelist_empty: false };
+// 全局权限状态：load() 时拉一次；管理员解锁所有写按钮
+let _isAdmin = false;
 
 async function load() {
   // 事件绑定必须排在所有 await 之前：CSP 收紧后页面已无内联 onclick，
   // 若等数据加载完再绑，慢网络下这段时间全页按钮都是死的；且 applyAdminGuards()
   // 一旦抛异常会跳过后面所有绑定，整页永久失效。绑定不依赖任何数据。
   document.getElementById('paramsToggleBtn').addEventListener('click', toggleParamsEditor);
-  document.getElementById('adminMgmtBtn').addEventListener('click', openAdminModal);
   document.getElementById('paramsCancelBtn').addEventListener('click', cancelParamsEdit);
   document.getElementById('paramsSaveBtn').addEventListener('click', saveParams);
   document.getElementById('scanBtn').addEventListener('click', () => triggerScan());
@@ -47,9 +46,6 @@ async function load() {
   document.getElementById('hideHoldRuns').addEventListener('change', renderRunsFiltered);
   document.getElementById('runDetailMask').addEventListener('click', closeRunDetail);
   document.getElementById('runDetailCloseBtn').addEventListener('click', closeRunDetail);
-  document.getElementById('adminModalMask').addEventListener('click', closeAdminModal);
-  document.getElementById('adminModalCloseBtn').addEventListener('click', closeAdminModal);
-  document.getElementById('adminAddBtn').addEventListener('click', addAdminIp);
 
   // ── 动态渲染内容的事件委托(容器本身是静态的，内容随数据重绘)────────────
   document.getElementById('runsWrap').addEventListener('click', e => {
@@ -66,14 +62,9 @@ async function load() {
   document.getElementById('paramsMsg').addEventListener('click', e => {
     if (e.target.closest('.trigger-scan-link')) { e.preventDefault(); triggerScan(); }
   });
-  document.getElementById('adminList').addEventListener('click', e => {
-    const btn = e.target.closest('.del-btn');
-    if (btn && !btn.disabled) deleteAdminIp(btn.dataset.ip);
-  });
-
   // 先拉权限，再并行加载其它数据 —— 让 UI 尽早正确禁用按钮
   await loadAdminStatus();
-  applyAdminGuards();   // 只依赖 _adminInfo，紧跟其后执行；别压在下面的批量加载之后，
+  applyAdminGuards();   // 只依赖 _isAdmin，紧跟其后执行；别压在下面的批量加载之后，
                         // 否则任一 loader 出问题就会把 paramsToggleBtn 永久锁死
   await Promise.all([
     loadAccount(), loadEquity(), loadRuns(), loadTrades(),
@@ -657,7 +648,7 @@ function renderScanStatus(t) {
     btn.disabled = false;
   }
 
-  // 末尾再叠一次 admin 守门：admin=false 强制锁住，不管 scan 流程怎么说
+  // 末尾再叠一次 admin 守门：非管理员强制锁住，不管 scan 流程怎么说
   applyAdminGuards();
 }
 
@@ -668,7 +659,7 @@ async function triggerScan(force = false) {
   btn.textContent = force ? '强制扫描中…' : '触发中…';
   try {
     const url = '/api/tasks/daily_signal/run' + (force ? '?force=1' : '');
-    // 用 adminFetch：403 抛 Error，避免误显示"已加入队列"假象
+    // 用 adminFetch：401/403 抛 Error，避免误显示"已加入队列"假象
     const res = await adminFetch(url, { method: 'POST' });
     if (!res.ok) {
       const d = await res.json().catch(() => ({}));
@@ -912,48 +903,58 @@ window.toggleParamsEditor = toggleParamsEditor;
 window.cancelParamsEdit   = cancelParamsEdit;
 window.saveParams         = saveParams;
 
-// ── 管理员 IP 白名单：权限检测 + 控件禁用 + 增删管理 ─────────────────────────
+// ── 管理员权限：检测 + 控件禁用 ─────────────────────────────────────────────
+// 管理身份来自登录账号(ADMIN_EMAILS),不再是来源 IP。原先这里还有一整套
+// "增删白名单 IP"的弹窗 —— 管理员名单挪进 .env 之后那套 UI 连同它背后的
+// 四个接口一起删了:不该存在一个能从公网改动"谁是管理员"的入口。
 
 async function loadAdminStatus() {
   try {
-    const res = await fetch('/api/admin/ip/me');
-    _adminInfo = await res.json();
+    const res = await fetch('/api/admin/me');
+    const j = await res.json();
+    _isAdmin = !!j.is_admin;
   } catch (e) {
     console.error('admin status:', e);
-    _adminInfo = { ip: '—', is_admin: false, whitelist_empty: false };
+    _isAdmin = false;
   }
   renderAdminChip();
 }
 
 function renderAdminChip() {
   const chip = document.getElementById('adminChip');
-  const mgmtBtn = document.getElementById('adminMgmtBtn');
   if (!chip) return;
-  if (_adminInfo.is_admin) {
-    chip.textContent = `✓ 管理员 (${_adminInfo.ip})`;
+  if (_isAdmin) {
+    chip.textContent = '✓ 管理员';
     chip.className = 'admin-chip admin-chip-admin';
-    chip.title = '你的 IP 在白名单中，可以编辑参数 / 触发任务';
-    if (mgmtBtn) mgmtBtn.style.display = '';
+    chip.title = '当前登录账号是管理员，可以编辑参数 / 触发扫描';
   } else {
-    chip.textContent = `○ 只读 (${_adminInfo.ip})`;
+    chip.textContent = '○ 只读';
     chip.className = 'admin-chip admin-chip-guest';
-    chip.title = _adminInfo.whitelist_empty
-      ? '白名单为空。首次触发任何写操作的 IP 将被自动加入。'
-      : '你的 IP 不在白名单中，仅可浏览。需要修改请联系管理员添加 IP。';
-    if (mgmtBtn) mgmtBtn.style.display = 'none';
+    chip.title = '当前账号不是管理员，仅可浏览。';
   }
 }
 
-// 把所有写控件禁用 / 启用 —— admin=true 解锁，false 锁住并加 title 提示
+// 包装 fetch，对 401/403 做统一处理（防止后端守门时前端还报谜之错）
+async function adminFetch(url, options) {
+  const res = await fetch(url, options);
+  if (res.status === 401 || res.status === 403) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail ||
+      (res.status === 401 ? '请先登录管理员账号' : '权限不足（当前账号不是管理员）'));
+  }
+  return res;
+}
+
+// 把所有写控件禁用 / 启用 —— 管理员解锁，其余锁住并加 title 提示
 function applyAdminGuards() {
-  const lockTip = '你的 IP 不在白名单中，无法操作。请联系管理员将你的 IP 加入白名单。';
+  const lockTip = '当前账号不是管理员，无法操作。';
   const targets = [
     document.getElementById('paramsToggleBtn'),
     document.getElementById('scanBtn'),
   ];
   for (const el of targets) {
     if (!el) continue;
-    if (_adminInfo.is_admin) {
+    if (_isAdmin) {
       el.disabled = false;
       el.removeAttribute('data-locked');
       el.title = '';
@@ -964,131 +965,6 @@ function applyAdminGuards() {
     }
   }
 }
-
-// 包装 fetch，对 403 做统一处理（防止后端守门时前端还报谜之错）
-async function adminFetch(url, options) {
-  const res = await fetch(url, options);
-  if (res.status === 403) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.detail || '权限不足（IP 不在白名单）');
-  }
-  return res;
-}
-
-// ── 管理弹窗 ────────────────────────────────────────────────────────────────
-
-async function openAdminModal() {
-  if (!_adminInfo.is_admin) return;
-  document.getElementById('adminModal').style.display = '';
-  document.getElementById('adminCurrent').textContent = `当前 IP：${_adminInfo.ip}（管理员）`;
-  document.getElementById('adminMsg').textContent = '';
-  document.getElementById('adminMsg').className = 'admin-msg';
-  document.getElementById('adminAddIp').value = '';
-  document.getElementById('adminAddNote').value = '';
-  await refreshAdminList();
-}
-
-function closeAdminModal() {
-  document.getElementById('adminModal').style.display = 'none';
-}
-
-async function refreshAdminList() {
-  const wrap = document.getElementById('adminList');
-  wrap.innerHTML = '加载中…';
-  try {
-    const res = await adminFetch('/api/admin/ip');
-    const data = await res.json();
-    renderAdminList(data);
-  } catch (e) {
-    wrap.innerHTML = `<div class="admin-msg error">加载失败：${e.message || e}</div>`;
-  }
-}
-
-function renderAdminList(data) {
-  const wrap = document.getElementById('adminList');
-  const ips = data.ips || [];
-  if (!ips.length) {
-    wrap.innerHTML = '<div class="no-data">白名单为空</div>';
-    return;
-  }
-  const onlyOne = ips.length <= 1;
-  wrap.innerHTML = ips.map(r => {
-    const isMe = r.ip === data.current_ip;
-    const cantDelete = isMe && onlyOne;
-    return `
-      <div class="admin-list-row ${isMe ? 'is-me' : ''}">
-        <span class="ip">${r.ip}${isMe ? ' (本机)' : ''}</span>
-        <span class="note">${r.note || '—'}</span>
-        <span class="meta">${r.created_by_ip || '—'} · ${(r.created_at || '').slice(0,16).replace('T',' ')}</span>
-        <button class="del-btn" data-ip="${esc(r.ip)}"
-                ${cantDelete ? 'disabled title="不能删除最后一个白名单 IP"' : ''}>
-          删除
-        </button>
-      </div>`;
-  }).join('');
-}
-
-async function addAdminIp() {
-  const ip = document.getElementById('adminAddIp').value.trim();
-  const note = document.getElementById('adminAddNote').value.trim();
-  const msg = document.getElementById('adminMsg');
-  const btn = document.getElementById('adminAddBtn');
-  msg.textContent = ''; msg.className = 'admin-msg';
-  if (!ip) {
-    msg.textContent = '请输入 IP'; msg.className = 'admin-msg error';
-    return;
-  }
-  btn.disabled = true; btn.textContent = '添加中…';
-  try {
-    const res = await adminFetch('/api/admin/ip', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ip, note }),
-    });
-    if (!res.ok) {
-      const d = await res.json().catch(() => ({}));
-      throw new Error(d.detail || '添加失败');
-    }
-    msg.textContent = `✓ 已添加 ${ip}`; msg.className = 'admin-msg ok';
-    document.getElementById('adminAddIp').value = '';
-    document.getElementById('adminAddNote').value = '';
-    await refreshAdminList();
-  } catch (e) {
-    msg.textContent = `失败：${e.message || e}`; msg.className = 'admin-msg error';
-  } finally {
-    btn.disabled = false; btn.textContent = '添加';
-  }
-}
-
-async function deleteAdminIp(ip) {
-  if (!confirm(`确定要从白名单删除 ${ip} 吗？删除后该 IP 将无法编辑参数 / 触发任务。`)) return;
-  const msg = document.getElementById('adminMsg');
-  msg.textContent = ''; msg.className = 'admin-msg';
-  try {
-    const res = await adminFetch(`/api/admin/ip/${encodeURIComponent(ip)}`, {
-      method: 'DELETE',
-    });
-    if (!res.ok) {
-      const d = await res.json().catch(() => ({}));
-      throw new Error(d.detail || '删除失败');
-    }
-    msg.textContent = `✓ 已删除 ${ip}`; msg.className = 'admin-msg ok';
-    await refreshAdminList();
-    // 如果删的是自己，重新拉一次权限
-    if (ip === _adminInfo.ip) {
-      await loadAdminStatus();
-      applyAdminGuards();
-      closeAdminModal();
-    }
-  } catch (e) {
-    msg.textContent = `失败：${e.message || e}`; msg.className = 'admin-msg error';
-  }
-}
-
-window.openAdminModal  = openAdminModal;
-window.closeAdminModal = closeAdminModal;
-window.addAdminIp      = addAdminIp;
-window.deleteAdminIp   = deleteAdminIp;
 
 // ── 运行详情弹窗 ─────────────────────────────────────────────────────────────
 

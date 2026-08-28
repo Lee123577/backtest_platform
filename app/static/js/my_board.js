@@ -1075,9 +1075,7 @@
   var zCounter = 100;       // 每次拖拽/缩放递增,保证"最后操作的卡片在最上层"
 
   // 进页面时的身份,决定要不要发保存请求、以及提示条说什么话。
-  // scope 见后端 my_board/service.py:user | site_default | guest
   var wasLoggedIn = false;
-  var boardScope = "guest";
   // 能不能落库(后端 can_save)。未登录访客为 false —— 卡片照样能拖能缩放
   // (纯前端状态),只是一次请求都不发:与其让人拖完半天再弹一次失败,
   // 不如进来就用提示条讲清楚。
@@ -1089,7 +1087,6 @@
       .then(function (j) {
         wasLoggedIn = !!j.logged_in;
         canSave = !!j.can_save;
-        if (j.scope) boardScope = j.scope;
         return j.layout || {};
       })
       .catch(function () { return {}; });
@@ -1663,15 +1660,13 @@
     });
   }
 
-  // 按身份调整提示条。
-  // 两条提示条互斥,而且都只在"这一份布局不是你以为的那一份"时才出现:
-  //   site_default —— 白名单 IP 未登录,拖的是全站默认(所有人的初始画布)
-  //   guest        —— 未登录访客,怎么拖都不落库
-  // 登录用户两条都不显示 —— 存自己那一份是默认预期,不需要解释。
+  // 按身份调整提示条:只有未登录访客需要那一条 —— 他拖的东西不落库,
+  // 而且看到的是所有人共用的那一份,不说清楚就会被误解成"我的布局丢了"。
+  // 登录用户不显示任何提示 —— 存自己那一份是默认预期,不需要解释。
+  //
+  // 以前还有一条"你正在编辑全站默认布局"给白名单 IP 用,随 IP 管理员方案
+  // 一起删了:管理员现在是登录态,拖的就是自己那一份(那份同时也是访客看到的)。
   function applyBoardChrome() {
-    var siteBar = $("mbSiteDefaultBar");
-    if (siteBar) siteBar.hidden = (boardScope !== "site_default");
-
     var guestBar = $("mbGuestBar");
     if (guestBar) guestBar.hidden = canSave;
   }

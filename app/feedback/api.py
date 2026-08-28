@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from ..json_safe import json_safe as _json_safe
 from ..visit_log import _client_ip
 from ..auth.deps import get_current_user
-from ..paper_trading import admin_ip as paper_admin_ip
+from ..auth.admin import require_admin
 from . import db, service
 
 logger = logging.getLogger(__name__)
@@ -58,7 +58,7 @@ def submit(req: FeedbackReq, request: Request):
 def list_feedback(
     limit: int = 50,
     status: Optional[str] = None,
-    _admin: str = Depends(paper_admin_ip.require_admin_ip),
+    _admin: dict = Depends(require_admin),
 ):
     return {"feedback": _json_safe(db.list_feedback(limit, status))}
 
@@ -67,7 +67,7 @@ def list_feedback(
 def update_status(
     feedback_id: int,
     req: StatusReq,
-    _admin: str = Depends(paper_admin_ip.require_admin_ip),
+    _admin: dict = Depends(require_admin),
 ):
     if req.status not in ("new", "read", "done"):
         raise HTTPException(400, "非法状态")

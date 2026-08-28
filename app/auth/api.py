@@ -25,7 +25,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from ..paper_trading.admin_ip import reject_cross_site
+from ..csrf import reject_cross_site
 from ..visit_log import _client_ip, _is_from_trusted_proxy
 from . import avatar, service
 from .deps import get_current_user, require_login

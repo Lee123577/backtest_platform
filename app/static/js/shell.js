@@ -30,7 +30,7 @@
     // 比放一个常驻"开通会员"菜单项高;同时它照常进 sitemap 吃搜索流量。
     // 早先这里写的是"暂缓上线,不导流量进去",跟 main.py 的 _SITEMAP_PAGES
     // 自相矛盾,已按实际行为改正。
-    // 运维页:仅管理员 IP 可见(默认 hidden,确认身份后才显示,避免闪现)。
+    // 运维页:仅管理员账号可见(默认 hidden,确认身份后才显示,避免闪现)。
     // 路径特意用 /admin/tasks 而不是 /tasks —— 这是内部运维监控,不该跟
     // 单股回测/看板等用户功能同层级挂在一起(旧路径 /tasks 307 跳转过来)。
     { title: "系统", adminOnly: true, items: [
@@ -181,18 +181,23 @@
   }
 
   // ── 管理员菜单 ────────────────────────────────────────────────────────
-  // 运维页(定时任务)只给管理员 IP 看:普通用户/访客看了没意义,还会暴露
-  // 内部任务名与执行日志。白名单为空时(全新部署)放行 —— 否则没人看得到
-  // 入口,也就无法走 admin_ip 的首次自举。
+  // 运维页(定时任务)只给管理员账号看:普通用户/访客看了没意义,还会暴露
+  // 内部任务名与执行日志。以前判据是"IP 在白名单里,或白名单为空(全新部署
+  // 自举)",后者顺带让**任何人**都能看见这个入口;换成账号后没有这个口子了。
+  //
+  // 登录态一变就重判:管理员登录/登出时侧边栏当场跟着变,不用刷新页面。
   function revealAdminNav() {
-    fetch("/api/admin/ip/me")
-      .then(function (r) { return r.json(); })
-      .then(function (j) {
-        if (!j.is_admin && !j.whitelist_empty) return;
-        document.querySelectorAll('.spx-group[data-admin-only]')
-          .forEach(function (el) { el.hidden = false; });
-      })
-      .catch(function () { /* 拿不到就保持隐藏 */ });
+    function apply() {
+      fetch("/api/admin/me")
+        .then(function (r) { return r.json(); })
+        .then(function (j) {
+          document.querySelectorAll('.spx-group[data-admin-only]')
+            .forEach(function (el) { el.hidden = !j.is_admin; });
+        })
+        .catch(function () { /* 拿不到就保持隐藏 */ });
+    }
+    if (window.SPAuth) window.SPAuth.onChange(apply);
+    else apply();
   }
 
   // ── 组装 ──────────────────────────────────────────────────────────────

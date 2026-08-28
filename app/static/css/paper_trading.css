@@ -200,65 +200,6 @@ table.pt-tbl {
 .admin-chip-admin   { background: #dafbe1; color: #1a7f37; }
 .admin-chip-guest   { background: #fff8c5; color: #9a6700; cursor: help; }
 
-/* 白名单管理弹窗 */
-.admin-current {
-  background: var(--bg2);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 8px 10px;
-  font-size: 12px;
-  color: var(--txt2);
-  margin-bottom: 12px;
-  font-family: monospace;
-}
-.admin-add-row {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-.admin-add-row input[type="text"] {
-  flex: 1;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  font-size: 13px;
-}
-.admin-add-row input[type="text"]:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-.admin-msg { font-size: 12px; margin-bottom: 8px; min-height: 16px; }
-.admin-msg.ok { color: #1a7f37; }
-.admin-msg.error { color: #cf222e; }
-
-.admin-list { margin-top: 4px; }
-.admin-list-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  margin-bottom: 6px;
-  font-size: 13px;
-  background: #fff;
-}
-.admin-list-row.is-me { background: rgba(24,95,165,.04); border-color: var(--accent); }
-.admin-list-row .ip { font-family: monospace; font-weight: 600; min-width: 130px; }
-.admin-list-row .note { flex: 1; color: var(--txt2); font-size: 12px; }
-.admin-list-row .meta { color: #8c959f; font-size: 11px; }
-.admin-list-row .del-btn {
-  background: #fff;
-  border: 1px solid var(--border);
-  color: #cf222e;
-  padding: 3px 10px;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 12px;
-}
-.admin-list-row .del-btn:hover { background: #ffebe9; }
-.admin-list-row .del-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-
 /* 策略参数编辑器 */
 .params-toggle {
   /* panel-title 是 flex 容器，float 不生效，用 margin-left:auto 推到右边 */

@@ -16,7 +16,8 @@ import logging
 from fastapi import APIRouter, HTTPException, Request
 
 from ..data.data_loader import normalize_code
-from ..paper_trading import admin_ip as paper_admin_ip
+from ..csrf import reject_cross_site
+from ..visit_log import _client_ip
 from . import service
 from .runner import generate_once
 
@@ -46,11 +47,11 @@ def get_report(code: str):
 @router.post("/{code}/generate")
 async def generate_report(code: str, request: Request):
     code = _norm(code)
-    ip = paper_admin_ip.get_request_ip(request)
+    ip = _client_ip(request)
 
     # 写接口的老规矩:带 Origin/Referer 的浏览器请求必须同源。
     # 生成是花钱的动作,不能让别的站点用一张图片/表单把它触发起来。
-    paper_admin_ip.reject_cross_site(request)
+    reject_cross_site(request)
 
     try:
         service.check_can_generate(ip)

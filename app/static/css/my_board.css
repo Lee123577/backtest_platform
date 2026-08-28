@@ -119,15 +119,6 @@ body.spx-shell .site-footer.mb-footer { max-width: none; margin-top: 24px; }
 .mb-preview-bar[hidden] { display: none; }
 .mb-preview-bar b { word-break: break-all; }
 
-/* 编辑全站默认布局时的提示。用警示黄而不是蓝 —— 这里改的是所有人打开看板
-   时看到的初始画布,后果比"你自己的布局存不下"重得多,值得更醒目的一档。 */
-.mb-site-bar {
-  border-color: #d4a72c;
-  border-left-color: #bf8700;
-  background: #fff8c5;
-  color: #24292f;
-}
-
 /* 未登录访客:布局不落库。用中性蓝(.mb-preview-bar 的默认色)就够 ——
    这不是警告,是一句说明 + 一个注册入口,不该比"改全站默认"更刺眼。 */
 .mb-guest-bar .mb-reset-btn { flex: none; }

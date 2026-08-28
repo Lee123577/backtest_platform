@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from ..auth.deps import get_current_user
-from ..paper_trading import admin_ip as paper_admin_ip
+from ..auth.admin import require_admin
 from ..ratelimit import SlidingWindowLimiter
 from ..visit_log import _client_ip
 from . import attribution, db, service
@@ -76,9 +76,9 @@ def post_event(req: EventReq, request: Request, _rl: None = Depends(_rate_limit)
 @router.get("/api/analytics/funnel")
 def get_funnel(
     days: int = 7,
-    _admin: str = Depends(paper_admin_ip.require_admin_ip_no_bootstrap),
+    _admin: dict = Depends(require_admin),
 ):
-    """最近 N 天的转化漏斗 + 渠道拆分。运维页用,仅白名单 IP。"""
+    """最近 N 天的转化漏斗 + 渠道拆分。运维页用,仅管理员账号。"""
     days = max(1, min(days, 90))
     end = _Date.today()
     start = end - timedelta(days=days - 1)
