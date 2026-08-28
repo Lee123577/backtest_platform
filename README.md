@@ -1,6 +1,6 @@
 # A 股量化回测平台
 
-基于 FastAPI + ECharts 的 A 股量化策略回测与模拟交易平台。覆盖**单股信号**、**组合选股**、**模拟盘**、**AI 热门板块**、**AI 每日复盘**、**大盘云图**六类场景。
+基于 FastAPI + ECharts 的 A 股量化策略回测与模拟交易平台。核心场景:**单股信号**、**组合选股**(已并入首页)、**模拟盘**、**AI 热门板块**、**AI 每日复盘**、**大盘云图**、**个股 AI 报告**;账号周边还有**自选盯盘**、**个人数据看板**、**回测分享**与**订阅会员**。
 
 ![单股策略](docs/images/01-single-stock.png)
 
@@ -72,10 +72,18 @@
 - 投递走 SMTP(`app/auth/mailer.py`),验证码同时进邮件标题 —— 手机推送不点开就能读到
 - **投递失败会向上抛 502,不会静默"只写日志"**:上一版短信登录就是因为只有 console 后端能跑,
   账号体系挂了几个月没人发现。`MAIL_PROVIDER` 漏配时按 `SMTP_HOST` 自动切到真实投递
+- 登录后可自定义昵称与头像:头像上传走原始 body、读之前先卡 2MB 上限,落盘前统一重编码成 PNG(`app/auth/avatar.py`)
+
+**登录账号的落点**
+- 自选盯盘 `/watchlist`:自选股 × 盯盘策略,每日收盘自动扫信号落站内提醒(自选/规则免费,提醒属会员权益)
+- 个人数据看板 `/my_board`:行情/复盘等卡片自由排版,登录后各自保存一份
+- 回测分享:回测结果存快照,生成 `/s/{token}` 公开链接(页面 noindex,靠链接传播不靠搜索)
+- 订阅会员 `/subscribe`:暂不接在线支付 —— 下单拿订单号 → QQ 人工核对 → 管理员履约
 
 **安全**
-- IP 白名单写操作隔离(`paper_admin_ip` 表)
-- `TRUSTED_PROXIES` 环境变量配可信反代,防 `X-Forwarded-For` 伪造
+- 管理员 = 登录邮箱在 `ADMIN_EMAILS` 里的账号,名单放 .env 不放库(拿到库口令 ≠ 拿到管理权)。曾用 IP 白名单,但家宽 IP 会变、IP 是位置不是身份,已废弃(`paper_admin_ip` 随之移除)
+- 写接口统一过同源检查(`app/csrf.py`),敏感端点各自叠滑动窗口限流(`app/ratelimit.py`)
+- 全局安全响应头(CSP/nosniff/X-Frame-Options 等);`TRUSTED_PROXIES` 配可信反代,防 `X-Forwarded-For` 伪造
 
 ---
 
@@ -113,8 +121,10 @@ MYSQL_DATABASE=back_test
 | `DB_MAX_CONNECTIONS` | 50 | 连接池上限 |
 | `DB_BORROW_TIMEOUT` | 30 | 借连接超时(秒) |
 | `TRUSTED_PROXIES` | (空) | 可信反代 IP/CIDR,逗号分隔。空 = 一律忽略代理头 |
-| `PAPER_ADMIN_INITIAL_IPS` | (空) | 启动时往白名单写入的 IP(避免首次锁死) |
-| `DEEPSEEK_API_KEY` | (空) | AI 热门板块用的 DeepSeek API Key,不配则该功能不产出预测 |
+| `ADMIN_EMAILS` | (空) | 管理员登录邮箱,逗号分隔。**留空 = 全站没有管理员**(管理接口一律 403,有意为之的安全默认) |
+| `DEEPSEEK_API_KEY` | (空) | AI 热门板块/复盘/个股报告共用的 DeepSeek API Key,不配则这些功能不产出 |
+| `SUBSCRIBE_CONTACT_QQ` | 1415854304 | 订阅页展示的人工开通联系 QQ |
+| `DEBUG` | 0 | 开启后对外错误信息附带内部异常细节,仅本地排障用 |
 | `MAIL_PROVIDER` | 自动 | 验证码投递后端:`smtp` 真发信 / `console` 只打日志。**留空时按有没有配 `SMTP_HOST` 自动判断** |
 | `SMTP_HOST` | (空) | 发信 SMTP 主机,如 `smtp.qq.com`。配了它就等于开启真实投递 |
 | `SMTP_PORT` | 按安全模式 | 465(ssl) / 587(starttls) / 25(none) |
@@ -178,14 +188,19 @@ python run.py
 
 | 路径 | 用途 |
 |---|---|
-| `/` | 单股回测页 |
-| `/portfolio` | 组合回测页(SSE 进度流) |
+| `/` | 回测页:单股信号 / 组合选股两种模式页内切换,组合回测带 SSE 进度流 |
+| `/stock/{code}` | 个股页:AI 分析报告 + 9 种内置策略在这只票上的实证回测 |
 | `/paper_trading` | 模拟盘:持仓/收益曲线/成交流水/参数编辑 |
 | `/ai_hotsector` | AI 热门板块:每日预测/胜率统计/资金曲线/盘中浮盈 |
 | `/daily_review` | AI 每日复盘:最新一篇(当日数据概览 + DeepSeek 复盘正文 + 历史列表) |
 | `/daily_review/2026-07-08` | 指定日期的复盘,每篇独立可索引 URL |
 | `/cloudmap` | 大盘云图 treemap |
-| `/tasks` | 调度任务监控:历史运行/状态/手动触发 |
+| `/my_board` | 个人数据看板:卡片自由排版,登录后各自保存 |
+| `/watchlist` | 自选盯盘:自选股 + 盯盘策略,收盘扫信号(提醒属会员) |
+| `/subscribe` | 订阅会员(下单 → QQ 人工开通) |
+| `/s/{token}` | 回测结果分享快照页(公开,noindex) |
+| `/admin/tasks` | 调度任务监控:历史运行/状态/手动触发(管理员账号;旧路径 `/tasks` 307 跳转) |
+| `/legal` | 法务/免责声明 |
 
 ### 功能截图
 
@@ -201,7 +216,7 @@ python run.py
 
 ![任务监控](docs/images/06-tasks.png)
 
-组合选股(`/portfolio`)— 三种内置组合策略,SSE 实时进度:
+组合选股(首页组合模式)— 三种内置组合策略,SSE 实时进度:
 
 ![选股策略](docs/images/07-portfolio.png)
 
@@ -316,11 +331,17 @@ PORTFOLIO_REGISTRY["my_portfolio"] = MyPortfolioStrategy
    ↓
 scripts/run_scheduled_tasks.py
    ↓
-scheduler.runner.run_due()  →  subprocess 跑各任务
-   ├─ daily_update          weekday 17:00  增量 K 线 / 财务 / 指数 / 北向
-   ├─ daily_signal          weekday 17:30  依赖 daily_update,跑小市值选股
+scheduler.runner.run_due()  →  subprocess 跑各任务(全表见下方"调度任务")
+   ├─ ai_hotsector_predict  weekday 15:05  DeepSeek 选板块+选股
+   ├─ sector_snapshot       weekday 15:10  新浪行业/概念板块涨跌快照
+   ├─ daily_update          weekday 17:00  增量 K 线/财务/指数/北向/因子
+   ├─ watchlist_alert_scan  weekday 17:20  自选盯盘信号扫描(依赖 daily_update)
+   ├─ daily_signal          weekday 17:30  模拟盘选股(依赖 daily_update)
+   ├─ ai_hotsector_settle   weekday 17:35  AI 板块结算(依赖 daily_update)
+   ├─ daily_review_generate weekday 17:45  AI 复盘生成(依赖 daily_update)
+   ├─ stock_report_batch    weekday 18:10  个股 AI 报告预生成成交额前 50(依赖 daily_update)
    ├─ backfill_geo          daily 00:00    回填访问日志 IP 地理位置
-   └─ backfill_dividend_full daily 02:00   每月 1 号全市场 ex_div 回填(自查日期)
+   └─ backfill_*            每月 1 号/8 号  分红/市值/行业/财务兜底回填
         ↓
    paper_trading.runner.run_once()  (除权调整 → 止损 → 候选池 → 调仓 → 落库)
         ↓
@@ -373,20 +394,27 @@ scheduler.runner.run_due()  →  subprocess 跑各任务
 
 | 表 | 维护方 | 用途 |
 |---|---|---|
-| `stock_info` | import_history / daily_update | 股票基础信息(名称、上市/退市日、ST 状态、板块) |
+| `stock_info` | import_history / daily_update / backfill_stock_industry | 股票基础信息(名称、上市/退市日、ST 状态、行业、股本) |
 | `stock_kline` | import_history / daily_update | 日 K(qfq)+ 估值(市值/PE/PB)+ 质量标记 |
-| `stock_finance` | import_history / daily_update | 季报核心财务指标 |
+| `stock_finance` | import_history / daily_update / backfill_stock_finance | 季报核心财务指标 |
 | `stock_dividend` | import_history / backfill_dividend / daily_update | 除权除息事件(`ex_date` PK) |
-| `index_daily` | import_history / daily_update | 主要指数日线 |
-| `index_constituent` | import_history / daily_update | 指数成分股(月度刷新) |
+| `index_daily` / `index_constituent` | import_history / daily_update | 指数日线 / 成分股(月度刷新) |
 | `north_fund_flow` | daily_update | 北向资金净流入 |
-| `market_universe_snapshot` | market_data 自动 | 全市场快照备份 |
-| `paper_account` | paper_trading | 模拟账户单行状态 |
-| `paper_holdings` | paper_trading | 当前持仓(带 `last_dividend_check_date`) |
-| `paper_signal_run` | paper_trading | 每日运行记录 |
-| `paper_signal_position` | paper_trading | 每次运行的持仓快照 |
+| `market_universe_snapshot` | market_data 自动 | 全市场快照备份(离线兜底) |
+| `sector_snapshot` | sector_snapshot(15:10) | 行业/概念板块当日涨跌快照,供看板排行榜 |
+| `paper_account` / `paper_holdings` | paper_trading | 模拟账户单行状态 / 当前持仓(带 `last_dividend_check_date`) |
+| `paper_signal_run` / `paper_signal_position` | paper_trading | 每日运行记录 / 每次运行的持仓快照 |
 | `paper_equity_daily` | paper_trading | 每日净值 + 基准 |
-| `paper_admin_ip` | admin_ip API | 写操作 IP 白名单 |
+| `ai_hotsector_pick` / `ai_hotsector_stock` / `ai_hotsector_equity` | ai_hotsector | 每日板块预测 / 板块内选股 / 资金曲线(settle_status 状态机) |
+| `daily_review` | daily_review | 复盘标题/正文 + 数据快照(context_json),可审计模型看到了什么 |
+| `stock_ai_report` | stock_report | 个股 AI 分析报告(生成时间/提示词版本,按 code 去重) |
+| `app_user` / `email_code` / `user_session` | auth | 用户 / 登录验证码 / 会话(token 库内只存 sha256) |
+| `user_watchlist` / `user_alert_rule` / `signal_alert` | watchlist | 自选股 / 盯盘策略规则 / 收盘信号提醒 |
+| `subscription` / `payment_order` | subscription | 会员订阅态 / 人工开通订单 |
+| `user_board_layout` | my_board | 登录用户的看板布局(每人一行) |
+| `user_feedback` | feedback | 用户反馈(分类/处理状态) |
+| `backtest_share` | share | 回测结果分享快照(`/s/{token}` 的内容) |
+| `user_event_log` | analytics | 前端埋点事件(转化漏斗/渠道归因) |
 | `task_run_log` | scheduler | 定时任务运行日志 |
 | `user_visit_log` | visit_log middleware | API 访问日志(地理位置) |
 
@@ -398,16 +426,21 @@ scheduler.runner.run_due()  →  subprocess 跑各任务
 
 | 任务名 | 调度 | 依赖 | 说明 |
 |---|---|---|---|
-| `ai_hotsector_predict` | weekday 15:05 | — | AI 热门板块+强势股每日预测(DeepSeek) |
-| `daily_update` | weekday 17:00 | — | 增量更新 K 线/财务/指数/北向资金 |
-| `daily_signal` | weekday 17:30 | `daily_update` | 模拟盘选股 |
-| `ai_hotsector_settle` | weekday 17:35 | `daily_update` | AI 热门板块回填收盘价+结算胜率/资金曲线 |
+| `ai_hotsector_predict` | weekday 15:05 | — | DeepSeek 选 3 板块 × 3 强势股 |
+| `sector_snapshot` | weekday 15:10 | — | 新浪行业/概念板块涨跌快照(失败隔 40 分钟重试,当天最多 5 次) |
+| `daily_update` | weekday 17:00 | — | 增量更新 K 线/财务/指数/北向资金/因子 |
+| `watchlist_alert_scan` | weekday 17:20 | `daily_update` | 自选股 × 盯盘策略收盘信号扫描,命中落站内提醒 |
+| `daily_signal` | weekday 17:30 | `daily_update` | 模拟盘选股(参数由 `/paper_trading` 页 UI 配置,不硬编码在脚本里) |
+| `ai_hotsector_settle` | weekday 17:35 | `daily_update` | AI 热门板块回填收盘价 + 结算胜率/资金曲线 |
 | `daily_review_generate` | weekday 17:45 | `daily_update` | AI 每日市场复盘生成(DeepSeek) |
-| `backfill_geo` | daily 00:00 | — | 访问日志 IP 地理回填 |
-| `backfill_dividend_full` | monthly 1 号 02:00 | — | 全市场 ex_div 事件兜底回填 |
-| `backfill_market_cap_full` | monthly 1 号 03:00 | — | 历史 market_cap 增量回填(只补新上市/缺口) |
+| `stock_report_batch` | weekday 18:10 | `daily_update` | 个股 AI 报告批量预生成(成交额前 50,长尾访客按需触发) |
+| `backfill_geo` | daily 00:00 | — | 访问日志 IP 地理回填(离线 xdb) |
+| `backfill_dividend_full` | 每月 1 号 02:00 | — | 全市场 ex_div 事件兜底回填 |
+| `backfill_market_cap_full` | 每月 1 号 03:00 | — | 历史 market_cap 增量回填(只补新上市/缺口) |
+| `backfill_stock_industry` | 每月 1 号 04:00 | — | 回填 stock_info 行业分类与股本(baostock 全市场一次) |
+| `backfill_stock_finance` | 每月 8 号 04:30 | — | 补齐 stock_finance 缺失字段(THS 源,仅补缺口) |
 
-任务运行记录写入 `task_run_log`,前端 `/tasks` 可视化。**幂等保护**:同一任务当天已 `success` 则跳过;同名任务在 running 中也跳过(避免长任务被中途撞上)。
+任务运行记录写入 `task_run_log`,管理员在 `/admin/tasks` 可视化(历史/状态/手动触发)。**幂等保护**:同一任务当天已 `success` 则跳过;同名任务在 running 中也跳过(避免长任务被中途撞上)。手动"立即触发"无视月度日期限制当场跑。
 
 ---
 
@@ -440,7 +473,7 @@ crontab -e
 TRUSTED_PROXIES=127.0.0.1,10.0.0.0/8
 ```
 
-否则 `X-Forwarded-For` 头可被任意客户端伪造,绕过 `paper_admin_ip` 白名单。
+否则 `X-Forwarded-For` 头可被任意客户端伪造:客户端 IP 一律按直连地址算,限流、IP 配额和访问日志会把反代后面的所有访客记成同一个 IP(管理判定不受影响,那已经按登录账号走了)。
 
 ### 重启 + 查日志
 
@@ -457,6 +490,12 @@ curl -s http://localhost:8000/api/strategies
 
 ```
 app/
+  main.py                    FastAPI 应用入口(页面路由 + 核心 API + 中间件)
+  config.py                  Settings(MySQL / DeepSeek / ADMIN_EMAILS / DEBUG)
+  csrf.py                    写接口同源检查
+  ratelimit.py               滑动窗口限流(全站共用一份实现)
+  json_safe.py               Decimal/date/NaN → JSON 安全转换
+  visit_log.py               HTTP 访问日志中间件(IP 地理 + UA 解析)
   data/                      数据获取层
     feed.py                    DataFeed 抽象 + Akshare 实现(K 线/指数)
     data_loader.py             K 线 DB 查询 + 连接池兼容层
@@ -467,52 +506,74 @@ app/
     filters.py                 A 股准入(ST / 板块判断)
     calendar.py                交易日历(进程内缓存)
     realtime.py                持仓页实时价(xuangu 单股查询)
+    stock_search.py            股票名称/代码模糊搜索
     quality.py                 K 线写入前质量校验(异常跳价/停牌恢复识别)
     dividend.py                除权事件查询 + 持仓除权调整算法
   engine/                    回测引擎
     backtest.py                单股策略回测
-    portfolio_backtest.py     组合策略回测
-    money.py                   Decimal 钱算工具
-  strategies/                策略实现(11 个 + base/portfolio_base/registry)
+    portfolio_backtest.py      组合策略回测
+    robustness.py              样本外切分 + 参数敏感性
+    fees.py / metrics.py / money.py   费用 / 绩效指标 / Decimal 钱算
+  strategies/                策略实现(9 单股 + 3 组合 + base/portfolio_base/registry)
   paper_trading/             模拟盘
     runner.py                  每日运行器(被 daily_signal.py 调用)
     db.py                      paper_* 表 DDL + CRUD
-    admin_ip.py                IP 白名单(写操作守门)
-  scheduler/                 任务调度
-    runner.py                  subprocess 执行 + 日志写入 task_run_log
-    registry.py                任务清单
-    db.py                      task_run_log CRUD
+  auth/                      账号体系(邮箱验证码登录)
+    api.py / service.py / db.py   发码/登录/会话 API 与 app_user/email_code/user_session 表
+    mailer.py                  SMTP 投递(配 SMTP_HOST 即真实发信,投递失败上抛 502)
+    avatar.py                  头像上传(重编码 PNG,2MB 上限在读之前就卡)
+    admin.py                   管理员判定(ADMIN_EMAILS 登录账号)
+    deps.py                    get_current_user / require_login 依赖
+  watchlist/                 自选盯盘(自选股 + 盯盘策略 + 收盘信号提醒)
+  subscription/              订阅会员(订单 → QQ 人工核对 → 管理员履约)
+  my_board/                  个人数据看板(登录后各自保存布局,未登录只读)
   cloudmap/                  大盘云图(ECharts treemap)
+  sectors/                   板块排行榜(sector_snapshot 快照的读取端,60s 缓存)
   ai_hotsector/              AI 热门板块(DeepSeek 每日选板块+选股)
     runner.py                  predict_once / settle_once 每日运行器
     db.py                      ai_hotsector_* 表 DDL + CRUD + settle_status 状态机
     deepseek_client.py         DeepSeek chat JSON 客户端
     prompts.py                 板块/选股两段式提示词(带版本号)
   daily_review/              AI 每日复盘(DeepSeek 基于当日真实数据生成)
-    runner.py                  build_context 聚合数据快照 + generate_once 生成落库
-    db.py                      daily_review 表 DDL + CRUD + 市场数据快照查询
-    prompts.py                 复盘提示词(带版本号,复用 ai_hotsector 的 DeepSeek 客户端)
+    runner.py                  build_context 数据快照 + generate_once 生成落库
+    db.py / render.py / prompts.py
+  stock_report/              个股 AI 分析报告(一股一页,GET 永不触发生成)
+    service.py                 成本三道闸(同股同日一次 / 全站日额度 / IP 限流)
+    context.py / render.py / runner.py / db.py
+  share/                     回测结果分享快照(/s/{token},限流 + IP 日配额)
+  analytics/                 埋点与转化漏斗(前端白名单事件 + 服务端就地落点)
+  feedback/                  用户反馈(匿名可提,管理员处理)
   data_status/               数据完整性状态查询
-  visit_log.py               HTTP 访问日志中间件(IP 地理 + UA 解析)
-  json_safe.py               Decimal/date/NaN → JSON 安全转换(共享工具)
-  config.py                  Settings(MySQL + DeepSeek 配置)
-  main.py                    FastAPI 应用入口
+  scheduler/                 任务调度
+    runner.py                  subprocess 执行 + 日志写入 task_run_log
+    registry.py                任务清单(13 个任务,唯一事实来源)
+    db.py                      task_run_log CRUD
+  static/                    各页面 HTML/JS(服务端直出)
 
 scripts/
   import_history.py          全量历史导入(2010 ~ 今,一次性)
-  daily_update.py            每日增量(cron 17:00)
-  daily_signal.py            每日信号生成(cron 17:30)
-  backfill_dividend.py       Ex-div 事件单股回填(支持 --day-of-month / --holdings-only)
+  daily_update.py            每日增量(17:00,经 scheduler 拉起)
+  daily_signal.py            每日信号生成(17:30)
+  ai_hotsector_predict.py    AI 热门板块每日预测(15:05)
+  ai_hotsector_settle.py     AI 热门板块结算(17:35)
+  daily_review_generate.py   AI 每日市场复盘生成(17:45)
+  stock_report_batch.py      个股 AI 报告批量预生成(18:10,成交额前 50)
+  sector_snapshot.py         板块涨跌快照(15:10)
+  scan_watchlist_alerts.py   自选盯盘信号扫描(17:20)
+  backfill_dividend.py       Ex-div 事件回填(支持 --day-of-month / --holdings-only)
   backfill_kline.py          K 线指定区间补漏
+  backfill_market_cap.py     历史市值回填(--only-uncovered 只补缺口)
+  backfill_stock_industry.py 行业分类/股本回填(每月 1 号)
+  backfill_stock_finance.py  财务字段补缺(每月 8 号,--only-missing)
   backfill_visit_log_geo.py  访问日志地理回填
-  ai_hotsector_predict.py    AI 热门板块每日预测(cron 15:05)
-  ai_hotsector_settle.py     AI 热门板块结算(cron 17:35)
-  daily_review_generate.py   AI 每日市场复盘生成(cron 17:45)
   run_scheduled_tasks.py     cron 入口(5 分钟唤醒)
+  install_systemd.sh         一键安装 systemd 服务
+  start.sh / stop.sh         本地启停(Windows 用 .bat / .ps1)
   backtest.service           systemd unit 模板
 
 run.py                       uvicorn 启动入口
-requirements.txt             Python 依赖
+requirements.txt             Python 依赖(全部带上限)
+tests/                       pytest 测试套件(纯函数,无 DB/网络依赖)
 ```
 
 ---
@@ -551,16 +612,21 @@ with get_conn() as conn:
 - `app/data/universe_fetcher.py` — 全市场抓取(5 个独立 fetcher,可单测)
 - `app/data/dividend.py` — 除权事件查询 + 持仓除权算法
 - `app/data/quality.py` — K 线写入前质量校验
+- `app/data/stock_search.py` — 股票名称/代码模糊搜索
 - `app/engine/money.py` — Decimal 钱算工具
+- `app/ratelimit.py` — 滑动窗口限流(多处调用点共用一份实现)
+- `app/csrf.py` — 写接口同源检查
+- `app/json_safe.py` — Decimal/date/NaN → JSON 安全转换
 
 ### 测试
 
-`requirements.txt` 已有 pytest,目前测试覆盖空缺,贡献欢迎从这些核心入口开始:
+pytest 套件在 `tests/`(29 个文件),全部纯函数 —— 不连 DB、不走网络,用合成数据断言精确值:
 
-- `app/engine/backtest.py` `run_backtest` — 给定合成 OHLCV,assert metrics 精确值
-- `app/engine/portfolio_backtest.py` — 3 只股 + 1 个 rebalance,assert 末次平仓计入 trades
-- `app/data/quality.py` — 主板 ST 跳 6% 应触发 SUSPECT_JUMP
-- `app/data/db_pool.py` — 上限 + 背压
+```bash
+python -m pytest tests/
+```
+
+覆盖:回测/组合引擎算账(`test_backtest_engine` / `test_portfolio_engine` / `test_metrics_money_fees`)、样本外与参数敏感性(`test_robustness`)、模拟盘 runner(`test_paper_runner`)、调度时刻表(`test_scheduler_schedule`)、登录会话与头像(`test_auth` / `test_auth_profile`)、管理员账号与同源(`test_admin_account` / `test_admin_origin`)、个股报告/AI 板块/复盘(`test_stock_report` / `test_ai_hotsector` / `test_daily_review*`)、限流(`test_ratelimit`)、看板归属(`test_my_board_scope`)、自选/订阅/反馈/分享/板块分组/股票搜索/数据质量/连接池/客户端 IP 判定等。
 
 ---
 
