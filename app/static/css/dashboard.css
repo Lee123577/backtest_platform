@@ -25,6 +25,19 @@
   white-space: nowrap;
 }
 .dash-hero-btn:hover { filter: brightness(.97); }
+/* 次要动作(编辑资料):hero 是深色底,实心白按钮太抢眼,用描边 */
+.dash-hero-btn.ghost {
+  background: rgba(255, 255, 255, .14);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, .45);
+  font-weight: 500;
+  padding: 8px 18px;
+}
+.dash-hero-btn.ghost:hover { background: rgba(255, 255, 255, .24); }
+
+/* 打招呼那一行:头像 + 文字 */
+.dash-hello { display: flex; align-items: center; gap: 10px; }
+.dash-hero-avatar { box-shadow: 0 0 0 2px rgba(255, 255, 255, .55); }
 
 /* hero 里的 AI 战绩数据条 */
 .dash-hero-stats {

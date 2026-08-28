@@ -13,6 +13,8 @@
   - 发码限流：同址 60s 冷却 + 单址单日上限 + 单 IP 单小时上限(内存滑窗)
   - 校码：5 分钟有效、最多错 5 次、成功即作废(防重放)
   - 会话：cookie 存原始 token，库存 sha256；30 天有效
+  - 个人资料：昵称长度/字符集(挡零宽与双向覆盖字符)、冒充官方的保留词；
+    头像上传按账号限频，字节校验与重编码在 avatar.py
 """
 from __future__ import annotations
 
@@ -24,7 +26,7 @@ from datetime import date as _Date, datetime as _DT, timedelta
 from typing import Any, Dict, Optional, Tuple
 
 from ..ratelimit import SlidingWindowLimiter
-from . import db, mailer
+from . import avatar, db, mailer
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +51,10 @@ IP_MAX_PER_HOUR = 20           # 单 IP 每小时发码上限
 SESSION_TTL_SEC = 30 * 24 * 3600  # 会话有效期(30 天)
 
 SESSION_COOKIE = "sp_session"
+
+MAX_NAME_LEN = 16              # 昵称最长字数(DB 列 24，留出余量)
+AVATAR_MAX_PER_HOUR = 10       # 单账号每小时最多换几次头像
+PROFILE_MAX_PER_HOUR = 20      # 单账号每小时最多改几次资料
 
 
 class AuthError(RuntimeError):
@@ -190,3 +196,95 @@ def logout(token: Optional[str]) -> None:
             db.delete_session(_token_hash(token))
         except Exception as e:  # 登出尽力而为，不因 DB 抖动报错
             logger.info("logout 删除会话失败(忽略): %s", e)
+
+
+# ── 个人资料(昵称 / 头像) ────────────────────────────────────────────────────
+# 昵称是**会被别人看到**的自由文本，按"要么能正常显示、要么直接拒"来收：
+#   - 控制字符与零宽/双向覆盖字符一律剔掉。RLO(U+202E) 那一族能让一串字符
+#     渲染成完全不同的样子，是冒充别人最省事的一招；零宽字符则能造出肉眼
+#     一模一样、实际不同的两个昵称。
+#   - ZWJ(U+200D) 是有意放行的例外 —— 它是 emoji 组合序列的连接符，剔了
+#     一家三口的 emoji 会碎成三个人。
+#   - 保留词挡"官方/客服/管理员"这类冒充站方的名字。
+# XSS 不靠这层防(前端一律 esc() 转义)，这层管的是**冒充与视觉欺骗**。
+# 剔除区间按码位写，不把不可见字符本身放进源码 —— 那样这几行等于没法 review,
+# 也很容易在某次复制粘贴里被悄悄改掉。区间内没有正则元字符，直接拼进字符类安全。
+_NAME_STRIP_RANGES = (
+    (0x00, 0x1F),      # 控制字符(含换行、制表)
+    (0x7F, 0x7F),      # DEL
+    (0x200B, 0x200C),  # 零宽空格 / 零宽非连接符(ZWJ 0x200D 有意跳过:emoji 组合要用)
+    (0x200E, 0x200F),  # LRM / RLM
+    (0x202A, 0x202E),  # 双向嵌入与覆盖(RLO 那一族)
+    (0x2066, 0x2069),  # 双向隔离
+    (0xFEFF, 0xFEFF),  # BOM / 零宽不换行空格
+)
+_NAME_STRIP_RE = re.compile(
+    "[" + "".join(f"{chr(lo)}-{chr(hi)}" for lo, hi in _NAME_STRIP_RANGES) + "]"
+)
+_NAME_RESERVED = (
+    "管理员", "官方", "客服", "站长", "系统通知",
+    "admin", "administrator", "root", "official", "system",
+)
+
+_avatar_limiter = SlidingWindowLimiter(
+    limit=AVATAR_MAX_PER_HOUR, window_sec=3600,
+    sweep_interval_sec=3600, name="auth_avatar",
+)
+_profile_limiter = SlidingWindowLimiter(
+    limit=PROFILE_MAX_PER_HOUR, window_sec=3600,
+    sweep_interval_sec=3600, name="auth_profile",
+)
+
+
+def normalize_display_name(name: Optional[str]) -> Optional[str]:
+    """校验昵称。返回归一化结果；空串返回 None(= 清空，回到默认展示名)。"""
+    s = (name or "").strip()
+    if not s:
+        return None
+    s = _NAME_STRIP_RE.sub("", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    if not s:
+        raise AuthError("昵称不能只有空白字符")
+    if len(s) > MAX_NAME_LEN:
+        raise AuthError(f"昵称最多 {MAX_NAME_LEN} 个字")
+    low = s.lower()
+    if any(w in low for w in _NAME_RESERVED):
+        raise AuthError("昵称包含保留词，请换一个")
+    return s
+
+
+def set_display_name(user_id: int, name: Optional[str]) -> Optional[str]:
+    """改昵称，返回落库后的值(None = 已清空，回到默认展示名)。"""
+    if not _profile_limiter.allow(str(user_id)):
+        raise AuthError("改得太频繁了，请稍后再试")
+    clean = normalize_display_name(name)
+    db.set_display_name(int(user_id), clean)
+    return clean
+
+
+def set_avatar(user_id: int, raw: bytes) -> str:
+    """存新头像、删旧文件，返回新文件名。
+
+    顺序是"先落盘再改库"：反过来的话中间失败会留下一条指向不存在文件的记录，
+    头像直接裂图；现在最坏是多留一个没人引用的文件，且下一次上传不会再多。
+    """
+    if not _avatar_limiter.allow(str(user_id)):
+        raise AuthError("上传过于频繁，请稍后再试")
+    filename = avatar.store(int(user_id), raw)
+    try:
+        old = db.set_avatar_file(int(user_id), filename)
+    except Exception:
+        avatar.remove(filename)      # 库没写成，别把孤儿文件留在磁盘上
+        raise
+    if old and old != filename:
+        avatar.remove(old)
+    return filename
+
+
+def clear_avatar(user_id: int) -> None:
+    """恢复默认头像：库里置空 + 删掉磁盘上那份。"""
+    if not _profile_limiter.allow(str(user_id)):
+        raise AuthError("改得太频繁了，请稍后再试")
+    old = db.set_avatar_file(int(user_id), None)
+    if old:
+        avatar.remove(old)

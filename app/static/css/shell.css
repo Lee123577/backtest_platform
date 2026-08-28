@@ -193,3 +193,41 @@ body.spx-shell .site-footer {
      还是"登录"这个转化动作本身，撑到 44px。 */
   .spx-account-btn { min-height: 44px; }
 }
+
+/* ── 账户区:头像 + 昵称 ────────────────────────────────────────────────
+   原来这里只有一行"👤 fo***@qq.com ▾" —— 一个 emoji 加一串打码地址,
+   看着不像"我的账号"。换成真头像 + 昵称,菜单里再给一块身份卡。 */
+.spx-acct { padding: 3px 10px 3px 3px; gap: 8px; }
+.spx-acct-name {
+  max-width: 132px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.spx-caret { color: var(--txt2, #9aa0aa); font-size: 11px; }
+
+.spx-menu-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px 12px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border, #d0d7de);
+}
+.spx-menu-id { min-width: 0; }
+.spx-menu-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--txt, #24292f);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.spx-menu-mail { font-size: 11px; color: var(--txt2, #9aa0aa); }
+.spx-menu { min-width: 208px; }
+
+@media (max-width: 900px) {
+  /* 手机顶栏窄，昵称收起来只留头像，点击热区仍是 44px */
+  .spx-acct-name, .spx-caret { display: none; }
+  .spx-acct { padding: 3px; }
+}

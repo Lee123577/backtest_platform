@@ -170,3 +170,127 @@
   .sp-field input { flex: 1 1 100%; font-size: 16px; }
   .sp-code-btn { width: 100%; }
 }
+
+/* ── 头像 ─────────────────────────────────────────────────────────────────
+   两种形态共用一个类:自定义头像是 <img>,默认头像是带渐变底色的首字色块。
+   尺寸由 JS 内联给(同一个组件在顶栏 26px、菜单 40px、资料页 88px),
+   这里只管形状与不变的部分。 */
+.sp-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  border-radius: 50%;
+  object-fit: cover;              /* 服务端已裁成正方形,这里兜住异常比例 */
+  background: #e9edf2;
+  vertical-align: middle;
+}
+.sp-avatar-default {
+  color: #fff;
+  font-weight: 600;
+  line-height: 1;
+  user-select: none;
+}
+
+/* 旧版页面 header 里的账号入口(#spAuthSlot) */
+.sp-auth-acct {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px 3px 3px;
+  border-radius: 999px;
+  border: 1px solid #dfe3e8;
+  background: #fff;
+  cursor: pointer;
+}
+.sp-auth-acct:hover { border-color: var(--sp-brand); color: var(--sp-brand); }
+.sp-auth-name { font-size: 13px; max-width: 120px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── 个人资料弹窗 ────────────────────────────────────────────────────── */
+.sp-profile { text-align: left; }
+.sp-prof-avatar { text-align: center; margin-bottom: 18px; }
+
+.sp-avatar-wrap {
+  position: relative;
+  display: inline-block;
+  padding: 0;
+  border: none;
+  background: none;
+  border-radius: 50%;
+  cursor: pointer;
+  line-height: 0;
+}
+.sp-avatar-wrap:focus-visible { outline: 2px solid var(--sp-brand); outline-offset: 3px; }
+.sp-avatar-edit {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 30%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0 0 999px 999px;
+  background: rgba(17, 24, 39, .55);
+  color: #fff;
+  font-size: 11px;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity .15s;
+}
+.sp-avatar-wrap:hover .sp-avatar-edit { opacity: 1; }
+
+.sp-prof-hint { margin-top: 10px; font-size: 11px; color: #aab1ba; }
+.sp-linkbtn {
+  margin-left: 8px;
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--sp-brand);
+  font-size: 11px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.sp-linkbtn[hidden] { display: none; }
+
+.sp-prof-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: #57606a;
+}
+.sp-prof-label span { color: #aab1ba; }
+.sp-prof-static {
+  height: 40px;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  margin-bottom: 4px;
+  border-radius: 10px;
+  background: #f2f4f6;
+  color: #8a929c;
+  font-size: 13px;
+}
+
+/* ── 轻提示 ───────────────────────────────────────────────────────────────
+   保存/上传这类动作要有即时反馈,但不该再弹一个需要点确定的框。
+   固定在底部中间,2.6s 自动消失。 */
+.sp-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 32px;
+  z-index: 1100;
+  padding: 10px 18px;
+  border-radius: 999px;
+  background: rgba(17, 24, 39, .88);
+  color: #fff;
+  font-size: 13px;
+  box-shadow: 0 8px 24px rgba(17, 24, 39, .25);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 12px);
+  transition: opacity .18s, transform .18s;
+}
+.sp-toast.show { opacity: 1; transform: translate(-50%, 0); }
+.sp-toast.err { background: rgba(190, 30, 40, .92); }

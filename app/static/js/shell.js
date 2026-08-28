@@ -88,50 +88,93 @@
   }
 
   // ── 账户区 ────────────────────────────────────────────────────────────
-  // 账号展示脱敏：foo@qq.com → fo***@qq.com
+  // 展示名/脱敏/头像全部走 SPAuth,这里不再自己实现一份 —— 以前 shell、auth、
+  // dashboard 各有一个 maskEmail,改一处忘两处。share.html 不引 auth.js,
+  // 所以留了降级分支。
+  function nameOf(user) {
+    if (window.SPAuth) return window.SPAuth.displayName(user);
+    var s = String((user && user.email) || "");
+    var at = s.indexOf("@");
+    return at > 0 ? s.slice(0, at) : s;
+  }
+
   function maskEmail(addr) {
+    if (window.SPAuth) return window.SPAuth.maskEmail(addr);
     var s = String(addr || "");
     var at = s.indexOf("@");
     if (at < 1) return s;
-    var name = s.slice(0, at);
-    return name.slice(0, name.length <= 2 ? 1 : 2) + "***" + s.slice(at);
+    return s.slice(0, at <= 2 ? 1 : 2) + "***" + s.slice(at);
   }
+
+  function avatarOf(user, size) {
+    if (window.SPAuth) return window.SPAuth.avatarHtml(user, size);
+    return '<span class="sp-avatar sp-avatar-default" style="width:' + size +
+      "px;height:" + size + "px;font-size:" + Math.round(size * 0.44) +
+      'px;background:#94a3b8">' + esc((nameOf(user) || "?").slice(0, 1)) + "</span>";
+  }
+
+  // 展开的菜单只有一个,关它的 document 监听也就只该绑一次。
+  // 旧版把 addEventListener 写在 renderAccount 里,每重画一次账户区就多一个
+  // 监听器,登录/登出来回几次之后每次点击都要跑一串空回调。
+  var openMenu = null;
+
+  document.addEventListener("click", function () {
+    if (openMenu) { openMenu.hidden = true; openMenu = null; }
+  });
 
   function renderAccount(user) {
     var slot = document.getElementById("spxAccount");
     if (!slot) return;
+    openMenu = null;
     if (!user) {
       slot.innerHTML = '<button class="spx-account-btn" id="spxLogin">👤 登录</button>';
       document.getElementById("spxLogin").addEventListener("click", function () {
-        if (window.SPAuth) {
-          window.SPAuth.requireLogin().then(function (u) { if (u) refreshAccount(); });
-        }
+        // 登录成功由 SPAuth 广播回来重画,这里不用自己再拉一次 /me
+        if (window.SPAuth) window.SPAuth.requireLogin();
       });
       return;
     }
     slot.innerHTML =
-      '<button class="spx-account-btn" id="spxAcctBtn">👤 ' + esc(maskEmail(user.email)) +
-      ' ▾</button>' +
+      '<button class="spx-account-btn spx-acct" id="spxAcctBtn">' +
+      avatarOf(user, 26) + '<span class="spx-acct-name">' + esc(nameOf(user)) +
+      '</span><span class="spx-caret">▾</span></button>' +
       '<div class="spx-menu" id="spxMenu" hidden>' +
-      '<div class="spx-menu-sub">' + esc(maskEmail(user.email)) + "</div>" +
-      '<a href="/dashboard">仪表盘</a>' +
-      '<a href="/watchlist">自选盯盘</a>' +
-      '<button id="spxLogout">退出登录</button>' +
+      '<div class="spx-menu-head">' + avatarOf(user, 40) +
+      '<div class="spx-menu-id"><div class="spx-menu-name">' + esc(nameOf(user)) +
+      '</div><div class="spx-menu-mail">' + esc(maskEmail(user.email)) + "</div></div></div>" +
+      '<button id="spxProfile">⚙️ 个人资料</button>' +
+      '<a href="/dashboard">🏠 仪表盘</a>' +
+      '<a href="/watchlist">⭐ 自选盯盘</a>' +
+      '<button id="spxLogout">🚪 退出登录</button>' +
       "</div>";
     var btn = document.getElementById("spxAcctBtn");
     var menu = document.getElementById("spxMenu");
     btn.addEventListener("click", function (e) {
       e.stopPropagation();
       menu.hidden = !menu.hidden;
+      openMenu = menu.hidden ? null : menu;
     });
-    document.addEventListener("click", function () { menu.hidden = true; });
+    menu.addEventListener("click", function (e) { e.stopPropagation(); });
+    document.getElementById("spxProfile").addEventListener("click", function () {
+      menu.hidden = true;
+      openMenu = null;
+      if (window.SPAuth) window.SPAuth.openProfile();
+    });
     document.getElementById("spxLogout").addEventListener("click", function () {
+      menu.hidden = true;
+      openMenu = null;
       if (window.SPAuth) window.SPAuth.logout();
-      renderAccount(null);
+      else renderAccount(null);
     });
   }
 
+  // 登录态只问 SPAuth 要(它全站共享一个 /api/auth/me,不再各拉各的),
+  // 之后的变化由 onChange 推过来 —— 登录/登出/改昵称换头像都当场重画。
   function refreshAccount() {
+    if (window.SPAuth) {
+      window.SPAuth.onChange(renderAccount);
+      return;
+    }
     fetch("/api/auth/me").then(function (r) { return r.json(); })
       .then(function (j) { renderAccount(j.user || null); })
       .catch(function () { renderAccount(null); });

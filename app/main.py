@@ -193,9 +193,15 @@ app.include_router(ai_hotsector_router)
 from .daily_review.api import router as daily_review_router  # noqa: E402
 app.include_router(daily_review_router)
 
-# 账号/登录(手机号验证码，付费墙前置)
+# 账号/登录(邮箱验证码，付费墙前置)
 from .auth.api import router as auth_router  # noqa: E402
 app.include_router(auth_router)
+
+# 用户头像图片(/media/avatar/*)。刻意不放进 /static:那是整目录挂出去的
+# StaticFiles,用户传上来的东西不该进那个挂载点 —— 头像走独立路由,
+# 媒体类型与缓存头由 auth/api.py 写死。
+from .auth.api import media_router as auth_media_router  # noqa: E402
+app.include_router(auth_media_router)
 
 # 订阅/订单(内容付费墙)
 from .subscription.api import router as subscription_router  # noqa: E402

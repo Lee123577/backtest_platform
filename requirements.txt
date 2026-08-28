@@ -16,6 +16,9 @@ uvicorn[standard]>=0.24.0,<1.0
 pandas>=2.1.0,<4.0
 numpy>=1.26.0,<3.0
 python-multipart>=0.0.6,<1.0
+# 用户头像:上传的图片一律解码后重新编码成 PNG 再落盘(见 app/auth/avatar.py)。
+# 缺了这个包头像上传会明确报 503,而不是退回"原样存用户字节"。
+Pillow>=10.0.0,<13.0
 httpx>=0.25.0,<1.0         # DeepSeek 异步客户端(app/ai_hotsector/deepseek_client.py)
 
 # Default data source

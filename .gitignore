@@ -4,6 +4,8 @@ __pycache__/
 .claude/
 .workbuddy/
 data/cache/
+# 用户上传的头像:运行时数据,各环境各一份,不进版本库
+data/avatars/
 .env
 .venv/
 venv/

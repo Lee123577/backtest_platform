@@ -33,6 +33,8 @@ DDL_STATEMENTS = [
         id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
         email         VARCHAR(190)    NULL UNIQUE COMMENT '登录邮箱(小写归一化)',
         phone         VARCHAR(20)     NULL COMMENT '历史字段:手机号登录时代遗留,已停用',
+        display_name  VARCHAR(24)     NULL COMMENT '自定义昵称(NULL=按邮箱生成默认展示名)',
+        avatar_file   VARCHAR(80)     NULL COMMENT '头像文件名(相对 data/avatars/,NULL=用默认头像)',
         status        ENUM('active','banned') NOT NULL DEFAULT 'active',
         created_at    DATETIME        DEFAULT CURRENT_TIMESTAMP,
         last_login_at DATETIME
@@ -130,6 +132,20 @@ def _migrate_app_user(conn) -> None:
             "phone 改为可空",
             "ALTER TABLE app_user MODIFY phone VARCHAR(20) NULL "
             "COMMENT '历史字段:手机号登录时代遗留,已停用'",
+        ))
+    # 个人资料(昵称/头像)：老库里没有这两列，缺了 SELECT * 取不到、
+    # UPDATE 会直接报错 —— 补列失败时下面的 set_* 会按"功能不可用"降级。
+    if "display_name" not in cols:
+        steps.append((
+            "补 display_name 列",
+            "ALTER TABLE app_user ADD COLUMN display_name VARCHAR(24) NULL "
+            "COMMENT '自定义昵称(NULL=按邮箱生成默认展示名)'",
+        ))
+    if "avatar_file" not in cols:
+        steps.append((
+            "补 avatar_file 列",
+            "ALTER TABLE app_user ADD COLUMN avatar_file VARCHAR(80) NULL "
+            "COMMENT '头像文件名(相对 data/avatars/,NULL=用默认头像)'",
         ))
 
     for label, sql in steps:
@@ -251,6 +267,38 @@ def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
     with conn.cursor() as cur:
         cur.execute("SELECT * FROM app_user WHERE id=%s", (user_id,))
         return cur.fetchone()
+
+
+def set_display_name(user_id: int, name: Optional[str]) -> None:
+    """写昵称。None = 清空，回到按邮箱生成的默认展示名。"""
+    conn = _get_pool()
+    if conn is None:
+        raise RuntimeError("数据库连接不可用")
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE app_user SET display_name=%s WHERE id=%s", (name, user_id)
+        )
+
+
+def set_avatar_file(user_id: int, filename: Optional[str]) -> Optional[str]:
+    """写头像文件名，返回**被替换掉的旧文件名**(调用方据此删旧文件)。
+
+    先读后写不是原子的：极端并发下两次上传可能都把对方当"旧文件"，
+    最坏结果是磁盘上多留一个孤儿文件(几十 KB)，不会删掉正在用的那个 ——
+    因为要删的名字来自 SELECT 的返回值，不是"当前值"。为这点代价上行锁
+    不划算(同一个人同时传两张头像本来就不是正常路径)。
+    """
+    conn = _get_pool()
+    if conn is None:
+        raise RuntimeError("数据库连接不可用")
+    with conn.cursor() as cur:
+        cur.execute("SELECT avatar_file FROM app_user WHERE id=%s", (user_id,))
+        row = cur.fetchone()
+        old = (row or {}).get("avatar_file")
+        cur.execute(
+            "UPDATE app_user SET avatar_file=%s WHERE id=%s", (filename, user_id)
+        )
+    return old or None
 
 
 # ── 会话 ──────────────────────────────────────────────────────────────────────

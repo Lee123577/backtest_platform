@@ -14,6 +14,7 @@
   <meta property="og:title" content="回测结果分享 | shoupan">
   <link rel="stylesheet" href="/static/css/style.css">
   <script src="/static/js/vendor/echarts.min.js"></script>
+  <link rel="stylesheet" href="/static/css/auth.css">
   <link rel="stylesheet" href="/static/css/shell.css">
 </head>
 <body class="spx-shell">
@@ -59,6 +60,9 @@
 
 <script src="/static/js/util.js"></script>
 <script src="/static/js/share.js"></script>
+<!-- 分享页也引 auth.js:顶栏那个"登录"按钮以前点了没反应(SPAuth 不存在),
+     而这页恰恰是陌生人第一次看到本站的地方,登录入口不能是死的。 -->
+<script src="/static/js/auth.js"></script>
 <script src="/static/js/shell.js"></script>
 </body>
 </html>

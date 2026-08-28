@@ -15,13 +15,10 @@
     });
   }
   var $ = function (id) { return document.getElementById(id); };
-  // 账号展示脱敏：foo@qq.com → fo***@qq.com
-  function maskEmail(addr) {
-    var s = String(addr || "");
-    var at = s.indexOf("@");
-    if (at < 1) return s;
-    var name = s.slice(0, at);
-    return name.slice(0, name.length <= 2 ? 1 : 2) + "***" + s.slice(at);
+  // 展示名/头像统一由 SPAuth 给 —— 这里以前自己抄了一份 maskEmail,
+  // 于是"欢迎回来，fo***@qq.com"跟顶栏、跟设好的昵称三处对不上。
+  function nameOf(user) {
+    return window.SPAuth ? window.SPAuth.displayName(user) : "";
   }
 
   var SHORTCUTS = [
@@ -63,15 +60,23 @@
 
   function renderHero(user) {
     if (user) {
-      $("dashHello").textContent = "欢迎回来，" + maskEmail(user.email);
+      $("dashHello").innerHTML =
+        (window.SPAuth ? window.SPAuth.avatarHtml(user, 34, "dash-hero-avatar") : "") +
+        "<span>欢迎回来，" + esc(nameOf(user)) + "</span>";
       $("dashHeroSub").textContent = "这里是你的账户概览";
-      $("dashHeroAction").innerHTML = "";
+      $("dashHeroAction").innerHTML =
+        '<button class="dash-hero-btn ghost" id="dashProfileBtn">编辑资料</button>';
+      $("dashProfileBtn").addEventListener("click", function () {
+        if (window.SPAuth) window.SPAuth.openProfile();
+      });
     } else {
       $("dashHello").textContent = "欢迎使用 A 股量化平台";
       $("dashHeroSub").textContent = "登录后解锁历史复盘、自选盯盘信号提醒等会员内容";
       $("dashHeroAction").innerHTML = '<button class="dash-hero-btn" id="dashLoginBtn">登录 / 注册</button>';
       $("dashLoginBtn").addEventListener("click", function () {
-        if (window.SPAuth) window.SPAuth.requireLogin().then(function (u) { if (u) location.reload(); });
+        // 登录成功不再 location.reload():整页重刷要重新拉四个接口、白屏一下,
+        // 而这页需要变的只是几个卡片。登录态由 SPAuth 广播回来,当场重画。
+        if (window.SPAuth) window.SPAuth.requireLogin();
       });
     }
   }
@@ -138,28 +143,37 @@
   // ── 初始化 ──────────────────────────────────────────────────────────────
   renderShortcuts();
 
+  // 与登录态无关的三块:只拉一次,登录/登出都不用重来。
   Promise.all([
-    getJson("/api/auth/me").catch(function () { return { user: null }; }),
-    getJson("/api/subscription/status").catch(function () { return null; }),
     getJson("/api/daily_review/latest").catch(function () { return { review: null }; }),
     getJson("/api/ai_hotsector/stats").catch(function () { return null; }),
   ]).then(function (res) {
-    var user = (res[0] && res[0].user) || null;
-    var sub = res[1];
-    var review = (res[2] && res[2].review) || null;
-    var loggedIn = !!user;
-
-    renderHero(user);
-    renderHeroStats(res[3]);
-    renderMember(sub, loggedIn);
-    renderReview(review);
-
-    if (loggedIn) {
-      getJson("/api/watchlist/config")
-        .then(function (cfg) { renderAlerts(cfg, true); })
-        .catch(function () { renderAlerts(null, true); });
-    } else {
-      renderAlerts(null, false);
-    }
+    renderReview((res[0] && res[0].review) || null);
+    renderHeroStats(res[1]);
   });
+
+  // 与登录态有关的三块:每次身份变化(登录、登出、改昵称换头像)重画一遍。
+  // /api/auth/me 不在这里打 —— SPAuth 全站共享那一次结果。
+  function renderForUser(user) {
+    var loggedIn = !!user;
+    renderHero(user);
+    if (!loggedIn) {
+      renderMember(null, false);
+      renderAlerts(null, false);
+      return;
+    }
+    getJson("/api/subscription/status")
+      .then(function (sub) { renderMember(sub, true); })
+      .catch(function () { renderMember(null, true); });
+    getJson("/api/watchlist/config")
+      .then(function (cfg) { renderAlerts(cfg, true); })
+      .catch(function () { renderAlerts(null, true); });
+  }
+
+  if (window.SPAuth) {
+    window.SPAuth.onChange(renderForUser);
+  } else {
+    getJson("/api/auth/me").catch(function () { return { user: null }; })
+      .then(function (j) { renderForUser((j && j.user) || null); });
+  }
 })();
