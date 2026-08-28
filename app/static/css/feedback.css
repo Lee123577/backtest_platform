@@ -1,5 +1,20 @@
-/* 反馈组件 —— 悬浮按钮 + 弹窗(各页共用) */
+/* 反馈组件 —— 悬浮按钮 + 弹窗(各页共用)
+   ============================================================
+   弹窗外壳(遮罩/卡片/标题/输入框/提交键/提示行)**直接复用 auth.css 的
+   .sp-* 那一套**，这里只留反馈独有的部分:悬浮球、分类选择、按钮行。
 
+   为什么这么改:原先这个文件自带一整套弹窗样式,而且是按**深色主题**写的
+   (background: var(--panel, #1b1f27))。--panel 这个变量全站从来没定义过,
+   于是永远落到深色兜底值;偏偏里面的输入框用的是 var(--bg, ...)，那个是有
+   定义的 #ffffff —— 结果就是深色弹窗里嵌一堆白输入框,跟站点其它地方
+   (以及同为弹窗的登录框)完全两个调调。
+
+   共用外壳而不是把颜色重抄一遍,是为了让它们**没有再次走偏的可能**:
+   改登录弹窗的观感,反馈弹窗自动跟上。
+   代价是 feedback.js 依赖 auth.css 已加载 —— 当前引 feedback.js 的页面
+   都引了 auth.css(legal.html 两个都不引,它没有反馈入口)。 */
+
+/* ── 悬浮按钮 ─────────────────────────────────────────────────────────── */
 .fb-fab {
   position: fixed;
   right: 20px;
@@ -7,110 +22,105 @@
   z-index: 900;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
-  padding: 10px 16px;
-  min-height: 44px;      /* 手机上的点击下限；原先 40px */
+  padding: 0 18px;
+  height: 44px;          /* 手机上的点击下限 */
   border: none;
-  border-radius: 24px;
-  background: #5b8def;
+  border-radius: 999px;
+  /* 与登录弹窗的主按钮、品牌 logo 同一支渐变 */
+  background: linear-gradient(135deg, #3b82f6, var(--accent, #185FA5));
   color: #fff;
   font-size: 14px;
+  font-weight: 500;
   cursor: pointer;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, .3);
+  box-shadow: 0 6px 18px rgba(24, 95, 165, .35);
+  transition: filter .15s, box-shadow .15s, transform .05s;
 }
-.fb-fab:hover { background: #4a7ce0; }
+.fb-fab:hover {
+  filter: brightness(1.06);
+  box-shadow: 0 8px 22px rgba(24, 95, 165, .42);
+}
+.fb-fab:active { transform: translateY(1px); }
+.fb-fab:focus-visible { outline: 2px solid var(--accent, #185FA5); outline-offset: 3px; }
+
 /* 让开贴底的 sticky 主按钮(.btn-run,bottom:12px + 44px 高)。
    注意这个偏移只跟"离视口底部多远"有关：两者都是按 bottom 定位的，
    改各自的高度不会吃掉这段间隙，别按高度重算。 */
 .fb-fab--raised { bottom: 72px; }
 
-.fb-mask {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, .5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-}
-.fb-mask[hidden] { display: none; }
-
-.fb-modal {
-  width: 380px;
-  max-width: calc(100vw - 32px);
-  background: var(--panel, #1b1f27);
-  color: var(--txt, #e6e6e6);
-  border: 1px solid var(--border, #333);
-  border-radius: 12px;
-  padding: 22px 22px 18px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, .45);
-}
-.fb-modal h3 { margin: 0 0 4px; font-size: 17px; }
-.fb-modal .fb-sub { margin: 0 0 16px; font-size: 12px; color: var(--txt2, #9aa0aa); }
-
+/* ── 分类选择 ─────────────────────────────────────────────────────────── */
 .fb-cats { display: flex; gap: 8px; margin-bottom: 12px; }
 .fb-cat {
   flex: 1;
-  padding: 8px 0;
-  text-align: center;
-  border: 1px solid var(--border, #333);
-  border-radius: 8px;
+  height: 38px;
+  padding: 0;
+  border: 1px solid #dfe3e8;
+  border-radius: 10px;
+  background: #f7f9fb;
+  color: #57606a;
+  font: inherit;
   font-size: 13px;
   cursor: pointer;
-  background: var(--bg, #12151b);
-  color: var(--txt2, #9aa0aa);
+  transition: border-color .15s, background .15s, color .15s;
 }
-.fb-cat.active { border-color: #5b8def; color: #5b8def; }
+.fb-cat:hover { border-color: var(--accent, #185FA5); color: var(--accent, #185FA5); }
+.fb-cat.active {
+  border-color: var(--accent, #185FA5);
+  background: rgba(24, 95, 165, .08);
+  color: var(--accent, #185FA5);
+  font-weight: 600;
+}
 
-.fb-modal textarea {
+/* ── 正文输入 ─────────────────────────────────────────────────────────── */
+/* 与 auth.css 的 .sp-field input 同一套观感,只是多行 */
+.fb-textarea {
   width: 100%;
-  min-height: 96px;
+  min-height: 104px;
+  margin-bottom: 12px;
+  padding: 11px 14px;
   resize: vertical;
-  padding: 10px 12px;
-  border-radius: 8px;
-  border: 1px solid var(--border, #333);
-  background: var(--bg, #12151b);
-  color: var(--txt, #e6e6e6);
+  border-radius: 10px;
+  border: 1px solid #dfe3e8;
+  background: #f7f9fb;
+  color: #1f2328;
   font-size: 14px;
   font-family: inherit;
+  line-height: 1.6;
   box-sizing: border-box;
+  transition: border-color .15s, box-shadow .15s, background .15s;
 }
-.fb-modal input {
-  width: 100%;
-  height: 38px;
-  margin-top: 10px;
-  padding: 0 12px;
-  border-radius: 8px;
-  border: 1px solid var(--border, #333);
-  background: var(--bg, #12151b);
-  color: var(--txt, #e6e6e6);
-  font-size: 14px;
-  box-sizing: border-box;
+.fb-textarea::placeholder { color: #aab1ba; }
+.fb-textarea:focus {
+  outline: none;
+  background: #fff;
+  border-color: var(--accent, #185FA5);
+  box-shadow: 0 0 0 3px rgba(24, 95, 165, .15);
 }
-.fb-modal textarea:focus, .fb-modal input:focus { outline: none; border-color: #5b8def; }
 
-.fb-msg { min-height: 18px; margin: 8px 0 2px; font-size: 12px; color: #e0684d; }
-.fb-msg.ok { color: #2fa87d; }
-
+/* ── 按钮行 ───────────────────────────────────────────────────────────── */
 .fb-actions { display: flex; gap: 10px; margin-top: 6px; }
-.fb-submit {
-  flex: 1;
-  height: 40px;
-  border: none;
-  border-radius: 8px;
-  background: #5b8def;
-  color: #fff;
-  font-size: 15px;
-  cursor: pointer;
-}
-.fb-submit:disabled { opacity: .6; cursor: default; }
+/* 提交键用 auth.css 的 .sp-submit,只在这里改成并排布局 */
+.fb-actions .sp-submit { flex: 1; width: auto; margin-top: 0; }
 .fb-cancel {
-  height: 40px;
-  padding: 0 16px;
-  border: 1px solid var(--border, #333);
-  border-radius: 8px;
-  background: none;
-  color: var(--txt2, #9aa0aa);
+  flex: none;
+  height: 46px;
+  padding: 0 20px;
+  border: 1px solid #dfe3e8;
+  border-radius: 10px;
+  background: #fff;
+  color: #57606a;
+  font: inherit;
   font-size: 14px;
   cursor: pointer;
+  transition: border-color .15s, color .15s, background .15s;
+}
+.fb-cancel:hover { background: #f2f4f6; color: #24292f; }
+
+/* ── 响应式(≤480px 手机) ──────────────────────────────────────────────
+   字号顶到 16px:iOS Safari 对 font-size < 16px 的输入框会在聚焦时自动
+   放大整个页面,而且不会自己缩回去(同 auth.css 里的处理)。 */
+@media (max-width: 480px) {
+  .fb-textarea { font-size: 16px; }
+  .fb-fab { right: 14px; bottom: 14px; }
 }
