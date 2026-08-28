@@ -2,9 +2,9 @@
 用户反馈 API
 ============
 
-POST /api/feedback           — 提交反馈(匿名可提;登录则带 user_id)
-GET  /api/feedback/list      — 【仅管理员 IP】查看反馈列表(运营三角)
-POST /api/feedback/{id}/status {status}  — 【仅管理员 IP】标记处理状态
+POST /api/feedback           — 提交反馈(匿名可提;登录则带 user_id)，落库后邮件通知管理员
+GET  /api/feedback/list      — 【仅管理员】查看反馈列表(运营三角)
+POST /api/feedback/{id}/status {status}  — 【仅管理员】标记处理状态
 """
 from __future__ import annotations
 
@@ -29,6 +29,7 @@ class FeedbackReq(BaseModel):
     category: str = "other"
     content: str
     contact: Optional[str] = None
+    page: Optional[str] = None
 
 
 class StatusReq(BaseModel):
@@ -46,6 +47,8 @@ def submit(req: FeedbackReq, request: Request):
             contact=req.contact,
             ip=_client_ip(request),
             user_agent=request.headers.get("user-agent"),
+            page=req.page,
+            user=user,
         )
     except service.FeedbackRateLimitError as e:
         raise HTTPException(429, str(e))

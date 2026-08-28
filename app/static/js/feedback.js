@@ -4,7 +4,8 @@
  * 引入 feedback.css + feedback.js 即自动在右下角挂一个"反馈"悬浮按钮，
  * 点开弹窗提交问题反馈 / 功能建议。匿名可提，登录用户后端自动带 user_id。
  *
- * 后端：POST /api/feedback {category, content, contact?}
+ * 后端：POST /api/feedback {category, content, contact?, page?}
+ *       page = 提交时所在页面(自动上报，管理员邮件里显示"所在菜单")
  *
  * 弹窗外壳用的是 auth.css 里那套 .sp-* 类(遮罩/卡片/标题/输入框/提交键/
  * 提示行) —— 跟登录弹窗共用一份观感,改一处两处一起变,不会再各走各的。
@@ -34,6 +35,14 @@
         return j;
       });
     });
+  }
+
+  // 反馈时所在的页面，随单上报给管理员("所在菜单"字段)。
+  // 用 <title> 去掉站名后缀当地名，再拼路径兜底(title 缺失/相同的页面)。
+  function currentPage() {
+    var t = (document.title || "").replace(/\s*[-|·]\s*收盘\s*(shoupan)?\s*$/, "").trim();
+    var path = location.pathname || "";
+    return t ? t + "(" + path + ")" : path;
   }
 
   function buildModal() {
@@ -115,6 +124,7 @@
       category: category,
       content: content,
       contact: (contactInput.value || "").trim() || null,
+      page: currentPage(),
     })
       .then(function () {
         setMsg("已收到，感谢你的反馈！", true);

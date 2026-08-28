@@ -35,6 +35,7 @@ import smtplib
 import ssl as _ssl
 from email.message import EmailMessage
 from email.utils import formataddr, make_msgid
+from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +77,82 @@ def _send_console(email: str, code: str) -> None:
     logger.warning("【邮箱验证码·console】%s -> %s (仅日志，未真实投递)", email, code)
 
 
+# ── 通用事务邮件(反馈通知等非验证码邮件共用) ─────────────────────────────────
+
+def send_mail(
+    to_addrs: List[str], subject: str,
+    text: str, html: Optional[str] = None,
+) -> None:
+    """通用事务邮件出口：文本 + 可选 HTML 正文，逐个收件人投递。
+
+    与验证码邮件共用同一套 SMTP 投递(_send_smtp)与 console 后端(只打日志不外发，
+    本地开发默认走这条)。多收件人时一个地址失败不影响其余；全部失败才抛
+    MailError，让调用方决定怎么降级。
+    """
+    if not to_addrs:
+        return
+    provider = _provider()
+    if provider == "console":
+        for to in to_addrs:
+            logger.warning("【邮件·console】to=%s subject=%s (仅日志，未真实投递)",
+                           to, subject)
+        return
+    if provider != "smtp":
+        raise MailError(f"未知 MAIL_PROVIDER: {provider}")
+
+    errors: List[Exception] = []
+    for to in to_addrs:
+        msg = EmailMessage()
+        _stamp_headers(msg, subject, to)
+        msg.set_content(text)
+        if html:
+            msg.add_alternative(html, subtype="html")
+        try:
+            _send_smtp(to, msg)
+        except MailError as e:
+            errors.append(e)
+    if len(errors) == len(to_addrs):
+        raise MailError("邮件发送失败") from errors[0]
+
+
+def build_page(body_html: str) -> str:
+    """把一段正文 HTML 包进验证码邮件同款的浅色卡片外壳。"""
+    return f"""<!doctype html>
+<html><body style="margin:0;padding:24px;background:#f6f7f9;
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;">
+  <div style="max-width:560px;margin:0 auto;background:#fff;border-radius:12px;
+      padding:28px;border:1px solid #e5e7eb;">{body_html}
+    <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0 14px;">
+    <p style="margin:0;font-size:12px;color:#9ca3af;line-height:1.7;">
+      {SITE_NAME}<br>本站内容仅供研究，不构成投资建议。</p>
+  </div>
+</body></html>"""
+
+
 # ── 邮件正文 ──────────────────────────────────────────────────────────────────
+
+def _from_header() -> str:
+    """发件人 formataddr 串；没配发件地址直接报错(两种邮件都依赖)。"""
+    from_addr = (os.getenv("SMTP_FROM", "").strip()
+                 or os.getenv("SMTP_USER", "").strip())
+    if not from_addr:
+        raise MailError("未配置发件地址(SMTP_FROM / SMTP_USER)")
+    from_name = os.getenv("SMTP_FROM_NAME", SITE_NAME).strip()
+    return formataddr((from_name, from_addr))
+
+
+def _stamp_headers(msg: EmailMessage, subject: str, to: str) -> None:
+    """公共头：From/To/Subject/Message-ID/Auto-Submitted。"""
+    from_addr = (os.getenv("SMTP_FROM", "").strip()
+                 or os.getenv("SMTP_USER", "").strip())
+    msg["Subject"] = subject
+    msg["From"] = _from_header()
+    msg["To"] = to
+    # 显式给 Message-ID：部分 SMTP 服务不补，缺这个头会拉低投递评分
+    msg["Message-ID"] = make_msgid(domain=from_addr.rsplit("@", 1)[-1])
+    # 事务性邮件，不该被"一键退订"逻辑扫进营销队列
+    msg["Auto-Submitted"] = "auto-generated"
+
 
 def _build_message(email: str, code: str) -> EmailMessage:
     """组装验证码邮件。
@@ -85,20 +161,8 @@ def _build_message(email: str, code: str) -> EmailMessage:
     少一次跳转。正文用纯文本 + HTML 两份(text/plain 兜底那些不渲染 HTML 的
     客户端，也降低被判垃圾邮件的概率 —— 纯 HTML 单体邮件的垃圾分更高)。
     """
-    from_addr = (os.getenv("SMTP_FROM", "").strip()
-                 or os.getenv("SMTP_USER", "").strip())
-    if not from_addr:
-        raise MailError("未配置发件地址(SMTP_FROM / SMTP_USER)")
-    from_name = os.getenv("SMTP_FROM_NAME", SITE_NAME).strip()
-
     msg = EmailMessage()
-    msg["Subject"] = f"{code} 是你的{SITE_NAME}登录验证码"
-    msg["From"] = formataddr((from_name, from_addr))
-    msg["To"] = email
-    # 显式给 Message-ID：部分 SMTP 服务不补，缺这个头会拉低投递评分
-    msg["Message-ID"] = make_msgid(domain=from_addr.rsplit("@", 1)[-1])
-    # 验证码邮件是事务性邮件，不该被"一键退订"逻辑扫进营销队列
-    msg["Auto-Submitted"] = "auto-generated"
+    _stamp_headers(msg, f"{code} 是你的{SITE_NAME}登录验证码", email)
 
     msg.set_content(
         f"你正在登录 {SITE_NAME}。\n\n"

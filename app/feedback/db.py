@@ -25,6 +25,7 @@ DDL_STATEMENTS = [
         category    ENUM('bug','feature','other') NOT NULL DEFAULT 'other',
         content     TEXT         NOT NULL,
         contact     VARCHAR(100) COMMENT '用户留的联系方式(可选,方便回复)',
+        page        VARCHAR(200) COMMENT '提交反馈时所在的页面/菜单(前端上报)',
         ip          VARCHAR(45),
         user_agent  VARCHAR(255),
         status      ENUM('new','read','done') NOT NULL DEFAULT 'new'
@@ -39,6 +40,39 @@ DDL_STATEMENTS = [
 _tables_ready = False
 
 
+def _migrate_user_feedback(conn) -> None:
+    """给上线后才建的 user_feedback 补 page 列。
+
+    与 auth 模块的 _migrate_app_user 同款：MySQL 的 ADD COLUMN 没有
+    IF NOT EXISTS，先查 INFORMATION_SCHEMA 再决定发不发 DDL；单步 try，
+    失败只 WARNING 不让 ensure_tables 整个炸掉。
+    """
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COLUMN_NAME AS col
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE table_schema = DATABASE() AND table_name = 'user_feedback'
+                """
+            )
+            cols = {r["col"] for r in cur.fetchall()}
+    except Exception as e:
+        logger.warning("探测 user_feedback 结构失败，跳过迁移: %s", e)
+        return
+    if not cols or "page" in cols:
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "ALTER TABLE user_feedback ADD COLUMN page VARCHAR(200) NULL "
+                "COMMENT '提交反馈时所在的页面/菜单(前端上报)' AFTER contact"
+            )
+        logger.info("user_feedback 迁移：补 page 列完成")
+    except Exception as e:
+        logger.warning("user_feedback 迁移：补 page 列失败(下次重试): %s", e)
+
+
 def ensure_tables() -> None:
     global _tables_ready
     if _tables_ready:
@@ -49,6 +83,7 @@ def ensure_tables() -> None:
     with conn.cursor() as cur:
         for sql in DDL_STATEMENTS:
             cur.execute(sql)
+    _migrate_user_feedback(conn)
     _tables_ready = True
     logger.info("feedback 表已就绪")
 
@@ -56,6 +91,7 @@ def ensure_tables() -> None:
 def insert_feedback(
     user_id: Optional[int], category: str, content: str,
     contact: Optional[str], ip: Optional[str], user_agent: Optional[str],
+    page: Optional[str] = None,
 ) -> int:
     conn = _get_pool()
     if conn is None:
@@ -64,10 +100,10 @@ def insert_feedback(
         cur.execute(
             """
             INSERT INTO user_feedback
-                (user_id, category, content, contact, ip, user_agent)
-            VALUES (%s, %s, %s, %s, %s, %s)
+                (user_id, category, content, contact, page, ip, user_agent)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             """,
-            (user_id, category, content, contact, ip, user_agent),
+            (user_id, category, content, contact, page, ip, user_agent),
         )
         return cur.lastrowid
 
@@ -77,8 +113,8 @@ def list_feedback(limit: int = 50, status: Optional[str] = None) -> List[Dict[st
     if conn is None:
         return []
     sql = (
-        "SELECT id, user_id, category, content, contact, ip, status, created_at "
-        "FROM user_feedback"
+        "SELECT id, user_id, category, content, contact, page, ip, status, "
+        "created_at FROM user_feedback"
     )
     params: list = []
     if status:
