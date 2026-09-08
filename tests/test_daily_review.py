@@ -277,7 +277,7 @@ def test_generate_idempotent_skip_and_force(fake_db, trading_day, monkeypatch):
 
 def test_generate_failed_on_deepseek_error(fake_db, trading_day, monkeypatch):
     async def chat(messages, timeout=60.0, **kw):
-        raise runner.DeepSeekError("HTTP 500")
+        raise runner.LLMError("HTTP 500")
 
     monkeypatch.setattr(runner, "chat_json", chat)
     result = asyncio.run(generate_once(TRADE_DATE))

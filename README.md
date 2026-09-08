@@ -39,7 +39,12 @@
 - 止损基于累积 pct_change(避开分红除权误触发)
 - 整段调仓事务化:中途失败自动回滚,持仓与现金不会割裂
 
-**AI 热门板块(DeepSeek)**
+> 下面三个 AI 功能共用一个出口 `app/llm_client.py`(OpenAI 兼容协议)。
+> **换供应商只改 .env**:`LLM_PROVIDER=zhipu` + `ZHIPU_API_KEY=…` 就切到智谱的
+> `glm-4-flash`(长期免费);DeepSeek / 硅基流动 / 阿里百炼 / 火山方舟同理,
+> 代码一行不动。落库的 `model` 字段记的是当次真实用的模型名,事后分得清。
+
+**AI 热门板块**
 - 每交易日 15:05 两段式提示词:DeepSeek 选 3 个热门板块,每板块再选 3 只强势股
 - T 日收盘价买入 → T+1 收盘价卖出,等权滚动复利;资金曲线对比中证1000基准 + 扣费后收益(佣金双边+印花税,最低佣金 5 元如实计入)
 - 胜率多维统计:按天 / 按板块 / 按选股提示词版本聚合;盘中实时浮动盈亏
@@ -135,7 +140,12 @@ MYSQL_DATABASE=back_test
 | `DB_BORROW_TIMEOUT` | 30 | 借连接超时(秒) |
 | `TRUSTED_PROXIES` | (空) | 可信反代 IP/CIDR,逗号分隔。空 = 一律忽略代理头 |
 | `ADMIN_EMAILS` | (空) | 管理员登录邮箱,逗号分隔。**留空 = 全站没有管理员**(管理接口一律 403,有意为之的安全默认) |
-| `DEEPSEEK_API_KEY` | (空) | AI 热门板块/复盘/个股报告共用的 DeepSeek API Key,不配则这些功能不产出 |
+| `LLM_PROVIDER` | `deepseek` | AI 供应商档案名:`deepseek` / `zhipu` / `custom`。三个 AI 功能共用(见 `app/llm_client.py`) |
+| `DEEPSEEK_API_KEY` | (空) | DeepSeek 的 Key(`LLM_PROVIDER=deepseek` 时用) |
+| `ZHIPU_API_KEY` | (空) | 智谱开放平台的 Key(`LLM_PROVIDER=zhipu` 时用)。`glm-4-flash` 长期免费 |
+| `LLM_MODEL` | 按档案 | 覆盖档案里的模型名(如智谱换 `glm-4.5-flash`),留空用默认 |
+| `LLM_BASE_URL` | 按档案 | 覆盖接口地址;接档案里没有的家时配 `LLM_PROVIDER=custom` + 这个 |
+| `LLM_API_KEY` | (空) | 显式指定 Key,优先级高于上面按家分开的那两个 |
 | `SUBSCRIBE_CONTACT_QQ` | 1415854304 | 订阅页展示的人工开通联系 QQ |
 | `DEBUG` | 0 | 开启后对外错误信息附带内部异常细节,仅本地排障用 |
 | `MAIL_PROVIDER` | 自动 | 验证码投递后端:`smtp` 真发信 / `console` 只打日志。**留空时按有没有配 `SMTP_HOST` 自动判断** |
@@ -511,8 +521,9 @@ curl -s http://localhost:8000/api/strategies
 ```
 app/
   main.py                    FastAPI 应用入口(页面路由 + 核心 API + 中间件)
-  config.py                  Settings(MySQL / DeepSeek / ADMIN_EMAILS / DEBUG)
+  config.py                  Settings(MySQL / LLM / ADMIN_EMAILS / DEBUG)
   csrf.py                    写接口同源检查
+  llm_client.py              LLM 出口(OpenAI 兼容;换供应商=改 .env,三个 AI 功能共用)
   ratelimit.py               滑动窗口限流(全站共用一份实现)
   json_safe.py               Decimal/date/NaN → JSON 安全转换
   visit_log.py               HTTP 访问日志中间件(IP 地理 + UA 解析)
@@ -554,10 +565,9 @@ app/
   my_board/                  个人数据看板(登录后各自保存布局,未登录只读)
   cloudmap/                  大盘云图(ECharts treemap)
   sectors/                   板块排行榜(sector_snapshot 快照的读取端,60s 缓存)
-  ai_hotsector/              AI 热门板块(DeepSeek 每日选板块+选股)
+  ai_hotsector/              AI 热门板块(每日选板块+选股)
     runner.py                  predict_once / settle_once 每日运行器
     db.py                      ai_hotsector_* 表 DDL + CRUD + settle_status 状态机
-    deepseek_client.py         DeepSeek chat JSON 客户端
     prompts.py                 板块/选股两段式提示词(带版本号)
   daily_review/              AI 每日复盘(DeepSeek 基于当日真实数据生成)
     runner.py                  build_context 数据快照 + generate_once 生成落库

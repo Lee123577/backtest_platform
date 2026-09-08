@@ -27,7 +27,7 @@ from ..data.data_loader import normalize_code
 from ..engine.fees import COMMISSION_RATE, MIN_COMMISSION, STAMP_TAX_RATE
 from ..sectors.fetcher import fetch_concept, fetch_industry
 from . import db
-from .deepseek_client import DeepSeekError, chat_json
+from ..llm_client import LLMError, chat_json, current_model
 from .prompts import (
     SECTOR_PROMPT_VERSION,
     STOCK_PROMPT_VERSION,
@@ -136,7 +136,7 @@ async def predict_once(pick_date: Optional[_Date] = None) -> PredictResult:
         msg = "板块涨跌幅快照获取失败(新浪接口无数据)，无法基于真实行情选板块"
         logger.error("[%s] %s", pick_date, msg)
         db.upsert_pick(
-            pick_date, "deepseek-chat", SECTOR_PROMPT_VERSION, STOCK_PROMPT_VERSION,
+            pick_date, current_model(), SECTOR_PROMPT_VERSION, STOCK_PROMPT_VERSION,
             None, None, "failed", msg,
         )
         return PredictResult(pick_date=pick_date, status="failed", error_msg=msg)
@@ -146,7 +146,7 @@ async def predict_once(pick_date: Optional[_Date] = None) -> PredictResult:
         sectors_json, sectors_raw = await chat_json(sector_messages(pick_date, board_snapshot))
         sectors_resp = (sectors_json.get("sectors") or [])[:3]
         if len(sectors_resp) < 3:
-            raise DeepSeekError(f"板块返回数量不足(需要3个): {sectors_json}")
+            raise LLMError(f"板块返回数量不足(需要3个): {sectors_json}")
         sector_names = [str(s.get("name") or "").strip() for s in sectors_resp]
 
         stocks_json, stocks_raw = await chat_json(
@@ -191,10 +191,10 @@ async def predict_once(pick_date: Optional[_Date] = None) -> PredictResult:
                     "stock_reason": reason,
                     "settle_status": "pending_price" if lookup else "code_not_found",
                 })
-    except (DeepSeekError, db.DbUnavailableError) as e:
+    except (LLMError, db.DbUnavailableError) as e:
         logger.error("[%s] AI 热门板块预测失败: %s", pick_date, e)
         db.upsert_pick(
-            pick_date, "deepseek-chat", SECTOR_PROMPT_VERSION, STOCK_PROMPT_VERSION,
+            pick_date, current_model(), SECTOR_PROMPT_VERSION, STOCK_PROMPT_VERSION,
             None, None, "failed", str(e),
         )
         return PredictResult(pick_date=pick_date, status="failed", error_msg=str(e))
@@ -209,7 +209,7 @@ async def predict_once(pick_date: Optional[_Date] = None) -> PredictResult:
         deduped.append(row)
 
     db.upsert_pick(
-        pick_date, "deepseek-chat", SECTOR_PROMPT_VERSION, STOCK_PROMPT_VERSION,
+        pick_date, current_model(), SECTOR_PROMPT_VERSION, STOCK_PROMPT_VERSION,
         sectors_raw, stocks_raw, "predicted", None,
     )
     db.replace_stocks(pick_date, deduped)

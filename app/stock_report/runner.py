@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from datetime import date as _Date
 from typing import Optional
 
-from ..ai_hotsector.deepseek_client import DEFAULT_MODEL, DeepSeekError, chat_json
+from ..llm_client import LLMError, chat_json, current_model
 from . import db
 from .context import StockDataNotReady, build_context
 from .prompts import REPORT_PROMPT_VERSION, report_messages
@@ -101,15 +101,15 @@ async def generate_once(code: str, force: bool = False) -> ReportResult:
         title = str(parsed.get("title") or "").strip()[:120]
         content_md = str(parsed.get("content_md") or "").strip()
         if not content_md:
-            raise DeepSeekError(f"content_md 为空: {parsed}")
+            raise LLMError(f"content_md 为空: {parsed}")
         if not title:
             name = (context.get("basic") or {}).get("name") or code
             title = f"{name}({code}) 数据解读"
-    except DeepSeekError as e:
+    except LLMError as e:
         err = str(e)
         logger.error("[stock_report] %s 生成失败: %s", code, err)
         db.upsert_report(
-            code, report_date, DEFAULT_MODEL, REPORT_PROMPT_VERSION,
+            code, report_date, current_model(), REPORT_PROMPT_VERSION,
             title=None, score=None, score_reason=None, trend=None, content_md=None,
             context_json=context_json, status="failed", error_msg=err[:2000],
         )
@@ -118,7 +118,7 @@ async def generate_once(code: str, force: bool = False) -> ReportResult:
 
     # ── 3. 落库 ───────────────────────────────────────────────────────────
     db.upsert_report(
-        code, report_date, DEFAULT_MODEL, REPORT_PROMPT_VERSION,
+        code, report_date, current_model(), REPORT_PROMPT_VERSION,
         title=title,
         score=_clean_score(parsed.get("score")),
         score_reason=(str(parsed.get("score_reason") or "").strip()[:300] or None),

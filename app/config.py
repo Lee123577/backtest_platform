@@ -23,7 +23,23 @@ class Settings:
     MYSQL_USER: str = os.getenv("MYSQL_USER", "root")
     MYSQL_PASSWORD: str = os.getenv("MYSQL_PASSWORD", "")
     MYSQL_DATABASE: str = os.getenv("MYSQL_DATABASE", "")
-    DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "")
+    # ── LLM(OpenAI 兼容协议) ─────────────────────────────────────────
+    # 三个 AI 功能共用一个出口(app/llm_client.py)。换供应商 = 改这几个变量，
+    # 不动代码 —— DeepSeek / 智谱 / 硅基流动 / 百炼 / 火山用的是同一套协议。
+    #
+    #   LLM_PROVIDER  预置档案名(deepseek / zhipu / custom)
+    #   LLM_BASE_URL  留空用档案默认;要接档案里没有的家才需要给
+    #   LLM_MODEL     留空用档案默认(如智谱的 glm-4-flash)
+    #   LLM_API_KEY   显式指定;留空则按 provider 取下面对应的那把
+    #
+    # Key 按家分开存，是为了"两家的 Key 都留着、改一行 LLM_PROVIDER 就切回去"——
+    # 共用一个变量的话，切换时容易换了 endpoint 忘了换 Key。
+    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "deepseek").strip().lower()
+    LLM_BASE_URL: str = os.getenv("LLM_BASE_URL", "").strip().rstrip("/")
+    LLM_MODEL: str = os.getenv("LLM_MODEL", "").strip()
+    LLM_API_KEY: str = os.getenv("LLM_API_KEY", "").strip()
+    DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "").strip()
+    ZHIPU_API_KEY: str = os.getenv("ZHIPU_API_KEY", "").strip()
     # 调试开关:开启后对外错误信息会附带内部异常细节(仅本地排障用,生产务必关闭)
     DEBUG: bool = os.getenv("DEBUG", "0").strip().lower() in ("1", "true", "yes", "on")
 
