@@ -217,6 +217,27 @@ def list_alerts(user_id: int, limit: int = 50) -> List[Dict[str, Any]]:
         return cur.fetchall()
 
 
+def alerts_by_date(trade_date: _Date) -> List[Dict[str, Any]]:
+    """某个交易日的全部提醒(不分用户)。邮件任务按 user_id 分组后逐人发一封。
+
+    一次全取再在内存里分组，而不是按用户逐个查：一天的提醒总量是
+    "订阅用户数 × 自选数 × 策略数"里真正命中的那一小撮，几百行封顶。
+    """
+    conn = _get_pool()
+    if conn is None:
+        return []
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT user_id, code, name, strategy_id, strategy_name, `signal`, trade_date
+            FROM signal_alert WHERE trade_date=%s
+            ORDER BY user_id, code
+            """,
+            (trade_date,),
+        )
+        return cur.fetchall()
+
+
 def count_unread(user_id: int) -> int:
     conn = _get_pool()
     if conn is None:

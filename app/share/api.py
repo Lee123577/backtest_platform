@@ -17,6 +17,7 @@ from typing import Any, Dict
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
+from ..csrf import reject_cross_site_write
 from ..auth.deps import get_current_user
 from ..ratelimit import SlidingWindowLimiter
 from ..visit_log import _client_ip
@@ -24,7 +25,8 @@ from . import db, service
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["share"])
+# 同源闸:存快照是写库动作,配额按 IP 算,别让别的站点借访客的手把配额刷掉。
+router = APIRouter(tags=["share"], dependencies=[Depends(reject_cross_site_write)])
 
 # 滑动窗口本体在 app/ratelimit.py(五处调用点共用一份实现)。
 # 这份收拢前每个请求都要全量扫一遍字典 —— 没有清扫节流,收拢后跟其他几处一致。

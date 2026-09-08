@@ -66,6 +66,7 @@ from .engine.backtest import calc_benchmark, run_backtest
 from .engine.portfolio_backtest import run_portfolio_backtest
 from .engine.robustness import compute_oos_split, compute_param_sensitivity
 from .auth.admin import get_admin, require_admin
+from .csrf import reject_cross_site_write
 from .paper_trading import db as paper_db
 from .scheduler import db as scheduler_db
 from .scheduler import registry as scheduler_registry
@@ -234,6 +235,15 @@ app.include_router(analytics_router)
 # 回测结果分享快照(公开链接)
 from .share.api import router as share_router  # noqa: E402
 app.include_router(share_router)
+
+# 邮件通知：偏好开关(需登录)与退订页(公开)。退订必须独立于登录和同源闸,
+# 详见 app/notify/api.py 开头 —— 所以这里是两个 router，不是一个。
+from .notify.api import (  # noqa: E402
+    router as notify_router,
+    public_router as notify_public_router,
+)
+app.include_router(notify_router)
+app.include_router(notify_public_router)
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -522,7 +532,7 @@ async def page_share(token: str, request: Request):
 _SHARE_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 
 
-_SITE_ORIGIN = "https://shoupan.asia"
+_SITE_ORIGIN = settings.SITE_ORIGIN
 
 
 # ── 每日复盘：服务端直出(SEO)──────────────────────────────────────────────
@@ -1570,7 +1580,8 @@ class BacktestRequest(BaseModel):
 @app.post("/api/backtest")
 def api_backtest(req: BacktestRequest,
                  request: Request,
-                 _rl: None = Depends(_rate_limit_backtest)):
+                 _rl: None = Depends(_rate_limit_backtest),
+                 _csrf: None = Depends(reject_cross_site_write)):
     # 普通 def:数据加载(DB/akshare) + 回测计算都是同步重活,
     # 让 FastAPI 丢 anyio 线程池,不阻塞事件循环
     _validate_date_range(req.start_date, req.end_date)
@@ -1716,6 +1727,7 @@ async def api_portfolio_backtest(
     req: PortfolioBacktestRequest,
     request: Request,
     _rl: None = Depends(_rate_limit_backtest),
+    _csrf: None = Depends(reject_cross_site_write),
 ):
     """
     Streams SSE progress events then a final result event.

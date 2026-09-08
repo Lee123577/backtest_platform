@@ -21,11 +21,11 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from ..csrf import reject_cross_site
+from ..csrf import reject_cross_site_write
 from ..visit_log import _client_ip, _is_from_trusted_proxy
 from . import avatar, service
 from .deps import get_current_user, require_login
@@ -33,7 +33,13 @@ from .mailer import MailError
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/auth", tags=["auth"])
+# 同源闸挂在 router 上,而不是各个处理函数里挨个调 —— 原先 send_code/login/logout
+# 三个 POST 就是这么漏掉的:跨站能替访客刷验证码、把人登录到攻击者的账号上
+# (login CSRF)、或者把人强制登出。挂在这里,以后新增的写接口自动被覆盖。
+router = APIRouter(
+    prefix="/api/auth", tags=["auth"],
+    dependencies=[Depends(reject_cross_site_write)],
+)
 
 # 头像图片不挂在 /api 下 —— 它是给 <img src> 用的普通静态资源语义(公开、长缓存)，
 # 单独一个 router，在 main.py 里另行挂载。
@@ -150,7 +156,6 @@ def me(request: Request):
 @router.put("/profile")
 def update_profile(req: ProfileReq, request: Request):
     """改昵称。传空串 = 清空，回到按邮箱生成的默认展示名。"""
-    reject_cross_site(request)
     user = require_login(request)
     try:
         name = service.set_display_name(int(user["id"]), req.display_name)
@@ -195,7 +200,6 @@ _ALLOWED_UPLOAD_CT = ("image/", "application/octet-stream")
 
 @router.post("/avatar")
 async def upload_avatar(request: Request):
-    reject_cross_site(request)
     user = require_login(request)
 
     ctype = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
@@ -220,7 +224,6 @@ async def upload_avatar(request: Request):
 
 @router.delete("/avatar")
 def reset_avatar(request: Request):
-    reject_cross_site(request)
     user = require_login(request)
     try:
         service.clear_avatar(int(user["id"]))

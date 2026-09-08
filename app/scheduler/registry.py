@@ -177,6 +177,23 @@ TASKS: Dict[str, TaskDef] = {
         "depends_on": "daily_update",
         "description": "自选盯盘收盘信号扫描(17:20,依赖daily_update)",
     },
+    "watchlist_alert_mail": {
+        "cmd": ["python", "scripts/notify_watchlist_alerts.py"],
+        "schedule": "weekday:17:25",
+        # 每封之间有 0.4s 间隔 + SMTP 超时 10s,按最坏情况给足;真实耗时是秒级
+        "timeout_sec": 20 * 60,
+        "depends_on": "watchlist_alert_scan",
+        "description": "自选盯盘信号提醒邮件(17:25,依赖watchlist_alert_scan)",
+    },
+    "daily_digest_mail": {
+        "cmd": ["python", "scripts/notify_daily_digest.py"],
+        # 复盘 17:45 生成(最长 6 分钟),18:00 发已经稳了;
+        # 热门板块 15:05 就出了,不用等
+        "schedule": "weekday:18:00",
+        "timeout_sec": 20 * 60,
+        "depends_on": "daily_review_generate",
+        "description": "每日复盘+AI热门板块推送邮件(18:00,依赖daily_review_generate)",
+    },
 }
 
 

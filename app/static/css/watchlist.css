@@ -141,3 +141,21 @@
 .wl-strat input { margin: 0; }
 .wl-strat.on { border-color: #5b8def; }
 .wl-save-row { margin-top: 14px; display: flex; align-items: center; gap: 12px; }
+
+/* ── 邮件通知开关 ─────────────────────────────────────────── */
+/* 每项一行(不做成盯盘策略那种网格):这三项各自的说明比标题长得多,
+   挤成两列会把说明压成两三行,读起来比开关本身还费劲。 */
+.wl-notify-list { display: flex; flex-direction: column; gap: 10px; }
+.wl-notify-item {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 10px 12px; cursor: pointer;
+  border: 1px solid var(--border, #333); border-radius: 8px;
+}
+.wl-notify-item:hover { border-color: #5b8def; }
+.wl-notify-item input { margin: 3px 0 0; flex: none; }
+.wl-notify-text { display: flex; flex-direction: column; gap: 3px; }
+.wl-notify-text b { font-size: 13px; color: var(--txt, #e6e6e6); font-weight: 600; }
+.wl-notify-text span { font-size: 12px; color: var(--txt2, #9aa0aa); line-height: 1.7; }
+.wl-notify-foot { margin-top: 12px; font-size: 12px; color: var(--txt2, #9aa0aa); }
+.wl-notify-msg { font-size: 12px; color: #e0684d; margin-left: 8px; font-weight: 400; }
+.wl-notify-msg.ok { color: #2fa87d; }

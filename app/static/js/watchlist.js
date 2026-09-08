@@ -3,6 +3,10 @@
  * ==========
  * 登录后管理自选股 + 盯盘策略；信号提醒是会员权益(未订阅显示订阅引导)。
  * 后端：/api/watchlist/{config,add,remove,rules,alerts,alerts/read}
+ *
+ * 页面底部还有一块「邮件通知」开关，走的是另一套后端 /api/notify/prefs ——
+ * 放在这一页是因为盯盘就是这些邮件的来源场景，用户在这里配完策略，
+ * 顺手就能决定要不要收信，不用再去找一个"设置"页。
  */
 (function () {
   "use strict";
@@ -21,6 +25,18 @@
   function postJson(url, body) {
     return fetch(url, {
       method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    }).then(function (r) {
+      return r.json().then(function (j) {
+        if (!r.ok) throw new Error(j.detail || ("HTTP " + r.status));
+        return j;
+      });
+    });
+  }
+
+  function putJson(url, body) {
+    return fetch(url, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body || {}),
     }).then(function (r) {
       return r.json().then(function (j) {
@@ -121,6 +137,67 @@
     postJson("/api/watchlist/alerts/read", {}).then(loadAlerts);
   }
 
+  // ── 邮件通知开关 ────────────────────────────────────────────────────────
+  // 三项的文案要说清楚"什么时候会收到信"和"会不会打扰"——邮件通知最怕的是
+  // 用户不知道自己开了什么，收到信第一反应是点垃圾邮件而不是退订。
+  var NOTIFY_ITEMS = [
+    ["watchlist_alert", "自选盯盘信号提醒",
+     "收盘扫描命中你勾选的策略时，当天把命中的股票汇总成一封发给你（会员功能，一天最多一封）"],
+    ["daily_review", "AI 每日复盘",
+     "每个交易日收盘后，把当天复盘的标题和摘要发给你，全文回站内看"],
+    ["ai_hotsector", "AI 热门板块",
+     "当天的关注板块与选股名单；和上面的复盘合并在同一封信里，不会多发一封"],
+  ];
+
+  function renderPrefs(data) {
+    var p = (data && data.prefs) || {};
+    $("wlNotify").innerHTML =
+      '<div class="wl-notify-list">' +
+      NOTIFY_ITEMS.map(function (it) {
+        return '<label class="wl-notify-item">' +
+          '<input type="checkbox" data-kind="' + it[0] + '"' +
+          (p[it[0]] ? " checked" : "") + ">" +
+          '<span class="wl-notify-text"><b>' + esc(it[1]) + "</b>" +
+          "<span>" + esc(it[2]) + "</span></span></label>";
+      }).join("") +
+      "</div>" +
+      '<div class="wl-notify-foot">每封信都带一键退订链接；退订后这里的开关也会同步关掉。</div>';
+    $("wlNotify").querySelectorAll("input[type=checkbox]").forEach(function (cb) {
+      cb.addEventListener("change", function () { savePref(cb); });
+    });
+  }
+
+  function savePref(cb) {
+    // 开关类交互即改即存：多一个"保存"按钮只会让人以为没生效
+    var body = {};
+    body[cb.getAttribute("data-kind")] = cb.checked;
+    setNotifyMsg("保存中…");
+    putJson("/api/notify/prefs", body)
+      .then(function (d) { setNotifyMsg("已保存", true); renderPrefs(d); })
+      .catch(function (e) {
+        // 存失败就把勾回退回去,不能让界面显示成"开了"其实没开
+        cb.checked = !cb.checked;
+        setNotifyMsg(e.message || "保存失败");
+      });
+  }
+
+  function setNotifyMsg(t, ok) {
+    var e = $("wlNotifyMsg");
+    if (!e) return;
+    e.textContent = t;
+    e.className = "wl-notify-msg" + (ok ? " ok" : "");
+    if (ok) setTimeout(function () { if (e.textContent === t) e.textContent = ""; }, 2000);
+  }
+
+  function loadPrefs() {
+    getJson("/api/notify/prefs")
+      .then(renderPrefs)
+      .catch(function () {
+        $("wlNotify").innerHTML =
+          '<div class="no-data">通知设置暂时加载不出来，稍后刷新重试。</div>';
+      });
+  }
+
   function setAddMsg(t, ok) { var e = $("wlAddMsg"); e.textContent = t; e.className = "wl-add-msg" + (ok ? " ok" : ""); }
   function setSaveMsg(t, ok) { var e = $("wlSaveMsg"); e.textContent = t; e.className = "wl-save-msg" + (ok ? " ok" : ""); }
 
@@ -178,6 +255,7 @@
         renderStocks();
         renderStrategies();
         loadAlerts();
+        loadPrefs();
         $("wlAddBtn").addEventListener("click", addStock);
         $("wlCodeInput").addEventListener("keydown", function (e) { if (e.key === "Enter") addStock(); });
         // 代码/名称联想。选中候选后直接入库,省掉用户再点一次"添加"。

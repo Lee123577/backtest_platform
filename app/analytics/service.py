@@ -27,6 +27,7 @@ EVENTS: Dict[str, str] = {
     "subscribe_activated": "开通会员",
     "share_click":         "点击分享",
     "demo_click":          "点首屏示例",
+    "lifetime_claimed":    "领取终生会员",
 }
 
 # 漏斗层级(顺序即漏斗顺序)。visitors 不是事件，来自访问日志。

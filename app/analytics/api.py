@@ -18,6 +18,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from ..csrf import reject_cross_site_write
 from ..auth.deps import get_current_user
 from ..auth.admin import require_admin
 from ..ratelimit import SlidingWindowLimiter
@@ -26,7 +27,8 @@ from . import attribution, db, service
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["analytics"])
+# 同源闸:埋点是写库动作,跨站灌事件会把漏斗数据搅浑。
+router = APIRouter(tags=["analytics"], dependencies=[Depends(reject_cross_site_write)])
 
 
 # ── 限流:埋点接口是公开的,不能让人拿它往表里灌数据 ──────────────────────────

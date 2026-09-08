@@ -7,6 +7,9 @@
   smtp     —— 走 SMTP 真实投递(生产用)。**本模块已完整实现，不是占位。**
   console  —— 不真发信，把验证码打到日志(WARNING)。本地开发用。
 
+对外两个入口：send_login_code(验证码) 与 send_mail(通用通知信)。
+两者共用同一套后端选择与 SMTP 连接逻辑，只有正文和附加头不同。
+
 之所以特意写死这两个后端并把 smtp 实现完整：上一版 sms.py 只有 console 能跑，
 aliyun 分支是一句 raise —— 结果线上"账号体系存在但没人能注册"，白挂了几个月。
 新模块的默认值仍是 console(本地不该乱发信)，但只要配了 SMTP_HOST 就自动切到
@@ -35,7 +38,7 @@ import smtplib
 import ssl as _ssl
 from email.message import EmailMessage
 from email.utils import formataddr, make_msgid
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -82,12 +85,17 @@ def _send_console(email: str, code: str) -> None:
 def send_mail(
     to_addrs: List[str], subject: str,
     text: str, html: Optional[str] = None,
+    headers: Optional[Dict[str, str]] = None,
 ) -> None:
     """通用事务邮件出口：文本 + 可选 HTML 正文，逐个收件人投递。
 
     与验证码邮件共用同一套 SMTP 投递(_send_smtp)与 console 后端(只打日志不外发，
     本地开发默认走这条)。多收件人时一个地址失败不影响其余；全部失败才抛
     MailError，让调用方决定怎么降级。
+
+    headers 是给**通知类**邮件用的额外头，目前只有 List-Unsubscribe 那一对：
+    不带一键退订头，Gmail/QQ 会把整个发信域名的信誉打下来。反馈通知这类
+    事务邮件不传它(它们本来就不该被当成可退订的营销邮件)。
     """
     if not to_addrs:
         return
@@ -104,6 +112,9 @@ def send_mail(
     for to in to_addrs:
         msg = EmailMessage()
         _stamp_headers(msg, subject, to)
+        for k, v in (headers or {}).items():
+            if v:
+                msg[k] = v
         msg.set_content(text)
         if html:
             msg.add_alternative(html, subtype="html")

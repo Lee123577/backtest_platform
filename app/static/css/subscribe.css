@@ -61,3 +61,74 @@
   color: var(--txt2, #9aa0aa);
   line-height: 1.7;
 }
+
+/* ── 终生会员免费名额 ─────────────────────────────────────────────────────── */
+/* 这块是页面上最该被看见的东西(免费的比套餐更抓人),所以给足对比度:
+   一条品牌色左边框 + 略深的底,而不是又一张和套餐卡长得一样的卡。 */
+.lt-panel {
+  border-left: 3px solid var(--brand-2, #EF9F27);
+}
+.lt-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--txt, #e6e6e6);
+  margin-bottom: 6px;
+}
+.lt-desc {
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--txt2, #9aa0aa);
+  margin: 0 0 12px;
+}
+.lt-desc strong { color: var(--brand-2, #EF9F27); }
+
+/* 进度条:把"还剩几个"变成看得见的紧迫感 */
+.lt-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--border, #3a3f4b);
+  overflow: hidden;
+  margin: 0 0 8px;
+}
+.lt-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--brand-2, #EF9F27), #f5c26b);
+  border-radius: 999px;
+  transition: width .4s ease;
+}
+.lt-count {
+  font-size: 12px;
+  color: var(--txt2, #9aa0aa);
+  margin-bottom: 14px;
+}
+.lt-count .lt-left { color: var(--brand-2, #EF9F27); font-weight: 700; }
+
+.lt-btn {
+  background: var(--brand-2, #EF9F27);
+  color: #1a1d23;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 22px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: filter .15s, transform .1s;
+}
+.lt-btn:hover:not(:disabled) { filter: brightness(1.08); transform: translateY(-1px); }
+.lt-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+.lt-note {
+  font-size: 12px;
+  color: var(--txt2, #9aa0aa);
+  margin: 10px 0 0;
+  line-height: 1.7;
+}
+.lt-ok {
+  font-size: 14px;
+  color: #2fa87d;
+  font-weight: 600;
+  line-height: 1.8;
+}
+.lt-ok .lt-seat { color: var(--brand-2, #EF9F27); }
+.lt-soldout { font-size: 14px; color: var(--txt2, #9aa0aa); line-height: 1.8; }
+.lt-err { font-size: 13px; color: #e05c5c; margin: 10px 0 0; }

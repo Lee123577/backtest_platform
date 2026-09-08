@@ -6,6 +6,7 @@
   1. is_subscribed / subscription_status —— 到期判定
   2. create_order —— 未知套餐拒绝、金额与套餐一致
   3. fulfill_order —— 首次开通、幂等(重复回调不重复延长)、续费叠加剩余时长
+  4. claim_lifetime —— 抢占式名额:一人一个、抢光即止、终生会员不被时长卡降级
 """
 from datetime import datetime, timedelta
 
@@ -23,9 +24,35 @@ class FakeDB:
     def __init__(self):
         self.subs = {}      # user_id -> {plan, expires_at}
         self.orders = {}    # order_no -> row
+        self.seats = {}     # seat_no -> user_id / None(空座位)
 
     def ensure_tables(self):
         pass
+
+    # ── 终生会员名额(照抄真实 db 的语义:预置空座位 + 抢占) ──
+    def ensure_seats(self, total):
+        for i in range(1, total + 1):
+            self.seats.setdefault(i, None)
+
+    def seat_counts(self):
+        return {"total": len(self.seats),
+                "claimed": sum(1 for v in self.seats.values() if v)}
+
+    def get_grant(self, user_id):
+        for no in sorted(self.seats):
+            if self.seats[no] == user_id:
+                return {"seat_no": no, "user_id": user_id}
+        return None
+
+    def claim_seat(self, user_id, now):
+        got = self.get_grant(user_id)
+        if got:                       # 唯一键：同一个人不会占到第二个座位
+            return got["seat_no"]
+        for no in sorted(self.seats):
+            if self.seats[no] is None:
+                self.seats[no] = user_id
+                return no
+        return None                   # 抢光了
 
     def get_subscription(self, user_id):
         row = self.subs.get(user_id)
@@ -163,3 +190,59 @@ def test_renew_after_expiry_starts_from_now(fake):
 def test_fulfill_unknown_order(fake):
     with pytest.raises(SubscriptionError):
         service.fulfill_order("NOPE", now=NOW)
+
+
+# ── 终生会员免费名额 ─────────────────────────────────────────────────────────
+
+def test_claim_lifetime_opens_membership(fake):
+    out = service.claim_lifetime(UID, now=NOW)
+    assert out["already"] is False and out["seat_no"] == 1
+    st = service.subscription_status(UID, now=NOW)
+    assert st["subscribed"] is True and st["lifetime"] is True
+    # "终生"落库就是一个很远的到期时间，按时长比大小的老逻辑一行都不用改
+    assert fake.subs[UID]["expires_at"] == service.LIFETIME_EXPIRES
+
+
+def test_claim_lifetime_is_idempotent(fake):
+    first = service.claim_lifetime(UID, now=NOW)
+    second = service.claim_lifetime(UID, now=NOW)
+    assert second["already"] is True
+    assert second["seat_no"] == first["seat_no"]
+    # 重复点不能多吃一个名额
+    assert fake.seat_counts()["claimed"] == 1
+
+
+def test_lifetime_seats_run_out(fake, monkeypatch):
+    monkeypatch.setattr(service, "LIFETIME_SEATS", 2)
+    service.claim_lifetime(1, now=NOW)
+    service.claim_lifetime(2, now=NOW)
+    with pytest.raises(service.SeatsSoldOut):
+        service.claim_lifetime(3, now=NOW)
+    assert service.lifetime_stats()["remaining"] == 0
+
+
+def test_lifetime_stats_counts_remaining(fake, monkeypatch):
+    monkeypatch.setattr(service, "LIFETIME_SEATS", 30)
+    service.claim_lifetime(1, now=NOW)
+    stats = service.lifetime_stats(1)
+    assert stats["total"] == 30 and stats["claimed"] == 1
+    assert stats["remaining"] == 29 and stats["mine"] == 1
+
+
+def test_lifetime_stats_none_when_db_broken(fake, monkeypatch):
+    # 名额查询挂了不能把订阅状态接口一起拖垮，只是不显示领取入口
+    def boom(*a, **kw):
+        raise RuntimeError("库连不上")
+    monkeypatch.setattr(fake, "seat_counts", boom)
+    assert service.lifetime_stats(1) is None
+
+
+def test_paid_plan_never_downgrades_lifetime(fake):
+    """终生会员又买了张月卡：订单照记 paid，但订阅行不能被改回 month。"""
+    service.claim_lifetime(UID, now=NOW)
+    order = service.create_order(UID, "month", now=NOW)
+    activated, row = service.fulfill_order(order["order_no"], now=NOW)
+    assert activated is True and row["status"] == "paid"
+    assert fake.subs[UID]["plan"] == service.LIFETIME_PLAN
+    assert fake.subs[UID]["expires_at"] == service.LIFETIME_EXPIRES
+    assert service.subscription_status(UID, now=NOW)["lifetime"] is True

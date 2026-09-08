@@ -27,6 +27,10 @@ class Settings:
     # 调试开关:开启后对外错误信息会附带内部异常细节(仅本地排障用,生产务必关闭)
     DEBUG: bool = os.getenv("DEBUG", "0").strip().lower() in ("1", "true", "yes", "on")
 
+    # 站点对外地址(带协议，不带结尾斜杠)。canonical / sitemap / 邮件里的链接
+    # 都从这里取 —— 邮件里的链接必须是绝对地址，相对路径在邮件客户端里点不动。
+    SITE_ORIGIN: str = os.getenv("SITE_ORIGIN", "https://shoupan.asia").rstrip("/")
+
     # 管理员账号(登录邮箱，逗号分隔，大小写不敏感)。
     #
     # 刻意放在 .env 而不是数据库：管理员名单是**能不能改数据**的总开关，

@@ -20,6 +20,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from ..csrf import reject_cross_site_write
 from ..json_safe import json_safe as _json_safe
 from ..auth.deps import require_login
 from ..subscription.deps import require_subscription
@@ -28,7 +29,12 @@ from . import db, service
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/watchlist", tags=["watchlist"])
+# 写接口的老规矩:带 Origin/Referer 的浏览器请求必须同源。挂在 router 上，
+# 只对 POST/PUT/PATCH/DELETE 生效,GET 不设防(见 app/csrf.py 里的原因)。
+router = APIRouter(
+    prefix="/api/watchlist", tags=["watchlist"],
+    dependencies=[Depends(reject_cross_site_write)],
+)
 
 
 class CodeReq(BaseModel):

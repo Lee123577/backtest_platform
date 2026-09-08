@@ -37,7 +37,13 @@
     <div class="sub-status" id="subStatus">加载中…</div>
   </div>
 
-  <div class="panel">
+  <!-- 终生会员免费名额:名额没了/表还没建时由 JS 整块隐藏(后端回 lifetime_offer=null) -->
+  <div class="panel lt-panel" id="ltPanel" hidden>
+    <div class="panel-title">限量福利</div>
+    <div id="ltBody"></div>
+  </div>
+
+  <div class="panel" id="planPanel">
     <div class="panel-title">选择套餐</div>
     <div class="plan-grid" id="planGrid"></div>
     <div class="sub-msg" id="subMsg"></div>

@@ -123,3 +123,44 @@ def test_write_same_origin_passes():
     reject_cross_site_write(FakeRequest(
         {"origin": "http://example.com", "host": "example.com"}, method="POST"
     ))
+
+
+# ── 全站覆盖:新增写接口忘了挂闸,这个用例会红 ─────────────────────────────────
+
+def _dep_calls(dependant):
+    """递归收集一条路由依赖树上的全部可调用对象。"""
+    out = []
+    for sub in dependant.dependencies:
+        out.append(sub.call)
+        out.extend(_dep_calls(sub))
+    return out
+
+
+_WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+# 唯一豁免:邮件客户端的一键退订(List-Unsubscribe-Post)。那个 POST 来自
+# 收件方的服务器,既没有 Origin 也带不上我们的 cookie,挂闸等于把功能废掉。
+# 它的凭证是 URL 里的随机令牌,且能做的事只有"少收几封信"。
+_EXEMPT = {("POST", "/unsubscribe")}
+
+
+def test_every_write_endpoint_is_guarded():
+    from app.main import app
+    from app.auth.admin import require_admin
+
+    guards = {reject_cross_site_write, require_admin}
+    unguarded = []
+    for route in app.routes:
+        methods = getattr(route, "methods", set()) & _WRITE_METHODS
+        if not methods:
+            continue
+        for m in sorted(methods):
+            if (m, route.path) in _EXEMPT:
+                continue
+            if not set(_dep_calls(route.dependant)) & guards:
+                unguarded.append(f"{m} {route.path}")
+    assert not unguarded, (
+        "这些写接口没有同源闸,请在它们的 router 上挂 "
+        "dependencies=[Depends(reject_cross_site_write)]: " + ", ".join(unguarded)
+    )
+

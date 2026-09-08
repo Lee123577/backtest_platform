@@ -79,6 +79,19 @@
 - 个人数据看板 `/my_board`:行情/复盘等卡片自由排版,登录后各自保存一份
 - 回测分享:回测结果存快照,生成 `/s/{token}` 公开链接(页面 noindex,靠链接传播不靠搜索)
 - 订阅会员 `/subscribe`:暂不接在线支付 —— 下单拿订单号 → QQ 人工核对 → 管理员履约
+- 终生会员免费名额:前 30 名登录用户可直接领,名额是**预置的 30 个空座位**,
+  领取 = `UPDATE ... WHERE user_id IS NULL LIMIT 1`,靠行锁串行化,并发下不会超发
+  (`COUNT(*)<30` 再插一行的写法必然发出第 31 份)
+
+**邮件通知(`app/notify/`)**
+- 两封信:收盘后的**自选信号提醒**(17:25)、**每日复盘 + AI 热门板块**推送(18:00)
+- 一天最多一封:复盘和热门板块合成同一封,分两封就成了每天两条广告
+- 正文只放摘要 + 回站链接 —— 复盘全文是会员内容,不能从邮件漏出去
+- 幂等靠 `email_send_log` 的 `(user_id, kind, 交易日)` 唯一键:**先占位再发信**,
+  失败就释放占位;任务重跑时已收到的人跳过、失败的人重试,不会有人收到两封
+- 开关默认值分两类:盯盘提醒(用户自己配策略换来的结果)默认开,
+  内容推送默认关必须自己勾;每封信带一键退订(`List-Unsubscribe-Post`),
+  退订不要登录、GET 只出确认页(邮件客户端会预抓链接,GET 一执行就把人退了)
 
 **安全**
 - 管理员 = 登录邮箱在 `ADMIN_EMAILS` 里的账号,名单放 .env 不放库(拿到库口令 ≠ 拿到管理权)。曾用 IP 白名单,但家宽 IP 会变、IP 是位置不是身份,已废弃(`paper_admin_ip` 随之移除)
@@ -135,6 +148,8 @@ MYSQL_DATABASE=back_test
 | `SMTP_FROM_NAME` | 站点名 | 发件人显示名 |
 | `SMTP_TIMEOUT` | 10 | SMTP 连接/读写超时(秒) |
 | `SITE_NAME` | `收盘 shoupan` | 邮件标题与落款里的站点名 |
+| `SITE_ORIGIN` | `https://shoupan.asia` | 站点对外地址(带协议,不带结尾斜杠)。canonical / sitemap / **邮件里的链接**都从这里取 |
+| `LIFETIME_SEATS` | 30 | 终生会员免费名额数。**只应调大不该调小** —— 发出去的收不回来,调小只会让剩余名额算成负数 |
 
 ### 初始化历史数据
 
@@ -196,10 +211,11 @@ python run.py
 | `/daily_review/2026-07-08` | 指定日期的复盘,每篇独立可索引 URL |
 | `/cloudmap` | 大盘云图 treemap |
 | `/my_board` | 个人数据看板:卡片自由排版,登录后各自保存 |
-| `/watchlist` | 自选盯盘:自选股 + 盯盘策略,收盘扫信号(提醒属会员) |
-| `/subscribe` | 订阅会员(下单 → QQ 人工开通) |
+| `/watchlist` | 自选盯盘:自选股 + 盯盘策略,收盘扫信号(提醒属会员);页底可开关邮件通知 |
+| `/subscribe` | 订阅会员(下单 → QQ 人工开通);顶部是前 30 名免费领终生会员的入口 |
 | `/s/{token}` | 回测结果分享快照页(公开,noindex) |
 | `/admin/tasks` | 调度任务监控:历史运行/状态/手动触发(管理员账号;旧路径 `/tasks` 307 跳转) |
+| `/unsubscribe?token=…` | 邮件退订页(公开,noindex;GET 只出确认页,退订动作在 POST) |
 | `/legal` | 法务/免责声明 |
 
 ### 功能截图
@@ -411,6 +427,8 @@ scheduler.runner.run_due()  →  subprocess 跑各任务(全表见下方"调度�
 | `app_user` / `email_code` / `user_session` | auth | 用户 / 登录验证码 / 会话(token 库内只存 sha256) |
 | `user_watchlist` / `user_alert_rule` / `signal_alert` | watchlist | 自选股 / 盯盘策略规则 / 收盘信号提醒 |
 | `subscription` / `payment_order` | subscription | 会员订阅态 / 人工开通订单 |
+| `lifetime_grant` | subscription | 终生会员免费名额(建表时预置 30 个空座位,抢占式领取) |
+| `email_pref` / `email_send_log` | notify | 邮件通知开关 + 退订令牌 / 发信账本(一天一封的幂等闸) |
 | `user_board_layout` | my_board | 登录用户的看板布局(每人一行) |
 | `user_feedback` | feedback | 用户反馈(分类/处理状态) |
 | `backtest_share` | share | 回测结果分享快照(`/s/{token}` 的内容) |
@@ -430,9 +448,11 @@ scheduler.runner.run_due()  →  subprocess 跑各任务(全表见下方"调度�
 | `sector_snapshot` | weekday 15:10 | — | 新浪行业/概念板块涨跌快照(失败隔 40 分钟重试,当天最多 5 次) |
 | `daily_update` | weekday 17:00 | — | 增量更新 K 线/财务/指数/北向资金/因子 |
 | `watchlist_alert_scan` | weekday 17:20 | `daily_update` | 自选股 × 盯盘策略收盘信号扫描,命中落站内提醒 |
+| `watchlist_alert_mail` | weekday 17:25 | `watchlist_alert_scan` | 把当天命中的信号汇总成一封邮件发给开了通知的用户 |
 | `daily_signal` | weekday 17:30 | `daily_update` | 模拟盘选股(参数由 `/paper_trading` 页 UI 配置,不硬编码在脚本里) |
 | `ai_hotsector_settle` | weekday 17:35 | `daily_update` | AI 热门板块回填收盘价 + 结算胜率/资金曲线 |
 | `daily_review_generate` | weekday 17:45 | `daily_update` | AI 每日市场复盘生成(DeepSeek) |
+| `daily_digest_mail` | weekday 18:00 | `daily_review_generate` | 复盘摘要 + AI 热门板块合成一封推送邮件(顺带清理 90 天前的发信账本) |
 | `stock_report_batch` | weekday 18:10 | `daily_update` | 个股 AI 报告批量预生成(成交额前 50,长尾访客按需触发) |
 | `backfill_geo` | daily 00:00 | — | 访问日志 IP 地理回填(离线 xdb) |
 | `backfill_dividend_full` | 每月 1 号 02:00 | — | 全市场 ex_div 事件兜底回填 |
@@ -525,7 +545,12 @@ app/
     admin.py                   管理员判定(ADMIN_EMAILS 登录账号)
     deps.py                    get_current_user / require_login 依赖
   watchlist/                 自选盯盘(自选股 + 盯盘策略 + 收盘信号提醒)
-  subscription/              订阅会员(订单 → QQ 人工核对 → 管理员履约)
+  subscription/              订阅会员(订单 → QQ 人工核对 → 管理员履约 / 前 30 名免费领终生会员)
+  notify/                    邮件通知(盯盘信号提醒 + 每日复盘/热门板块推送)
+    db.py                      email_pref 开关与退订令牌 / email_send_log 发信账本
+    service.py                 先占位再发信、失败释放占位(任务重跑不会重复打扰)
+    render.py                  两封信的纯文本 + HTML 正文(退订链接与免责声明必带)
+    api.py                     偏好接口(需登录) + 退订页(公开,不挂同源闸)
   my_board/                  个人数据看板(登录后各自保存布局,未登录只读)
   cloudmap/                  大盘云图(ECharts treemap)
   sectors/                   板块排行榜(sector_snapshot 快照的读取端,60s 缓存)
@@ -546,7 +571,7 @@ app/
   data_status/               数据完整性状态查询
   scheduler/                 任务调度
     runner.py                  subprocess 执行 + 日志写入 task_run_log
-    registry.py                任务清单(13 个任务,唯一事实来源)
+    registry.py                任务清单(15 个任务,唯一事实来源)
     db.py                      task_run_log CRUD
   static/                    各页面 HTML/JS(服务端直出)
 
@@ -560,6 +585,8 @@ scripts/
   stock_report_batch.py      个股 AI 报告批量预生成(18:10,成交额前 50)
   sector_snapshot.py         板块涨跌快照(15:10)
   scan_watchlist_alerts.py   自选盯盘信号扫描(17:20)
+  notify_watchlist_alerts.py 盯盘信号提醒邮件(17:25)
+  notify_daily_digest.py     每日复盘+热门板块推送邮件(18:00)
   backfill_dividend.py       Ex-div 事件回填(支持 --day-of-month / --holdings-only)
   backfill_kline.py          K 线指定区间补漏
   backfill_market_cap.py     历史市值回填(--only-uncovered 只补缺口)
@@ -620,13 +647,15 @@ with get_conn() as conn:
 
 ### 测试
 
-pytest 套件在 `tests/`(29 个文件),全部纯函数 —— 不连 DB、不走网络,用合成数据断言精确值:
+pytest 套件在 `tests/`(30 个文件、564 个用例),全部纯函数 —— 不连 DB、不走网络,用合成数据断言精确值:
 
 ```bash
 python -m pytest tests/
 ```
 
-覆盖:回测/组合引擎算账(`test_backtest_engine` / `test_portfolio_engine` / `test_metrics_money_fees`)、样本外与参数敏感性(`test_robustness`)、模拟盘 runner(`test_paper_runner`)、调度时刻表(`test_scheduler_schedule`)、登录会话与头像(`test_auth` / `test_auth_profile`)、管理员账号与同源(`test_admin_account` / `test_admin_origin`)、个股报告/AI 板块/复盘(`test_stock_report` / `test_ai_hotsector` / `test_daily_review*`)、限流(`test_ratelimit`)、看板归属(`test_my_board_scope`)、自选/订阅/反馈/分享/板块分组/股票搜索/数据质量/连接池/客户端 IP 判定等。
+覆盖:回测/组合引擎算账(`test_backtest_engine` / `test_portfolio_engine` / `test_metrics_money_fees`)、样本外与参数敏感性(`test_robustness`)、模拟盘 runner(`test_paper_runner`)、调度时刻表(`test_scheduler_schedule`)、登录会话与头像(`test_auth` / `test_auth_profile`)、管理员账号与同源(`test_admin_account` / `test_admin_origin`)、个股报告/AI 板块/复盘(`test_stock_report` / `test_ai_hotsector` / `test_daily_review*`)、限流(`test_ratelimit`)、看板归属(`test_my_board_scope`)、邮件通知与退订(`test_notify`)、自选/订阅(含终生会员名额)/反馈/分享/板块分组/股票搜索/数据质量/连接池/客户端 IP 判定等。
+
+其中 `test_admin_origin.py::test_every_write_endpoint_is_guarded` 是一张回归网:它遍历整张路由表,任何写接口(POST/PUT/PATCH/DELETE)漏挂同源闸都会让测试变红 ——`/api/auth/{send_code,login,logout}` 三个漏网就是这么找出来的。
 
 ---
 

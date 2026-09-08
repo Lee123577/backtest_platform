@@ -26,14 +26,17 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from ..auth.deps import get_current_user
-from ..csrf import reject_cross_site
+from ..csrf import reject_cross_site_write
 from . import service
 
-router = APIRouter(prefix="/api/my_board", tags=["my_board"])
+router = APIRouter(
+    prefix="/api/my_board", tags=["my_board"],
+    dependencies=[Depends(reject_cross_site_write)],
+)
 
 
 class LayoutReq(BaseModel):
@@ -58,7 +61,6 @@ def get_layout(request: Request):
 
 @router.post("/layout")
 def save_layout(req: LayoutReq, request: Request):
-    reject_cross_site(request)
     user = get_current_user(request)
     try:
         service.save_layout(user, req.layout)

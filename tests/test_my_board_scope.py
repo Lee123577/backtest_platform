@@ -211,8 +211,7 @@ def test_登录用户拿到can_save为真(as_user, fake_store):
     assert out["logged_in"] is True
 
 
-def test_访客保存返回403(as_visitor, fake_store, monkeypatch):
-    monkeypatch.setattr(api, "reject_cross_site", lambda r: None)
+def test_访客保存返回403(as_visitor, fake_store):
     with pytest.raises(HTTPException) as e:
         api.save_layout(api.LayoutReq(layout=ONE_CARD), FakeRequest())
     assert e.value.status_code == 403
@@ -223,20 +222,14 @@ def test_登录用户保存成功(as_user, fake_store):
     assert fake_store[7]["cards"] == ONE_CARD["cards"]
 
 
-def test_所有写请求都过跨站检查(as_user, fake_store, monkeypatch):
-    """会话 cookie 是 SameSite=Lax 已经挡了大半,但这一层照样要在 ——
-    以前只有未登录那条路走它(因为身份是 IP),现在统一都走,少一个分支少一处漏。"""
-    called = []
-    monkeypatch.setattr(api, "reject_cross_site", lambda r: called.append(True))
-    api.save_layout(api.LayoutReq(layout=ONE_CARD), FakeRequest())
-    assert called == [True]
+def test_写请求由router级同源闸把守():
+    """会话 cookie 是 SameSite=Lax 已经挡了大半,但这一层照样要在。
 
-
-def test_跨站写请求直接被拦(as_user, fake_store, monkeypatch):
-    def _boom(r):
-        raise HTTPException(403, "跨站")
-
-    monkeypatch.setattr(api, "reject_cross_site", _boom)
-    with pytest.raises(HTTPException) as e:
-        api.save_layout(api.LayoutReq(layout=ONE_CARD), FakeRequest())
-    assert e.value.status_code == 403
+    闸原先长在 save_layout 函数体里,现在统一搬到 router 上 —— 挂在函数里的写法
+    每加一个写接口就要记得手动调一次,auth 的 send_code/login/logout 就是这么漏的。
+    这里只确认它挂在 my_board 这个 router 上;"跨站请求真的收到 403"由
+    tests/test_admin_origin.py 的全站覆盖用例负责。
+    """
+    from app.csrf import reject_cross_site_write
+    assert any(d.dependency is reject_cross_site_write
+               for d in api.router.dependencies)

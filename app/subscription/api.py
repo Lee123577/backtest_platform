@@ -4,8 +4,9 @@
 
 GET  /api/subscription/status              — 当前订阅态 + 套餐列表 + 人工开通联系方式
 POST /api/subscription/order  {plan}       — 下单(需登录)，返回订单号+金额+联系方式
+POST /api/subscription/claim_lifetime      — 免费领取终生会员名额(需登录)
 POST /api/subscription/dev_activate {order_no}
-        — 【仅管理员 IP】把订单标记为已支付并开通会员
+        — 【仅管理员】把订单标记为已支付并开通会员
 
 当前不接在线支付：用户下单拿到订单号 → 加 QQ 找主理人 → 核对后管理员调
 dev_activate 履约。接入支付宝时在此补 /alipay_notify 回调调 service.fulfill_order
@@ -18,13 +19,19 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from ..csrf import reject_cross_site_write
 from ..auth.deps import get_current_user, require_login
 from ..auth.admin import require_admin
 from . import db, service
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/subscription", tags=["subscription"])
+# 同源闸:下单/领取终生会员都是写操作,不能让别的站点用一张图片或表单
+# 借着用户的 cookie 替他点掉(尤其是名额有限的领取)。GET 不受影响。
+router = APIRouter(
+    prefix="/api/subscription", tags=["subscription"],
+    dependencies=[Depends(reject_cross_site_write)],
+)
 
 
 class OrderReq(BaseModel):
@@ -39,16 +46,23 @@ class DevActivateReq(BaseModel):
 def status(request: Request):
     user = get_current_user(request)
     contact = service.contact_info()
+    uid = int(user["id"]) if user else None
+    # 名额未登录也要给：营销位要在登录前就把"还剩几个"摆出来，不然没人有动力去登录
+    lifetime = service.lifetime_stats(uid)
     if user is None:
+        # 字段形状对齐已登录分支：lifetime 恒为布尔(是不是终生会员)，
+        # 名额概览一律走 lifetime_offer —— 同名不同型的字段前端最容易踩空。
         return {"logged_in": False, "subscribed": False, "expires_at": None,
-                "plans": service.plans_public(), "contact": contact}
+                "lifetime": False, "plans": service.plans_public(),
+                "contact": contact, "lifetime_offer": lifetime}
     try:
-        st = service.subscription_status(int(user["id"]))
+        st = service.subscription_status(uid)
     except Exception as e:
         logger.info("subscription status 查询失败(按未订阅处理): %s", e)
-        st = {"subscribed": False, "expires_at": None, "plan": None}
+        st = {"subscribed": False, "expires_at": None, "plan": None, "lifetime": False}
     return {"logged_in": True, **st,
-            "plans": service.plans_public(), "contact": contact}
+            "plans": service.plans_public(), "contact": contact,
+            "lifetime_offer": lifetime}
 
 
 @router.post("/order")
@@ -75,6 +89,26 @@ def _record_event(event: str, user: dict, request: Request, meta=None) -> None:
                           meta=meta, **request_context(request))
     except Exception as e:
         logger.info("%s 埋点失败(忽略): %s", event, e)
+
+
+@router.post("/claim_lifetime")
+def claim_lifetime(request: Request, user: dict = Depends(require_login)):
+    """免费领取终生会员名额。需登录 —— 名额要落到一个能长期找回的身份上，
+    匿名访客发完就找不回来了(换台设备就成了另一个人)。
+
+    409 而不是 400：请求本身没毛病，是名额没了，前端据此显示"已抢完"。
+    """
+    try:
+        out = service.claim_lifetime(int(user["id"]))
+    except service.SeatsSoldOut as e:
+        raise HTTPException(409, str(e))
+    except service.SubscriptionError as e:
+        raise HTTPException(400, str(e))
+    if not out.get("already"):
+        _record_event("lifetime_claimed", user, request,
+                      {"seat_no": out.get("seat_no")})
+    return {"ok": True, **out,
+            "status": service.subscription_status(int(user["id"]))}
 
 
 @router.post("/dev_activate")

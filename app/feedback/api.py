@@ -14,6 +14,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from ..csrf import reject_cross_site_write
 from ..json_safe import json_safe as _json_safe
 from ..visit_log import _client_ip
 from ..auth.deps import get_current_user
@@ -22,7 +23,11 @@ from . import db, service
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/feedback", tags=["feedback"])
+# 同源闸:提交是匿名可写的接口,除了既有的 IP 频控,再挡一层跨站代发。
+router = APIRouter(
+    prefix="/api/feedback", tags=["feedback"],
+    dependencies=[Depends(reject_cross_site_write)],
+)
 
 
 class FeedbackReq(BaseModel):
