@@ -96,7 +96,7 @@ async def generate_once(code: str, force: bool = False) -> ReportResult:
         # 0.4:比选股(0.3)略松让行文自然,又比复盘(0.6)收紧 —— 个股报告里
         # 每一句都挂着具体数字,发挥空间越大越容易滑向"编一个说法"
         parsed, _raw = await chat_json(
-            report_messages(context), timeout=90.0, temperature=0.4
+            report_messages(context), timeout=150.0, temperature=0.4
         )
         title = str(parsed.get("title") or "").strip()[:120]
         content_md = str(parsed.get("content_md") or "").strip()

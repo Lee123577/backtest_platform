@@ -162,7 +162,11 @@ async def chat_json(
             f"{describe()} HTTP {e.response.status_code}: {e.response.text[:300]}"
         ) from e
     except httpx.HTTPError as e:  # TimeoutException 也是 HTTPError 子类
-        raise LLMError(f"{describe()} 请求失败: {e}") from e
+        # 必须带上异常类名:httpx 的超时异常 str() 是空串,只写 {e} 的话
+        # 报错就是"请求失败: "后面什么都没有,排查时完全看不出是超时还是断连
+        raise LLMError(
+            f"{describe()} 请求失败({type(e).__name__}, timeout={timeout}s): {e}"
+        ) from e
 
     try:
         data = resp.json()

@@ -146,15 +146,17 @@ async def predict_once(pick_date: Optional[_Date] = None) -> PredictResult:
         sectors_json, sectors_raw = await chat_json(
             # 90s 而不是默认的 60s:换到 glm-4.5-flash 后单次调用实测 60~87s,
             # 用默认值会稳定超时,而超时会让整批预测直接判 failed
-            sector_messages(pick_date, board_snapshot), timeout=90.0
+            sector_messages(pick_date, board_snapshot), timeout=120.0
         )
         sectors_resp = (sectors_json.get("sectors") or [])[:3]
         if len(sectors_resp) < 3:
             raise LLMError(f"板块返回数量不足(需要3个): {sectors_json}")
         sector_names = [str(s.get("name") or "").strip() for s in sectors_resp]
 
+        # 180s:这一段是全站最重的一次调用 —— 提示词带 3 个板块的成分股清单,
+        # 输出要 9 只股票各配一段理由。实测 glm-4.5-flash 在 90s 会稳定超时。
         stocks_json, stocks_raw = await chat_json(
-            stock_messages(pick_date, sector_names, board_lookup), timeout=90.0
+            stock_messages(pick_date, sector_names, board_lookup), timeout=180.0
         )
         stocks_resp = stocks_json.get("sectors") or []
 
