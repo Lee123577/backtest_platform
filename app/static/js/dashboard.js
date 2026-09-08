@@ -83,9 +83,17 @@
 
   function renderMember(sub, loggedIn) {
     var el = $("memberBody");
+    var left = (sub && sub.lifetime_offer && sub.lifetime_offer.remaining) || 0;
     if (!loggedIn) {
       el.innerHTML = '<div class="dash-big muted">未登录</div>' +
-        '<div class="dash-note">登录后可开通会员</div>';
+        '<div class="dash-note">' +
+        (left > 0 ? "登录后可免费领终生会员（还剩 " + left + " 个）" : "登录后可开通会员") +
+        "</div>";
+      return;
+    }
+    if (sub && sub.lifetime) {
+      el.innerHTML = '<div class="dash-big ok">终生会员</div>' +
+        '<div class="dash-note">全部会员功能已解锁，无到期时间</div>';
       return;
     }
     if (sub && sub.subscribed) {
@@ -100,8 +108,12 @@
         '<a class="dash-link" href="/subscribe">续费 / 管理 →</a>';
     } else {
       el.innerHTML = '<div class="dash-big muted">未开通</div>' +
-        '<div class="dash-note">开通后解锁历史复盘与信号提醒</div>' +
-        '<a class="dash-cta" href="/subscribe">立即开通</a>';
+        '<div class="dash-note">' +
+        (left > 0
+          ? "前 " + sub.lifetime_offer.total + " 名可免费领终生会员，还剩 " + left + " 个"
+          : "开通后解锁历史复盘与信号提醒") + "</div>" +
+        '<a class="dash-cta" href="/subscribe">' +
+        (left > 0 ? "🎁 免费领取" : "立即开通") + "</a>";
     }
   }
 
@@ -158,7 +170,11 @@
     var loggedIn = !!user;
     renderHero(user);
     if (!loggedIn) {
-      renderMember(null, false);
+      // 未登录也拉一次订阅状态:这个接口是公开的,要的只是 lifetime_offer ——
+      // 名额还剩几个是给没登录的人看的钩子,拿不到就退回"登录后可开通会员"
+      getJson("/api/subscription/status")
+        .then(function (sub) { renderMember(sub, false); })
+        .catch(function () { renderMember(null, false); });
       renderAlerts(null, false);
       return;
     }

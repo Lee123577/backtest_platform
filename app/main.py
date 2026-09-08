@@ -648,6 +648,9 @@ def _dr_body(row: Optional[Dict[str, Any]], locked: bool) -> str:
             '<div class="dr-paywall">'
             '<div class="dr-paywall-title">🔒 订阅解锁完整复盘</div>'
             "<p>往期复盘的完整正文与当日数据快照为会员内容，最新一篇可免费查看。</p>"
+            # 文案里**不放名额数**:这段 HTML 带 ETag、会被共享缓存复用,
+            # 写死"还剩 30 个"过两天就是假的。前端 bindPaywallBtn 拿到
+            # /api/subscription/status 后会把按钮换成"免费领(还剩 N 个)"。
             '<button class="dr-paywall-btn" id="drSubBtn" type="button">'
             "开通会员 · 查看套餐</button>"
             "</div></div>"

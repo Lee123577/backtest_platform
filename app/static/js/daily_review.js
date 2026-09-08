@@ -24,6 +24,7 @@
 
   var currentDate = ssrDate || null; // 正在展示的 review_date
   var subscribed = false; // 当前用户是否会员(付费墙用)
+  var ltOffer = null;     // 终生会员名额概览;还有名额时付费墙的钩子换成"免费领"
   var latestDate = null;  // 最新一篇复盘日期(对所有人免费,不加锁)
 
   // ── 工具(esc() 用 util.js 里全站共用的实现)──────────────────────────────
@@ -165,9 +166,9 @@
       titleEl.textContent = review.title || (currentDate + " A股复盘");
       bodyEl.innerHTML =
         '<div class="dr-paywall">' +
-        '<div class="dr-paywall-title">🔒 订阅解锁历史复盘</div>' +
+        '<div class="dr-paywall-title">🔒 ' + paywallTitle() + "</div>" +
         '<p>历史复盘的完整正文与当日数据快照为会员内容，最新一篇可免费查看。</p>' +
-        '<button class="dr-paywall-btn" id="drSubBtn">开通会员 · 查看套餐</button>' +
+        '<button class="dr-paywall-btn" id="drSubBtn">' + paywallCta() + "</button>" +
         "</div>";
       var btn = document.getElementById("drSubBtn");
       if (btn) btn.addEventListener("click", goSubscribe);
@@ -187,6 +188,20 @@
     highlightHistory();
   }
 
+  // 名额还有的时候,付费墙的钩子是"免费领",不是"开通会员" —— 后者在
+  // 有免费名额的阶段等于把人往外推
+  function ltLeft() {
+    return (ltOffer && ltOffer.remaining) || 0;
+  }
+  function paywallTitle() {
+    return ltLeft() > 0 ? "前 " + ltOffer.total + " 名免费领终生会员" : "订阅解锁历史复盘";
+  }
+  function paywallCta() {
+    return ltLeft() > 0
+      ? "🎁 免费领终生会员（还剩 " + ltLeft() + " 个）"
+      : "开通会员 · 查看套餐";
+  }
+
   // 去订阅页(未登录时订阅页自身会先引导登录)
   function goSubscribe() {
     window.location.href = "/subscribe";
@@ -196,6 +211,17 @@
   function bindPaywallBtn() {
     var btn = document.getElementById("drSubBtn");
     if (btn) btn.addEventListener("click", goSubscribe);
+  }
+
+  // 直出付费墙的文案按名额覆盖。**必须等 status 回来**才知道还剩几个,所以
+  // 跟上面的绑事件分开两步:按钮要立刻能点(别等接口),文案晚一拍无所谓。
+  // 服务端不能直接写死名额数 —— 那段 HTML 带 ETag、会被共享缓存复用。
+  function refreshPaywallCopy() {
+    if (ltLeft() <= 0) return;
+    var btn = document.getElementById("drSubBtn");
+    if (btn) btn.textContent = paywallCta();
+    var t = document.querySelector(".dr-paywall-title");
+    if (t) t.textContent = "🔒 " + paywallTitle();
   }
 
   // ── 历史列表 ──────────────────────────────────────────────────────────
@@ -291,8 +317,11 @@
 
   function refreshSub() {
     return fetchJson("/api/subscription/status")
-      .then(function (s) { subscribed = !!s.subscribed; })
-      .catch(function () { subscribed = false; });
+      .then(function (s) {
+        subscribed = !!s.subscribed;
+        ltOffer = s.lifetime_offer || null;
+      })
+      .catch(function () { subscribed = false; ltOffer = null; });
   }
 
   // ── 初始化 ────────────────────────────────────────────────────────────
@@ -307,6 +336,7 @@
   highlightHistory();
 
   refreshSub().then(function () {
+    refreshPaywallCopy();
     var legacy = hashDate();
     if (legacy) {
       // 老 hash 链接 → 换成真实路径后按该日期加载

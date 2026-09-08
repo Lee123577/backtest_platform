@@ -63,10 +63,18 @@
   var ltBody = document.getElementById("ltBody");
   var contact = null; // {channel, qq, hint} —— 由 /status 下发
 
+  // 还剩几个名额。放在最外面是因为 renderStatus 和 renderLifetime 都要问它 ——
+  // 两处文案必须口径一致,不然会出现"上面说免费领、下面喊开通会员"
+  function ltLeft(st) {
+    return (st && st.lifetime_offer && st.lifetime_offer.remaining) || 0;
+  }
+
   function renderStatus(st) {
     if (!st.logged_in) {
       statusEl.innerHTML =
-        '<span class="sub-inactive">未登录 —— 登录后可开通会员</span> ' +
+        '<span class="sub-inactive">未登录 —— ' +
+        (ltLeft(st) > 0 ? "登录后即可领取上面的免费名额" : "登录后可开通会员") +
+        "</span> " +
         '<button class="nav-btn" id="subLoginBtn" style="margin-left:8px;">登录</button>';
       var b = document.getElementById("subLoginBtn");
       if (b) b.addEventListener("click", function () {
@@ -84,7 +92,10 @@
         esc((st.expires_at || "").slice(0, 10)) + "。续费可在剩余时长上叠加。";
     } else {
       statusEl.innerHTML =
-        '<span class="sub-inactive">当前非会员</span>，开通后即可解锁全部历史内容。';
+        '<span class="sub-inactive">当前非会员</span>，' +
+        (ltLeft(st) > 0
+          ? "上面还有免费名额，领了就是终生会员。"
+          : "开通后即可解锁全部历史内容。");
     }
   }
 
@@ -100,46 +111,63 @@
   }
 
   // ── 终生会员免费名额 ──────────────────────────────────────────────────────
+  // 名额还有 → 这一块是整页的主角(.lt-hero),套餐区整个藏起来:免费的还没发完
+  // 就摆价格表,只会让人觉得"那我等等再说"。
+  // 名额发完 → 自动缩回普通卡片,套餐区自动放出来。这个切换是按后端的 remaining
+  // 算的,不用改代码也不用重新发版。
+  // 返回值 = 要不要渲染套餐区。
   function renderLifetime(st) {
     var offer = st.lifetime_offer;
-    // 后端在"表还没建/库连不上/活动关闭"时回 null —— 整块藏掉，不显示半截福利
-    if (!offer || !offer.total) { ltPanel.hidden = true; return; }
+    var planPanel = document.getElementById("planPanel");
+    // 后端在"表还没建/库连不上/活动关闭"时回 null —— 整块藏掉,套餐照常摆
+    if (!offer || !offer.total) {
+      ltPanel.hidden = true;
+      if (planPanel) planPanel.hidden = false;
+      return true;
+    }
     ltPanel.hidden = false;
 
     var total = offer.total;
     var claimed = offer.claimed;
     var left = offer.remaining;
+    var mine = st.lifetime || offer.mine;
+    var open = !mine && left > 0;          // 还轮得到这个人领
     var pct = total ? Math.round((claimed / total) * 100) : 0;
+
+    if (planPanel) planPanel.hidden = open || !!st.lifetime;
+    ltPanel.className = "panel lt-panel" + (open ? " lt-hero" : "");
+
     var meter =
       '<div class="lt-bar"><div class="lt-bar-fill" style="width:' + pct + '%"></div></div>' +
       '<div class="lt-count">已领取 ' + esc(claimed) + " / " + esc(total) +
       '，剩余 <span class="lt-left">' + esc(left) + "</span> 个</div>";
 
     // 已经领到手：只报座位号，不再显示按钮
-    if (st.lifetime || offer.mine) {
+    if (mine) {
       ltBody.innerHTML =
         '<div class="lt-title">🎁 你已领取终生会员</div>' + meter +
         '<div class="lt-ok">第 <span class="lt-seat">' + esc(offer.mine || "-") +
         "</span> 号名额已归你，会员权益永久有效。</div>";
-      return;
+      return !st.lifetime;
     }
 
     if (left <= 0) {
       ltBody.innerHTML =
         '<div class="lt-title">🎁 前 ' + esc(total) + " 名免费领终生会员</div>" + meter +
-        '<div class="lt-soldout">名额已经领完了。后续可以选下面的套餐开通，' +
+        '<div class="lt-soldout">名额已经领完了。下面可以按套餐开通，' +
         "或者关注站内公告等下一轮活动。</div>";
-      return;
+      return true;
     }
 
     var loggedIn = !!st.logged_in;
     ltBody.innerHTML =
-      '<div class="lt-title">🎁 前 ' + esc(total) + " 名免费领终生会员</div>" +
-      '<p class="lt-desc">开站早期福利：<strong>前 ' + esc(total) +
-      " 名用户可免费领取终生会员</strong>，解锁历史每日复盘全文、AI 热门板块战绩、" +
-      "自选盯盘信号提醒等全部会员功能，永久有效、不需要付费。</p>" +
+      '<div class="lt-badge">开站福利 · 限量 ' + esc(total) + " 名</div>" +
+      '<h2 class="lt-hero-title">🎁 免费领终生会员</h2>' +
+      '<p class="lt-hero-sub">不是试用，也不是打折 —— 前 <strong>' + esc(total) +
+      "</strong> 名登录用户可以直接把终生会员领走，<strong>永久有效、不用付费</strong>。" +
+      "名额发完后恢复按套餐开通。</p>" +
       meter +
-      '<button class="lt-btn" id="ltClaimBtn" type="button">' +
+      '<button class="lt-btn lt-btn-lg" id="ltClaimBtn" type="button">' +
       (loggedIn ? "立即免费领取" : "邮箱登录后领取") + "</button>" +
       '<p class="lt-note">' +
       (loggedIn
@@ -147,10 +175,19 @@
         : "领取需要邮箱登录（收一封验证码邮件即可，无需密码）—— 名额要记在账号上，" +
           "换设备才找得回。") +
       "</p>" +
+      '<div class="lt-perks"><div class="lt-perks-title">领到手能解锁什么</div>' +
+      "<ul>" +
+      "<li>历史每日复盘的完整正文与当日数据快照</li>" +
+      "<li>AI 热门板块的历史战绩与选股理由</li>" +
+      "<li>自选盯盘的收盘信号提醒（可发到邮箱）</li>" +
+      "</ul>" +
+      '<div class="lt-perks-foot">最新一篇复盘 / 当日热门板块始终免费，不领也能看。</div>' +
+      "</div>" +
       '<div class="lt-err" id="ltErr"></div>';
 
     var btn = document.getElementById("ltClaimBtn");
     if (btn) btn.addEventListener("click", onClaimClick);
+    return false;
   }
 
   function onClaimClick() {
@@ -234,15 +271,9 @@
       .then(function (st) {
         contact = st.contact || null;
         renderStatus(st);
-        renderLifetime(st);
-        // 终生会员就别再摆套餐了:他买了也只是把钱扔进来,时长对他毫无意义
-        // (后端 fulfill_order 也不会因此把他降级成月卡,但先别让人误买)
-        var planPanel = document.getElementById("planPanel");
-        if (st.lifetime) {
-          if (planPanel) planPanel.hidden = true;
-          return;
-        }
-        if (planPanel) planPanel.hidden = false;
+        // 套餐区显不显示由它决定:名额还有就不摆,终生会员也不摆
+        // (他买了也只是把钱扔进来,时长对他毫无意义)
+        if (!renderLifetime(st)) return;
         renderPlans(st.plans);
         renderContact(contact);
       })

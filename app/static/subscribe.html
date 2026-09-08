@@ -4,12 +4,12 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27><text y=%27.9em%27 font-size=%2790%27>%F0%9F%95%90</text></svg>">
-  <title>开通会员 - 收盘 shoupan</title>
-  <meta name="description" content="收盘 shoupan 会员订阅，解锁自选盯盘提醒等付费功能">
+  <title>前 30 名免费领终生会员 - 收盘 shoupan</title>
+  <meta name="description" content="收盘 shoupan 开站福利：前 30 名用户免费领终生会员，解锁历史复盘全文、AI 热门板块战绩与自选盯盘提醒">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="收盘 shoupan">
-  <meta property="og:title" content="开通会员 - 收盘 shoupan">
-  <meta property="og:description" content="收盘 shoupan 会员订阅，解锁自选盯盘提醒等付费功能">
+  <meta property="og:title" content="前 30 名免费领终生会员 - 收盘 shoupan">
+  <meta property="og:description" content="收盘 shoupan 开站福利：前 30 名用户免费领终生会员，永久有效、不需要付费">
   <meta property="og:url" content="https://shoupan.asia/subscribe">
   <meta name="twitter:card" content="summary">
   <link rel="canonical" href="https://shoupan.asia/subscribe">
@@ -32,15 +32,17 @@
 </header>
 
 <main>
-  <div class="panel">
-    <div class="panel-title">开通会员 <span class="tip-badge">仅供研究，不构成投资建议</span></div>
-    <div class="sub-status" id="subStatus">加载中…</div>
+  <!-- 终生会员免费名额。名额还有时这一块是整页的主角(JS 给它加 .lt-hero),
+       套餐区整个藏起来 —— 免费的还没发完就先别摆价格表。
+       名额领完(remaining=0)后它自动缩回普通卡片，套餐区自动放出来，不用改代码。
+       后端回 lifetime_offer=null(活动关闭/表没建)时整块隐藏。 -->
+  <div class="panel lt-panel" id="ltPanel" hidden>
+    <div id="ltBody"></div>
   </div>
 
-  <!-- 终生会员免费名额:名额没了/表还没建时由 JS 整块隐藏(后端回 lifetime_offer=null) -->
-  <div class="panel lt-panel" id="ltPanel" hidden>
-    <div class="panel-title">限量福利</div>
-    <div id="ltBody"></div>
+  <div class="panel">
+    <div class="panel-title">会员状态 <span class="tip-badge">仅供研究，不构成投资建议</span></div>
+    <div class="sub-status" id="subStatus">加载中…</div>
   </div>
 
   <div class="panel" id="planPanel">

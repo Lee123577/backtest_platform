@@ -11,7 +11,8 @@
 (function () {
   "use strict";
 
-  var cfg = null; // 最近一次 /config 结果
+  var cfg = null;      // 最近一次 /config 结果
+  var ltOffer = null;  // 终生会员名额概览(只在未订阅时拉,用来换付费墙文案)
 
   function getJson(url) {
     return fetch(url).then(function (r) {
@@ -86,9 +87,15 @@
     var wrap = $("wlAlerts");
     if (!cfg.subscribed) {
       $("wlReadBtn").style.display = "none";
+      // 名额还有时把钩子换成"免费领" —— 免费的还没发完还喊"开通会员",
+      // 等于在把人往外推
+      var left = (ltOffer && ltOffer.remaining) || 0;
       wrap.innerHTML =
-        '<div class="wl-paywall"><p>信号提醒是会员权益。开通后，每个交易日收盘系统会按你选的策略扫描自选股并在此提醒。</p>' +
-        '<button class="wl-paywall-btn" id="wlSubBtn">开通会员 · 查看套餐</button></div>';
+        '<div class="wl-paywall"><p>信号提醒是会员权益。开通后，每个交易日收盘系统会按你选的策略扫描自选股并在此提醒' +
+        (left > 0 ? "，也可以发到你的邮箱" : "") + "。</p>" +
+        '<button class="wl-paywall-btn" id="wlSubBtn">' +
+        (left > 0 ? "🎁 免费领终生会员（还剩 " + left + " 个）" : "开通会员 · 查看套餐") +
+        "</button></div>";
       var b = $("wlSubBtn");
       if (b) b.addEventListener("click", function () { window.location.href = "/subscribe"; });
       return;
@@ -202,7 +209,14 @@
   function setSaveMsg(t, ok) { var e = $("wlSaveMsg"); e.textContent = t; e.className = "wl-save-msg" + (ok ? " ok" : ""); }
 
   function loadAlerts() {
-    if (!cfg.subscribed) { renderAlerts(null); return; }
+    if (!cfg.subscribed) {
+      // 只有未订阅才需要知道还剩几个名额;拉失败就退回原来的"开通会员"文案
+      getJson("/api/subscription/status")
+        .then(function (s) { ltOffer = s.lifetime_offer || null; })
+        .catch(function () { ltOffer = null; })
+        .then(function () { renderAlerts(null); });
+      return;
+    }
     getJson("/api/watchlist/alerts?limit=50")
       .then(renderAlerts)
       .catch(function () { renderAlerts({ alerts: [] }); });
