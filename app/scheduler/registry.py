@@ -166,7 +166,10 @@ TASKS: Dict[str, TaskDef] = {
     "stock_report_batch": {
         "cmd": ["python", "scripts/stock_report_batch.py", "--limit", "50"],
         "schedule": "weekday:18:10",
-        "timeout_sec": 40 * 60,   # 50 只 × (最长 90s 调用 + 2s 间隔) 的上限
+        # glm-4.5-flash 实测 ~79s/篇(比 deepseek 慢一倍多,但字数和约束遵守度
+        # 都接近它)。50 只 × (79s + 2s 间隔) ≈ 67 分钟,给到 90 分钟留余量。
+        # 这个时段后面没有别的任务(下一个是次日 00:00),跑长一点不挡道。
+        "timeout_sec": 90 * 60,
         "depends_on": "daily_update",
         "description": "个股 AI 分析报告批量预生成(18:10,成交额前50,依赖daily_update)",
     },

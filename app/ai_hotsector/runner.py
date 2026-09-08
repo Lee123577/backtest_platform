@@ -143,14 +143,18 @@ async def predict_once(pick_date: Optional[_Date] = None) -> PredictResult:
     board_lookup = {b["name"]: b for b in board_snapshot}
 
     try:
-        sectors_json, sectors_raw = await chat_json(sector_messages(pick_date, board_snapshot))
+        sectors_json, sectors_raw = await chat_json(
+            # 90s 而不是默认的 60s:换到 glm-4.5-flash 后单次调用实测 60~87s,
+            # 用默认值会稳定超时,而超时会让整批预测直接判 failed
+            sector_messages(pick_date, board_snapshot), timeout=90.0
+        )
         sectors_resp = (sectors_json.get("sectors") or [])[:3]
         if len(sectors_resp) < 3:
             raise LLMError(f"板块返回数量不足(需要3个): {sectors_json}")
         sector_names = [str(s.get("name") or "").strip() for s in sectors_resp]
 
         stocks_json, stocks_raw = await chat_json(
-            stock_messages(pick_date, sector_names, board_lookup)
+            stock_messages(pick_date, sector_names, board_lookup), timeout=90.0
         )
         stocks_resp = stocks_json.get("sectors") or []
 
