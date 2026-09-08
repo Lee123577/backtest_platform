@@ -43,6 +43,12 @@
 > **换供应商只改 .env**:`LLM_PROVIDER=zhipu` + `ZHIPU_API_KEY=…` 就切到智谱的
 > `glm-4-flash`(长期免费);DeepSeek / 硅基流动 / 阿里百炼 / 火山方舟同理,
 > 代码一行不动。落库的 `model` 字段记的是当次真实用的模型名,事后分得清。
+>
+> 三个任务的负载差一个量级,所以**各自还能挑自己的模型**
+> (`LLM_MODEL_REPORT` / `LLM_MODEL_REVIEW` / `LLM_MODEL_HOTSECTOR`):
+> 个股报告每天 50 次连续调用,要快、要扛得住免费额度的限流;复盘一天一次,
+> 可以挑慢而写得好的。撞上限流(HTTP 429 / 智谱 1302)会退避重试两次
+> (10s → 20s)——一次批量 50 篇,撞限流就判 failed 的话能废掉半批。
 
 **AI 热门板块**
 - 每交易日 15:05 两段式提示词:DeepSeek 选 3 个热门板块,每板块再选 3 只强势股
@@ -143,7 +149,10 @@ MYSQL_DATABASE=back_test
 | `LLM_PROVIDER` | `deepseek` | AI 供应商档案名:`deepseek` / `zhipu` / `custom`。三个 AI 功能共用(见 `app/llm_client.py`) |
 | `DEEPSEEK_API_KEY` | (空) | DeepSeek 的 Key(`LLM_PROVIDER=deepseek` 时用) |
 | `ZHIPU_API_KEY` | (空) | 智谱开放平台的 Key(`LLM_PROVIDER=zhipu` 时用)。`glm-4-flash` 长期免费 |
-| `LLM_MODEL` | 按档案 | 覆盖档案里的模型名(如智谱换 `glm-4.5-flash`),留空用默认 |
+| `LLM_MODEL` | 按档案 | 全局模型名,留空用档案默认 |
+| `LLM_MODEL_REPORT` | 同 `LLM_MODEL` | 个股报告专用模型。这个任务每天 50 次连续调用,**要快、要扛限流** |
+| `LLM_MODEL_REVIEW` | 同 `LLM_MODEL` | 每日复盘专用模型。一天一次,可以挑慢而好的 |
+| `LLM_MODEL_HOTSECTOR` | 同 `LLM_MODEL` | AI 热门板块专用模型(其中"选股"是全站最重的一次调用) |
 | `LLM_BASE_URL` | 按档案 | 覆盖接口地址;接档案里没有的家时配 `LLM_PROVIDER=custom` + 这个 |
 | `LLM_API_KEY` | (空) | 显式指定 Key,优先级高于上面按家分开的那两个 |
 | `SUBSCRIBE_CONTACT_QQ` | 1415854304 | 订阅页展示的人工开通联系 QQ |

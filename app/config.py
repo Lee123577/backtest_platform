@@ -40,6 +40,15 @@ class Settings:
     LLM_API_KEY: str = os.getenv("LLM_API_KEY", "").strip()
     DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "").strip()
     ZHIPU_API_KEY: str = os.getenv("ZHIPU_API_KEY", "").strip()
+
+    # 三个 AI 任务的负载差了一个量级，共用一个模型必然有一头受委屈：
+    #   个股报告  每天 50 次连续调用 —— 要快、要扛得住限流
+    #   每日复盘  每天 1 次，写作质量最要紧 —— 慢一点无所谓
+    #   热门板块  每天 2 次，其中"选股"那次是全站最重的一次调用
+    # 留空则回落到全局 LLM_MODEL。
+    LLM_MODEL_REPORT: str = os.getenv("LLM_MODEL_REPORT", "").strip()
+    LLM_MODEL_REVIEW: str = os.getenv("LLM_MODEL_REVIEW", "").strip()
+    LLM_MODEL_HOTSECTOR: str = os.getenv("LLM_MODEL_HOTSECTOR", "").strip()
     # 调试开关:开启后对外错误信息会附带内部异常细节(仅本地排障用,生产务必关闭)
     DEBUG: bool = os.getenv("DEBUG", "0").strip().lower() in ("1", "true", "yes", "on")
 

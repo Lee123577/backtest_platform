@@ -27,7 +27,7 @@ from ..data.data_loader import normalize_code
 from ..engine.fees import COMMISSION_RATE, MIN_COMMISSION, STAMP_TAX_RATE
 from ..sectors.fetcher import fetch_concept, fetch_industry
 from . import db
-from ..llm_client import LLMError, chat_json, current_model
+from ..llm_client import LLMError, chat_json, model_for
 from .prompts import (
     SECTOR_PROMPT_VERSION,
     STOCK_PROMPT_VERSION,
@@ -136,7 +136,7 @@ async def predict_once(pick_date: Optional[_Date] = None) -> PredictResult:
         msg = "板块涨跌幅快照获取失败(新浪接口无数据)，无法基于真实行情选板块"
         logger.error("[%s] %s", pick_date, msg)
         db.upsert_pick(
-            pick_date, current_model(), SECTOR_PROMPT_VERSION, STOCK_PROMPT_VERSION,
+            pick_date, model_for("hotsector"), SECTOR_PROMPT_VERSION, STOCK_PROMPT_VERSION,
             None, None, "failed", msg,
         )
         return PredictResult(pick_date=pick_date, status="failed", error_msg=msg)
@@ -146,7 +146,8 @@ async def predict_once(pick_date: Optional[_Date] = None) -> PredictResult:
         sectors_json, sectors_raw = await chat_json(
             # 90s 而不是默认的 60s:换到 glm-4.5-flash 后单次调用实测 60~87s,
             # 用默认值会稳定超时,而超时会让整批预测直接判 failed
-            sector_messages(pick_date, board_snapshot), timeout=120.0
+            sector_messages(pick_date, board_snapshot), task="hotsector",
+            timeout=120.0
         )
         sectors_resp = (sectors_json.get("sectors") or [])[:3]
         if len(sectors_resp) < 3:
@@ -156,7 +157,8 @@ async def predict_once(pick_date: Optional[_Date] = None) -> PredictResult:
         # 180s:这一段是全站最重的一次调用 —— 提示词带 3 个板块的成分股清单,
         # 输出要 9 只股票各配一段理由。实测 glm-4.5-flash 在 90s 会稳定超时。
         stocks_json, stocks_raw = await chat_json(
-            stock_messages(pick_date, sector_names, board_lookup), timeout=180.0
+            stock_messages(pick_date, sector_names, board_lookup),
+            task="hotsector", timeout=180.0
         )
         stocks_resp = stocks_json.get("sectors") or []
 
@@ -200,7 +202,7 @@ async def predict_once(pick_date: Optional[_Date] = None) -> PredictResult:
     except (LLMError, db.DbUnavailableError) as e:
         logger.error("[%s] AI 热门板块预测失败: %s", pick_date, e)
         db.upsert_pick(
-            pick_date, current_model(), SECTOR_PROMPT_VERSION, STOCK_PROMPT_VERSION,
+            pick_date, model_for("hotsector"), SECTOR_PROMPT_VERSION, STOCK_PROMPT_VERSION,
             None, None, "failed", str(e),
         )
         return PredictResult(pick_date=pick_date, status="failed", error_msg=str(e))
@@ -215,7 +217,7 @@ async def predict_once(pick_date: Optional[_Date] = None) -> PredictResult:
         deduped.append(row)
 
     db.upsert_pick(
-        pick_date, current_model(), SECTOR_PROMPT_VERSION, STOCK_PROMPT_VERSION,
+        pick_date, model_for("hotsector"), SECTOR_PROMPT_VERSION, STOCK_PROMPT_VERSION,
         sectors_raw, stocks_raw, "predicted", None,
     )
     db.replace_stocks(pick_date, deduped)

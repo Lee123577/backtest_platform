@@ -21,10 +21,11 @@ LLM 客户端（OpenAI 兼容协议）
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
@@ -70,6 +71,21 @@ PROVIDERS: Dict[str, Dict[str, Any]] = {
 
 DEFAULT_TIMEOUT_SEC = 60.0
 
+# 每个任务可以挑自己的模型(见 Settings 里的注释)。留空回落到全局 LLM_MODEL。
+TASK_MODEL_ATTR = {
+    "report": "LLM_MODEL_REPORT",
+    "review": "LLM_MODEL_REVIEW",
+    "hotsector": "LLM_MODEL_HOTSECTOR",
+}
+
+# 限流退避。免费额度的并发/QPS 都很紧,而个股报告要连着跑 50 次 ——
+# 撞上限流直接判 failed 的话,一次批量能废掉半批。退避重试两次,
+# 间隔 10s → 20s,比"整批重跑"便宜得多。
+RATE_LIMIT_RETRIES = 2
+RATE_LIMIT_BACKOFF_SEC = 10.0
+# 智谱用 1302 表示速率限制,多数家用 HTTP 429;两个都认
+_RATE_LIMIT_MARKS = ("429", "1302", "速率限制", "rate limit", "too many requests")
+
 
 def _profile() -> Dict[str, Any]:
     p = PROVIDERS.get(settings.LLM_PROVIDER)
@@ -82,8 +98,18 @@ def _profile() -> Dict[str, Any]:
 
 
 def current_model() -> str:
-    """本次实际会用的模型名。落库时记它 —— 事后要能分清哪篇是哪个模型写的。"""
+    """全局默认模型名。"""
     return settings.LLM_MODEL or _profile()["model"]
+
+
+def model_for(task: Optional[str] = None) -> str:
+    """某个任务实际会用的模型名。落库时记它 —— 事后要能分清哪篇是哪个模型写的，
+    尤其是三个任务跑在不同模型上的时候。"""
+    if task:
+        picked = getattr(settings, TASK_MODEL_ATTR.get(task, ""), "")
+        if picked:
+            return picked
+    return current_model()
 
 
 def current_base_url() -> str:
@@ -103,9 +129,14 @@ def api_key() -> str:
     return getattr(settings, _profile()["key_attr"], "") or ""
 
 
-def describe() -> str:
+def describe(model: Optional[str] = None) -> str:
     """给日志/排错用的一句话，**不含 Key**。"""
-    return f"{settings.LLM_PROVIDER}:{current_model()} @ {current_base_url()}"
+    return f"{settings.LLM_PROVIDER}:{model or current_model()} @ {current_base_url()}"
+
+
+def _is_rate_limited(msg: str) -> bool:
+    low = (msg or "").lower()
+    return any(m.lower() in low for m in _RATE_LIMIT_MARKS)
 
 
 # 有些模型即便被要求输出 JSON，也会习惯性裹一层 markdown 代码围栏。
@@ -120,17 +151,41 @@ def strip_code_fence(text: str) -> str:
 
 
 async def chat_json(
-    messages: List[dict], *, timeout: float = DEFAULT_TIMEOUT_SEC,
+    messages: List[dict], *, task: Optional[str] = None,
+    model: Optional[str] = None, timeout: float = DEFAULT_TIMEOUT_SEC,
     temperature: float = 0.3,
 ) -> Tuple[Dict[str, Any], str]:
-    """调 /chat/completions，要求 JSON 输出。
+    """调 /chat/completions，要求 JSON 输出。撞上限流会退避重试。
 
-    temperature 默认 0.3（选股等结构化任务要保守）；写作类任务（每日复盘）
-    可放宽到 0.6 左右。
+    task   任务名(report / review / hotsector)，用来挑该任务配的模型 ——
+           三个任务的负载差一个量级，共用一个模型必有一头受委屈。
+    model  直接指定模型，优先级最高(对比测试用)。
+    temperature 默认 0.3(选股等结构化任务要保守)；写作类任务(每日复盘)
+           可放宽到 0.6 左右。
 
     Returns: (解析后的 dict, 原始 content 文本) —— 原始文本用于落库审计。
     任何失败都抛 LLMError。
     """
+    use = model or model_for(task)
+    for attempt in range(RATE_LIMIT_RETRIES + 1):
+        try:
+            return await _chat_once(messages, use, timeout, temperature)
+        except LLMError as e:
+            # 只对限流退避：401/超时/返回非法 JSON 重试多少次都是同样的结果，
+            # 白等还拖长整个批量任务
+            if attempt >= RATE_LIMIT_RETRIES or not _is_rate_limited(str(e)):
+                raise
+            wait = RATE_LIMIT_BACKOFF_SEC * (2 ** attempt)
+            logger.warning("%s 撞上限流，%.0fs 后重试(%d/%d)：%s",
+                           describe(use), wait, attempt + 1,
+                           RATE_LIMIT_RETRIES, str(e)[:160])
+            await asyncio.sleep(wait)
+    raise LLMError(f"{describe(use)} 限流重试仍未成功")   # 循环走不到这
+
+
+async def _chat_once(
+    messages: List[dict], model: str, timeout: float, temperature: float,
+) -> Tuple[Dict[str, Any], str]:
     key = api_key()
     if not key:
         raise LLMError(
@@ -142,7 +197,7 @@ async def chat_json(
         raise LLMError("未配置 LLM_BASE_URL（LLM_PROVIDER=custom 时必须给）")
 
     payload: Dict[str, Any] = {
-        "model": current_model(),
+        "model": model,
         "messages": messages,
         "temperature": temperature,
     }
@@ -159,28 +214,28 @@ async def chat_json(
         # 带上 provider 和 model：同一个 401 在两家的含义完全不同
         # （欠费 / Key 写错 / 模型名不存在），不写清楚要查半天
         raise LLMError(
-            f"{describe()} HTTP {e.response.status_code}: {e.response.text[:300]}"
+            f"{describe(model)} HTTP {e.response.status_code}: {e.response.text[:300]}"
         ) from e
     except httpx.HTTPError as e:  # TimeoutException 也是 HTTPError 子类
-        # 必须带上异常类名:httpx 的超时异常 str() 是空串,只写 {e} 的话
-        # 报错就是"请求失败: "后面什么都没有,排查时完全看不出是超时还是断连
+        # 必须带上异常类名：httpx 的超时异常 str() 是空串，只写 {e} 的话
+        # 报错就是"请求失败: "后面什么都没有，排查时看不出是超时还是断连
         raise LLMError(
-            f"{describe()} 请求失败({type(e).__name__}, timeout={timeout}s): {e}"
+            f"{describe(model)} 请求失败({type(e).__name__}, timeout={timeout}s): {e}"
         ) from e
 
     try:
         data = resp.json()
         content = data["choices"][0]["message"]["content"]
     except (json.JSONDecodeError, KeyError, IndexError, TypeError) as e:
-        raise LLMError(f"{describe()} 响应格式异常: {resp.text[:300]}") from e
+        raise LLMError(f"{describe(model)} 响应格式异常: {resp.text[:300]}") from e
 
     try:
         parsed = json.loads(strip_code_fence(content))
     except json.JSONDecodeError as e:
-        raise LLMError(f"{describe()} 返回非合法 JSON: {content[:300]}") from e
+        raise LLMError(f"{describe(model)} 返回非合法 JSON: {content[:300]}") from e
     # response_format=json_object 理论上保证是对象，但模型偶发违约（返回数组/
     # 字符串）时 runner 里的 .get() 会炸出未捕获的 AttributeError —— 在这里挡掉
     if not isinstance(parsed, dict):
-        raise LLMError(f"{describe()} 返回的 JSON 不是对象: {content[:300]}")
+        raise LLMError(f"{describe(model)} 返回的 JSON 不是对象: {content[:300]}")
 
     return parsed, content

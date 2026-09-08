@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from datetime import date as _Date
 from typing import Optional
 
-from ..llm_client import LLMError, chat_json, current_model
+from ..llm_client import LLMError, chat_json, model_for
 from . import db
 from .context import StockDataNotReady, build_context
 from .prompts import REPORT_PROMPT_VERSION, report_messages
@@ -96,7 +96,7 @@ async def generate_once(code: str, force: bool = False) -> ReportResult:
         # 0.4:比选股(0.3)略松让行文自然,又比复盘(0.6)收紧 —— 个股报告里
         # 每一句都挂着具体数字,发挥空间越大越容易滑向"编一个说法"
         parsed, _raw = await chat_json(
-            report_messages(context), timeout=150.0, temperature=0.4
+            report_messages(context), task="report", timeout=150.0, temperature=0.4
         )
         title = str(parsed.get("title") or "").strip()[:120]
         content_md = str(parsed.get("content_md") or "").strip()
@@ -109,7 +109,7 @@ async def generate_once(code: str, force: bool = False) -> ReportResult:
         err = str(e)
         logger.error("[stock_report] %s 生成失败: %s", code, err)
         db.upsert_report(
-            code, report_date, current_model(), REPORT_PROMPT_VERSION,
+            code, report_date, model_for("report"), REPORT_PROMPT_VERSION,
             title=None, score=None, score_reason=None, trend=None, content_md=None,
             context_json=context_json, status="failed", error_msg=err[:2000],
         )
@@ -118,7 +118,7 @@ async def generate_once(code: str, force: bool = False) -> ReportResult:
 
     # ── 3. 落库 ───────────────────────────────────────────────────────────
     db.upsert_report(
-        code, report_date, current_model(), REPORT_PROMPT_VERSION,
+        code, report_date, model_for("report"), REPORT_PROMPT_VERSION,
         title=title,
         score=_clean_score(parsed.get("score")),
         score_reason=(str(parsed.get("score_reason") or "").strip()[:300] or None),

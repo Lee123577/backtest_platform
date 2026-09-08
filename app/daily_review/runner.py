@@ -19,7 +19,7 @@ from datetime import date as _Date
 from typing import Any, Dict, Optional
 
 from ..data import calendar
-from ..llm_client import LLMError, chat_json, current_model
+from ..llm_client import LLMError, chat_json, model_for
 from . import db
 from .prompts import REVIEW_PROMPT_VERSION, review_messages
 
@@ -262,7 +262,7 @@ async def generate_once(
         err = f"聚合当日市场数据失败: {e}"
         logger.error("[%s] %s", review_date, err)
         db.upsert_review(
-            review_date, current_model(), REVIEW_PROMPT_VERSION,
+            review_date, model_for("review"), REVIEW_PROMPT_VERSION,
             title=None, content_md=None, context_json=None,
             status="failed", error_msg=err[:2000],
         )
@@ -274,7 +274,8 @@ async def generate_once(
     try:
         # 复盘是写作任务:temperature 比选股(0.3)放宽,文风更自然
         parsed, _raw = await chat_json(
-            review_messages(review_date, context), timeout=120.0, temperature=0.6
+            review_messages(review_date, context), task="review",
+            timeout=120.0, temperature=0.6
         )
         title = str(parsed.get("title") or "").strip()[:120]  # 列 VARCHAR(120)
         content_md = str(parsed.get("content_md") or "").strip()
@@ -286,7 +287,7 @@ async def generate_once(
         err = str(e)
         logger.error("[%s] 每日复盘生成失败: %s", review_date, err)
         db.upsert_review(
-            review_date, current_model(), REVIEW_PROMPT_VERSION,
+            review_date, model_for("review"), REVIEW_PROMPT_VERSION,
             title=None, content_md=None, context_json=context_json,
             status="failed", error_msg=err[:2000],
         )
@@ -294,7 +295,7 @@ async def generate_once(
 
     # ── 3. 落库 ───────────────────────────────────────────────────────────
     db.upsert_review(
-        review_date, current_model(), REVIEW_PROMPT_VERSION,
+        review_date, model_for("review"), REVIEW_PROMPT_VERSION,
         title=title, content_md=content_md, context_json=context_json,
         status="generated", error_msg=None,
     )
