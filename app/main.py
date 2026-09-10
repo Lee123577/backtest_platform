@@ -49,7 +49,12 @@ from .stock_report import db as _sr_db
 from .stock_report import render as _sr_render
 from .stock_report import service as _sr_service
 from .data.calendar import count_trading_days, next_n_trading_days
-from .data.data_loader import get_kline_data, get_stock_name, normalize_code
+from .data.data_loader import (
+    get_kline_data,
+    get_stock_name,
+    normalize_code,
+    volume_to_lots,
+)
 from .data.market_data import (
     build_hist_market_caps,
     build_universe_hint,
@@ -447,7 +452,7 @@ def _html(request: Request, *parts: str,
                     headers=headers)
 
 
-def _kline_records(df: pd.DataFrame) -> List[Dict[str, Any]]:
+def _kline_records(df: pd.DataFrame, *, is_index: bool = False) -> List[Dict[str, Any]]:
     """DataFrame → 前端 K 线数组用的记录列表(date/open/high/low/close/volume)。
 
     NaN 一律转 None:json.dumps 会把 NaN 输出成裸 `NaN`(非法 JSON),
@@ -456,15 +461,21 @@ def _kline_records(df: pd.DataFrame) -> List[Dict[str, Any]]:
     def _f(v):
         return None if v is None or (isinstance(v, float) and pd.isna(v)) else v
 
-    return [
-        {
-            "date": str(r["date"].date()),
+    def _row(r: Dict[str, Any]) -> Dict[str, Any]:
+        d = str(r["date"].date())
+        return {
+            "date": d,
             "open": _f(r["open"]), "high": _f(r["high"]),
             "low": _f(r["low"]),  "close": _f(r["close"]),
-            "volume": _f(r["volume"]),
+            # 统一换算成「手」:库里 2026-07-06 前后是股/手两种单位,不换算的话
+            # 任何跨越那天的成交量副图都会被劈成两半(见 data_loader.volume_to_lots)
+            "volume": _f(volume_to_lots(
+                r["volume"], trade_date=d, amount=r.get("amount"),
+                close=r["close"], is_index=is_index,
+            )),
         }
-        for r in df.to_dict("records")
-    ]
+
+    return [_row(r) for r in df.to_dict("records")]
 
 
 @app.get("/")
@@ -1558,7 +1569,9 @@ def api_index_kline(response: Response, index_code: str,
     else:
         response.headers["Cache-Control"] = "public, max-age=60"
 
-    records = _kline_records(df)
+    # is_index:指数只能按日期判单位,不能用 amount/(volume*close) 反推 ——
+    # 那是每股口径的公式,套在指数点位上得到的是个没意义的数
+    records = _kline_records(df, is_index=True)
     return {"index_code": index_code, "total": len(records), "data": records}
 
 

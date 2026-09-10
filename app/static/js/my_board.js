@@ -183,17 +183,19 @@
      两种画法共用同一份接口数据(接口本来就返回 OHLCV,走势线只是没用后四个
      字段),所以切换样式不重新请求,直接拿 slotRows 里缓存的行重画。       */
 
-  // 成交量的紧凑写法。**故意不带单位**:库里 volume 的单位不是一致的 ——
-  // 2026-07-06 之前 amount/volume ≈ 均价(单位是「股」),之后 ≈ 均价×100
-  // (单位是「手」),入库口径中途换过且历史没回填。跨这个日期的窗口里
-  // 写死任何一个单位都会有一半是错的,所以只给数量级;成交量副图在这里的
-  // 作用本来也是看放量/缩量的相对变化,不是读绝对值。
-  function volLabel(v) {
+  // 成交量的紧凑写法,单位「手」。
+  //
+  // 这里以前**故意不带单位**,因为库里 volume 在 2026-07-06 前后是股/手两种口径
+  // (差 100 倍,历史没回填),跨那天的窗口写死任何一个单位都会有一半是错的。
+  // 现在后端 _kline_records 统一换算成手了(见 data_loader.volume_to_lots),
+  // 所以可以放心标单位 —— 顺带也把日 K 和分时统一到同一个口径,
+  // 两张图之间的成交量终于可比。
+  function lotLabel(v) {
     if (v == null) return "—";
     var n = Number(v);
-    if (n >= 1e8) return (n / 1e8).toFixed(1) + "亿";
-    if (n >= 1e4) return (n / 1e4).toFixed(n >= 1e6 ? 0 : 1) + "万";
-    return String(n);
+    if (n >= 1e8) return (n / 1e8).toFixed(1) + "亿手";
+    if (n >= 1e4) return (n / 1e4).toFixed(n >= 1e6 ? 0 : 1) + "万手";
+    return Math.round(n) + "手";
   }
 
   var AXIS_LINE = { lineStyle: { color: "#d0d7de" } };
@@ -300,7 +302,7 @@
             '<b style="color:' + color + '">' + num(r.close) + "</b><br/>" +
             "涨跌 " + '<span style="color:' + color + '">' +
             (pct == null ? "—" : (pct > 0 ? "+" : "") + num(pct) + "%") + "</span>" +
-            "　量 " + volLabel(r.volume);
+            "　量 " + lotLabel(r.volume);
         },
       },
       xAxis: [
@@ -319,7 +321,7 @@
         { type: "value", scale: true, gridIndex: 0, splitLine: SPLIT_LINE, axisLabel: AXIS_LABEL },
         {
           type: "value", gridIndex: 1, splitNumber: 2, splitLine: { show: false },
-          axisLabel: { color: "#8a929c", fontSize: 10, formatter: volLabel },
+          axisLabel: { color: "#8a929c", fontSize: 10, formatter: lotLabel },
         },
       ],
       dataZoom: [
@@ -461,16 +463,6 @@
         scheduleMinutePoll(slot);
         refreshCanvas();
       });
-  }
-
-  // 分时的成交量单位确定是「手」:累计额 ÷ 累计量 ÷ 100 正好等于均价,已实测对上。
-  // 所以这里敢标单位 —— 与 volLabel 那句"故意不带单位"不矛盾,那说的是库里
-  // stock_kline 的历史单位断层,和这个实时源没关系。
-  function lotLabel(v) {
-    if (v == null) return "—";
-    var x = Number(v);
-    if (x >= 1e4) return (x / 1e4).toFixed(1) + "万手";
-    return Math.round(x) + "手";
   }
 
   function lastTradedPoint(pts) {

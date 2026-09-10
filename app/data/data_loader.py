@@ -212,6 +212,81 @@ def _query_kline_from_db(
 _CODE_RE = re.compile(r"^\d{6}$")
 
 
+# ── 成交量单位断层 ───────────────────────────────────────────────────────────
+# stock_kline / index_daily 的 volume 有两种单位:「股」和「手」(1 手 = 100 股)。
+# 入库口径换过,历史没有回填。
+#
+# 后果不是"数字不太准",而是任何跨越切换点的成交量图都会被劈成两半:实测
+# 600519 近 180 天窗口里,断点后那 49 根柱子只有断点前峰值的 1.10%
+# (603993 更狠,0.64%),整个后半段贴着坐标轴,放量缩量完全看不出来 ——
+# 而看放量缩量正是成交量副图存在的唯一理由。
+#
+# **不能按日期判**。一开始以为 2026-07-06 是个干净的分界,实际不是:
+# index_daily 里新口径的行从 2026-06-10 就开始出现,旧口径的行一直写到
+# 2026-07-03,两者在这段时间里是交错的(2026-06-29 是新、06-30 又是旧)。
+# 按日期切会把 06-29 这种孤立的新口径行再除一次 100。
+# 真正可靠的是**每一行自己带的证据**:
+#
+#   个股  amount / (volume * close) —— 这个比值等于"每个成交量单位对应多少股",
+#         ≈1 是股、≈100 是手。stock_kline 2026 年以来 867417 行 amount 无一缺失,
+#         这条路始终走得通。
+#
+#   指数  只能看 amount 在不在。**指数不能用上面那个比值** —— 指数的 close 是
+#         点位不是每股价格,套每股口径的公式得到的是个没意义的数(上证实测 0.60,
+#         既不是 1 也不是 100)。这跟分时图里"指数没有均价"是同一个错误的两种
+#         长相:别拿每股口径的公式套指数。好在旧口径那批行的 amount 恰好全是 0
+#         (旧数据源压根没写这一列),而新口径的行都有值 —— amount 本身就是
+#         "这一行是谁写的"的标记,比日期精确,因为它跟着行走而不是跟着时间走。
+#
+# 换算只做在**展示层**(_kline_records),不改库、不改引擎:
+#   - 库里是历史事实,改它要全量回填 5000 只 × 十几年,且回填期间新旧混杂
+#   - 引擎/策略当前没有一处用 volume(已 grep 确认),换算与回测结果无关
+VOLUME_UNIT_CUTOVER = "2026-07-06"   # 仅在连 amount 都拿不到时兜底用
+_SHARES_PER_LOT = 100.0
+# 两种口径相差 100 倍,阈值取 10 落在中间,离两边都留了一个数量级的余量
+_RATIO_THRESHOLD = 10.0
+
+
+def volume_to_lots(volume, *, trade_date=None, amount=None, close=None,
+                   is_index: bool = False):
+    """把库里的 volume 统一换算成「手」。判不出来就原样返回。
+
+    判定优先级(强 → 弱),理由见上面那段注释:
+      1. 个股:amount/(volume*close) 比值
+      2. amount 在不在(指数唯一可用的证据,也是个股缺 close 时的退路)
+      3. 日期(最后兜底,已知在 2026-06 那段交错期不可靠)
+    """
+    try:
+        vol = float(volume)
+    except (TypeError, ValueError):
+        return volume
+    if vol <= 0:
+        return volume
+
+    try:
+        amt = float(amount) if amount is not None else None
+    except (TypeError, ValueError):
+        amt = None
+
+    # 1. 个股:比值最准,而且历史一旦被回填它会自动跟上
+    if not is_index and amt:
+        try:
+            shares_per_unit = amt / (vol * float(close))
+        except (TypeError, ValueError, ZeroDivisionError):
+            shares_per_unit = None
+        if shares_per_unit and shares_per_unit > 0:
+            return vol / _SHARES_PER_LOT if shares_per_unit < _RATIO_THRESHOLD else vol
+
+    # 2. amount 这一列本身就是"这行由哪个数据源写的"的标记
+    if amt is not None:
+        return vol if amt > 0 else vol / _SHARES_PER_LOT
+
+    # 3. 连 amount 都没给:只剩日期可依
+    if trade_date is not None and str(trade_date)[:10] < VOLUME_UNIT_CUTOVER:
+        return vol / _SHARES_PER_LOT
+    return vol
+
+
 def normalize_code(code: str) -> str:
     code = code.strip().upper()
     for prefix in ["SH", "SZ", "BJ"]:

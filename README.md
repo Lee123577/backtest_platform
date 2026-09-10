@@ -674,6 +674,8 @@ with get_conn() as conn:
 - `app/data/dividend.py` — 除权事件查询 + 持仓除权算法
 - `app/data/quality.py` — K 线写入前质量校验
 - `app/data/stock_search.py` — 股票名称/代码模糊搜索
+- `app/data/data_loader.py` — `volume_to_lots`:把库里两种口径的 volume
+  (股/手,历史未回填且新旧交错)统一换算成「手」,展示层专用
 - `app/data/intraday.py` — 当日分时(`get_intraday` / `tencent_symbol`,含 242 时间槽对齐)
 - `app/engine/money.py` — Decimal 钱算工具
 - `app/ratelimit.py` — 滑动窗口限流(多处调用点共用一份实现)
