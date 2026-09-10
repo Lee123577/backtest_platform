@@ -521,10 +521,14 @@
 
     // 上下对称:零轴是昨收,+3% 和 -3% 必须等距。取全天离昨收最远的那一点
     // (价格和均价都算)定半幅,再留 8% 余量免得贴边。
+    // **只看成交价,不看均价**:均价是成交价的成交量加权平均,数学上必然落在
+    // 当日最高价与最低价之间,永远不可能把量程撑得比价格更宽 —— 让它参与
+    // 没有任何好处,只会把量程暴露给一个脏值。指数就栽过:它的成交额/成交量
+    // 是全市场个股均价(14 元),和指数点位(3951)不是一个量纲,一条线就把
+    // 纵轴顶成 ±107%,真正 ±0.65% 的日内波动被压成一条横线。
     var dev = 0;
     pts.forEach(function (p) {
       if (p.price != null) dev = Math.max(dev, Math.abs(p.price - prev));
-      if (p.avg != null) dev = Math.max(dev, Math.abs(p.avg - prev));
     });
     // 全天一动不动(一字板 / 当天只成交一笔)时 dev=0,不给下限会压成一条线
     if (dev <= 0) dev = prev * 0.01;
@@ -546,6 +550,11 @@
     // 只标 5 个关键时刻。242 个点全标会糊成一片,而分时图的横轴读者其实
     // 只需要知道"走到上午还是下午了"。
     var KEY_TIMES = { "09:30": 1, "10:30": 1, "13:00": 1, "14:00": 1, "15:00": 1 };
+
+    // 指数没有均价(后端 has_avg=false),这时整条 series 都不加 —— 加一条全 null
+    // 的线,tooltip 里会多出一栏永远是"—"的均价。
+    var hasAvg = d.has_avg !== false &&
+      pts.some(function (p) { return p.avg != null; });
 
     return {
       animation: false,
@@ -569,7 +578,8 @@
           return "<b>" + esc(p.t) + "</b><br/>" +
             "价格 " + '<b style="color:' + c + '">' + num(p.price) + "</b>　" +
             '<span style="color:' + c + '">' + (pct > 0 ? "+" : "") + num(pct) + "%</span><br/>" +
-            "均价 " + num(p.avg) + "　量 " + lotLabel(p.volume);
+            (hasAvg ? "均价 " + num(p.avg) + "　" : "") +
+            "量 " + lotLabel(p.volume);
         },
       },
       xAxis: [
@@ -615,7 +625,9 @@
           },
         },
         {
-          type: "value", gridIndex: 1, splitNumber: 2, splitLine: { show: false },
+          // splitNumber 给 1(只留 0 和峰值两档):这块副图只有 30px 高,
+          // 给 2 会挤出三行标签,实测上下两行直接叠在一起糊成一团
+          type: "value", gridIndex: 1, splitNumber: 1, splitLine: { show: false },
           axisLabel: { color: "#8a929c", fontSize: 10, formatter: lotLabel },
         },
       ],
@@ -641,19 +653,18 @@
           },
         },
         {
-          name: "均价", type: "line", xAxisIndex: 0, yAxisIndex: 0,
-          data: pts.map(function (p) { return p.avg; }),
-          showSymbol: false, connectNulls: false,
-          lineStyle: { width: 1.2, color: AVG_COLOR },
-          itemStyle: { color: AVG_COLOR },
-        },
-        {
           name: "成交量", type: "bar", xAxisIndex: 1, yAxisIndex: 2,
           data: pts.map(function (p) { return p.volume; }),
           barMaxWidth: 3,
           itemStyle: { color: function (q) { return volColors[q.dataIndex]; } },
         },
-      ],
+      ].concat(hasAvg ? [{
+        name: "均价", type: "line", xAxisIndex: 0, yAxisIndex: 0,
+        data: pts.map(function (p) { return p.avg; }),
+        showSymbol: false, connectNulls: false,
+        lineStyle: { width: 1.2, color: AVG_COLOR },
+        itemStyle: { color: AVG_COLOR },
+      }] : []),
     };
   }
 

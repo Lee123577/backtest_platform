@@ -117,7 +117,8 @@ def _to_float(v: Any) -> Optional[float]:
     return f
 
 
-def parse_payload(payload: Dict[str, Any], symbol: str) -> Optional[Dict[str, Any]]:
+def parse_payload(payload: Dict[str, Any], symbol: str,
+                  kind: str = "stock") -> Optional[Dict[str, Any]]:
     """把腾讯的响应拍平成前端要的形状。解析不出来返回 None（调用方翻 404）。
 
     单独拆成纯函数是为了能脱网测试 —— 这段的坑（累计量要差分、均价的 100 倍、
@@ -160,6 +161,17 @@ def parse_payload(payload: Dict[str, Any], symbol: str) -> Optional[Dict[str, An
     if not by_slot:
         return None
 
+    # **指数没有均价。** 指数的成交额/成交量是它全部成分股加总出来的，
+    # 两者相除得到的是「今天全市场个股的平均成交价」（实测上证指数当天
+    # 14.09 元），和指数点位（3951）根本不是一个量纲 —— 它压根不是这条
+    # 曲线的均价。
+    #
+    # 这不是算得不准，是范畴错误，所以不修正而是不给。给过一次的代价很具体：
+    # 前端拿「离昨收最远的点」定纵轴半幅，14 与 3951 的距离直接把量程撑成
+    # ±107%，真正的日内波动（±0.65%）被压成一条平直的横线，整张图什么都
+    # 看不出来。
+    has_avg = kind != "index"
+
     points: List[Dict[str, Any]] = []
     prev_vol = 0.0
     for i, t in enumerate(SLOTS):
@@ -177,11 +189,13 @@ def parse_payload(payload: Dict[str, Any], symbol: str) -> Optional[Dict[str, An
         # 均价 = 累计成交额 ÷ 累计成交量 ÷ 100：这里的量单位是「手」。
         # （注意与 stock_kline 无关 —— 那张表的 volume 在 2026-07-06 前后是
         #  股/手两种单位，见 project_volume_unit_split；这个接口一直是手。）
-        avg = round(cum_amt / cum_vol / 100.0, 3) if cum_vol > 0 else None
+        avg = (round(cum_amt / cum_vol / 100.0, 3)
+               if has_avg and cum_vol > 0 else None)
         points.append({"t": t, "price": price, "avg": avg, "volume": vol})
 
     return {
         "name": name,
+        "has_avg": has_avg,     # 前端据此决定画不画那条均价线
         "date": "%s-%s-%s" % (date_s[:4], date_s[4:6], date_s[6:]),
         "prev_close": prev_close,
         "open": day_open,
@@ -217,7 +231,7 @@ def get_intraday(code: str, kind: str = "stock") -> Optional[Dict[str, Any]]:
     try:
         resp = _session().get(_URL, params={"code": symbol}, timeout=8)
         resp.raise_for_status()
-        parsed = parse_payload(resp.json(), symbol)
+        parsed = parse_payload(resp.json(), symbol, kind)
     except Exception as e:
         # 只记类型和摘要：这条在盘中会高频触发，别把日志刷爆
         logger.info("分时获取失败 %s: %s: %s", symbol, type(e).__name__, str(e)[:120])

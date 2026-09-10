@@ -205,3 +205,56 @@ def test_非今日数据用长TTL():
     # 周末/节假日看到的是上一个交易日,那份数据到下次开盘前不会再变,
     # 用盘中那个 25s 的 TTL 等于每来一个访客就白打一次源站
     assert intraday._ttl_for("1999-01-01") == intraday._TTL_CLOSED
+
+
+# ── 指数没有均价 ──────────────────────────────────────────────────────────────
+# 这一组是一个线上真 bug 的回归:指数曾经也算均价,画出来整张图是一条横线。
+# 根因不是"算得不准"而是范畴错误 —— 指数的成交额/成交量是全部成分股加总,
+# 相除得到的是"全市场个股平均成交价"(实测上证当天 14.09 元),和指数点位
+# (3951)不是一个量纲。前端拿"离昨收最远的点"定纵轴半幅,这条线一来,
+# 量程就被顶成 ±107%,真正 ±0.65% 的日内波动被压平。
+
+def test_指数不给均价():
+    d = intraday.parse_payload(
+        _payload("sh000001", ["0930 3939.09 4588920 6465487582.70"]),
+        "sh000001", kind="index")
+    assert d["has_avg"] is False
+    assert all(p["avg"] is None for p in d["data"])
+
+
+def test_个股照常给均价():
+    d = intraday.parse_payload(
+        _payload("sh600000", ["0930 10.20 100 102000.00"]), "sh600000", kind="stock")
+    assert d["has_avg"] is True
+    assert d["data"][0]["avg"] == pytest.approx(10.20)
+
+
+def test_默认按个股处理():
+    # 不传 kind 时保持原行为,别让漏传变成"静默丢掉均价"
+    d = intraday.parse_payload(_payload("sh600000", ["0930 10.20 100 102000.00"]), "sh600000")
+    assert d["has_avg"] is True
+
+
+def test_指数的均价若真算出来会毁掉量程():
+    """把 bug 本身钉成断言:证明"不给"是必要的,而不是洁癖。
+
+    用上证指数当天的真实数字。要是哪天有人觉得"算一下也没什么"把它加回来,
+    这条会立刻红 —— 它量的正是那个后果:量程放大 160 倍。
+    """
+    prev_close = 3951.51
+    price = 3939.09
+    would_be_avg = 6465487582.70 / 4588920 / 100.0      # ≈ 14.09
+    dev_price = abs(price - prev_close)                  # ≈ 12.4
+    dev_with_avg = max(dev_price, abs(would_be_avg - prev_close))
+    assert would_be_avg < 20                             # 是个股均价,不是指数点位
+    assert dev_with_avg / dev_price > 100                # 量程被撑大两个数量级
+
+
+def test_指数成交量照常给():
+    # 均价没意义,但成交量(全市场成交)是有意义的,不能一起丢掉
+    d = intraday.parse_payload(_payload("sh000001", [
+        "0930 3939.09 4588920 6465487582.70",
+        "0931 3938.76 19769769 28554966190.90",
+    ]), "sh000001", kind="index")
+    assert d["data"][0]["volume"] == 4588920.0
+    assert d["data"][1]["volume"] == pytest.approx(19769769 - 4588920)
