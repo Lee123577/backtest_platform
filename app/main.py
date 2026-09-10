@@ -60,6 +60,7 @@ from .data.market_data import (
     get_universe_stats,
     get_universe_stocks,
 )
+from .data.intraday import get_intraday
 from .data.realtime import get_realtime_prices
 from .data import stock_search
 from .engine.backtest import calc_benchmark, run_backtest
@@ -164,6 +165,26 @@ _BACKTEST_WINDOW = 60.0    # 秒
 _backtest_limiter = SlidingWindowLimiter(
     limit=_BACKTEST_LIMIT, window_sec=_BACKTEST_WINDOW, name="backtest",
 )
+
+
+# 分时接口是对外代理(打腾讯行情),必须自带闸门:缓存只按 symbol 命中,
+# 换一只股票就是一次真实外呼,不限流的话一个脚本就能借我们的 IP 刷源站,
+# 代价是我们被源站封,而不是它。看板一屏最多 10 张卡、30s 轮询一次,
+# 正常用量远在 60 次/分以内。
+_MINUTE_LIMIT = 60
+_minute_limiter = SlidingWindowLimiter(
+    limit=_MINUTE_LIMIT, window_sec=60.0, name="intraday",
+)
+
+
+def _rate_limit_minute(request: Request) -> None:
+    ip = _client_ip(request)
+    if not _minute_limiter.allow(ip):
+        raise HTTPException(
+            429,
+            detail="分时请求过于频繁,请稍后再试(每分钟最多 %d 次)" % _MINUTE_LIMIT,
+            headers={"Retry-After": str(_minute_limiter.retry_after(ip))},
+        )
 
 
 def _rate_limit_backtest(request: Request) -> None:
@@ -1554,6 +1575,48 @@ def api_index_quotes(response: Response, codes: str):
     rows = get_index_latest_quotes(code_list)
     response.headers["Cache-Control"] = "public, max-age=60"
     return {"data": _json_safe(rows)}
+
+
+# ── 分时(日内每分钟)───────────────────────────────────────────────────────────
+# 和上面的 /kline 不是一回事:K 线读的是我们自己的库,分时库里根本没有,
+# 是实时透传外部行情源(见 app/data/intraday.py 的"为什么不落库")。
+# 因此这两个端点的失败是常态而非异常 —— 源站抖一下就该干净地回 503,
+# 让前端显示"暂无分时数据",而不是把看板整页拖垮。
+
+def _minute_response(response: Response, data, what: str):
+    if data is None:
+        # 503 而不是 404:多数情况不是"这只股票不存在",而是"这一刻取不到"。
+        # 前端据此提示"稍后重试",404 会让人以为代码写错了。
+        raise HTTPException(503, f"暂时取不到{what}分时数据，请稍后再试")
+    # 缓存交给上游模块按盘中/收盘分档控制(见 intraday._ttl_for);这里给浏览器
+    # 一个短得多的值,免得用户手动刷新还拿到旧图。
+    response.headers["Cache-Control"] = "public, max-age=15"
+    return _json_safe(data)
+
+
+@app.get("/api/stock/{code}/minute")
+def api_stock_minute(response: Response, code: str,
+                     _rl: None = Depends(_rate_limit_minute)):
+    """个股当日(或最近交易日)分时。"""
+    try:
+        code = normalize_code(code)
+    except ValueError as e:
+        raise HTTPException(400, _safe_detail("股票代码格式不合法", e))
+    return _minute_response(response, get_intraday(code, "stock"), "该股票")
+
+
+@app.get("/api/index/{index_code}/minute")
+def api_index_minute(response: Response, index_code: str,
+                     _rl: None = Depends(_rate_limit_minute)):
+    """指数当日(或最近交易日)分时。
+
+    与 /api/index/{code}/kline 同因不能复用个股那条:000001 在个股是平安银行,
+    在指数是上证综指,连交易所前缀都不一样(sz000001 / sh000001)。
+    """
+    index_code = (index_code or "").strip()
+    if not index_code.isdigit() or len(index_code) != 6:
+        raise HTTPException(400, "指数代码格式不合法")
+    return _minute_response(response, get_intraday(index_code, "index"), "该指数")
 
 
 class StrategyConfig(BaseModel):

@@ -36,7 +36,7 @@ board_layout_by_ip 这张表不再读写,也不自动删 —— 里面是真实�
 - cards:    当前画布上有哪些卡片、什么类型(stock/rank/compare/review/hotsector/indices),
             决定了增删卡片后下次打开时展示哪些卡片、以及它们的先后顺序。
 - positions:每张卡片的坐标/尺寸,行情卡片(kind=stock)还可以带 code/type,
-            记录用户把这张卡片切换成了哪只股票/指数,以及 chart(走势线/K线,
+            记录用户把这张卡片切换成了哪只股票/指数,以及 chart(走势线/K线/分时,
             缺省按走势线);对比卡片(kind=compare)
             带 codes(数组,最多 MAX_COMPARE_CODES 支),记录这张卡片同时对比
             哪几只股票/指数 —— 卡片是"槽位",股票只是槽位里当前展示的内容,
@@ -69,7 +69,7 @@ _CODE_RE = re.compile(r"^[0-9A-Za-z]{1,10}$")
 _CARD_ID_RE = re.compile(r"^[0-9A-Za-z_]{1,40}$")
 _KINDS = ("stock", "rank", "compare", "review", "hotsector", "indices")
 # 行情卡片的图表样式(与前端 my_board.js 的 CHART_MODES 保持一致)
-_CHART_MODES = ("line", "kline")
+_CHART_MODES = ("line", "kline", "minute")
 # 排行卡片类目是有限、写死的(与前端 my_board.js 的 RANK_INFO 保持一致);
 # 不校验的话,直接调 API 能往访客共享布局塞前端渲染不了的"僵尸"排行卡。
 _RANK_IDS = ("rk_groups", "rk_industry", "rk_concept", "rk_special")

@@ -233,3 +233,42 @@ def test_写请求由router级同源闸把守():
     from app.csrf import reject_cross_site_write
     assert any(d.dependency is reject_cross_site_write
                for d in api.router.dependencies)
+
+
+# ── 图表样式白名单 ───────────────────────────────────────────────────────────
+# 布局是"原样存、原样发回前端"的,而前端拿 chart 的值直接决定走哪条渲染分支。
+# 不限值域的话,调一次 API 就能往自己(或访客共享的那份初始配置)里塞任意字符串。
+
+
+def _layout_with_chart(chart):
+    return {
+        "cards": [{"id": "slot1", "kind": "stock"}],
+        "positions": {"slot1": {"left": 0, "top": 0, "code": "600000",
+                                "type": "stock", "chart": chart}},
+    }
+
+
+@pytest.mark.parametrize("mode", ["line", "kline", "minute"])
+def test_三种画法都收(fake_store, mode):
+    service.save_layout({"id": 7}, _layout_with_chart(mode))
+    assert fake_store[7]["positions"]["slot1"]["chart"] == mode
+
+
+def test_没见过的画法被拒(fake_store):
+    with pytest.raises(service.LayoutError):
+        service.save_layout({"id": 7}, _layout_with_chart("<script>"))
+
+
+def test_前后端画法清单一致():
+    """后端白名单和前端 CHART_MODES 必须逐字对上。
+
+    两边各写一份是没办法的事(一个 Python 一个 JS),但对不上的后果很具体:
+    后端多一个 → 存得进去前端画不出来,卡片空白;前端多一个 → 用户切过去,
+    保存时静默 400,刷新后模式又跳回去。
+    """
+    import re
+    js = open("app/static/js/my_board.js", encoding="utf-8").read()
+    m = re.search(r"var CHART_MODES = \[(.*?)\];", js)
+    assert m, "前端 CHART_MODES 定义没找到(改过写法就同步改这条断言)"
+    front = tuple(re.findall(r'"([a-z]+)"', m.group(1)))
+    assert front == service._CHART_MODES

@@ -262,8 +262,8 @@ body.spx-shell .site-footer.mb-footer { max-width: none; margin-top: 24px; }
 .mb-card--empty .mb-switch-btn,
 .mb-card--empty .mb-mode-seg { display: none; }
 
-/* 走势线 / K 线切换。做成分段控件而不是两个独立按钮 —— 它们是同一个维度的
-   互斥选项,连成一体才读得出"当前处于哪一档"。 */
+/* 走势线 / K 线 / 分时切换。做成分段控件而不是三个独立按钮 —— 它们是同一个
+   维度的互斥选项,连成一体才读得出"当前处于哪一档"。 */
 .mb-mode-seg {
   flex: none;
   display: inline-flex;
@@ -278,7 +278,7 @@ body.spx-shell .site-footer.mb-footer { max-width: none; margin-top: 24px; }
   color: var(--txt2, #8a929c);
   background: var(--bg, #fff);
   border: none;
-  padding: 5px 9px;
+  padding: 5px 8px;
   cursor: pointer;
   transition: background-color 120ms ease-out, color 120ms ease-out;
 }
@@ -671,4 +671,26 @@ body.spx-shell .site-footer.mb-footer { max-width: none; margin-top: 24px; }
 @media (prefers-reduced-motion: reduce) {
   .mb-card, .mb-grid.mb-canvas-mode .mb-card, .rk-row { transition: none; }
   .mb-loading { animation: none; }
+}
+
+
+/* 盘中实时刷新指示点。只在"数据日期=今天且在交易时段"时出现 —— 收盘后这张
+   图不再变,还闪着会让人以为数字在动。动效对 prefers-reduced-motion 关掉:
+   一个持续呼吸的红点对前庭敏感的人是实打实的干扰,而它承载的信息(正在刷新)
+   靠静态的点本身已经表达完了。 */
+.mb-live-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #cf222e;
+  align-self: center;
+  animation: mb-live-pulse 2s ease-in-out infinite;
+}
+@keyframes mb-live-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: .35; transform: scale(.82); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mb-live-dot { animation: none; }
 }

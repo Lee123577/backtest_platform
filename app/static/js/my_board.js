@@ -30,13 +30,25 @@
   var MAX_BOARD_CARDS = 10;   // 与后端 service.MAX_CARDS 保持一致
   var MAX_COMPARE_STOCKS = 6;
   var COMPARE_COLORS = ["#0969da", "#cf222e", "#1a7f37", "#9a6700", "#8250df", "#bf3989"];
-  // 行情卡片的两种画法(与后端 service._CHART_MODES 保持一致):
-  //   line  —— 收盘价走势线(默认,一眼看趋势)
-  //   kline —— 日 K + 成交量副图(看单日振幅/影线/放缩量)
-  var CHART_MODES = ["line", "kline"];
-  var MODE_LABEL = { line: "走势", kline: "K线" };
+  // 行情卡片的三种画法(与后端 service._CHART_MODES 保持一致):
+  //   line   —— 收盘价走势线(默认,一眼看趋势)
+  //   kline  —— 日 K + 成交量副图(看单日振幅/影线/放缩量)
+  //   minute —— 当日分时,盘中自动刷新(看今天怎么走的)
+  // 前两种读我们自己的行情库,分时读的是外部实时源(库里没有分钟数据),
+  // 所以 minute 走的是另一条接口、另一份缓存、另一套刷新逻辑。
+  var CHART_MODES = ["line", "kline", "minute"];
+  var MODE_LABEL = { line: "走势", kline: "K线", minute: "分时" };
+  var MODE_HINT = {
+    line: "收盘价走势线",
+    kline: "日K线 + 成交量",
+    minute: "当日分时(盘中自动刷新)",
+  };
   var UP_COLOR = "#cf222e", DOWN_COLOR = "#1a7f37";
   var KLINE_DEFAULT_BARS = 60;   // K 线首屏默认只显示最近 60 根:卡片窄,120 根挤成一片看不出形态
+  var AVG_COLOR = "#EF9F27";     // 均价线(沿用站内主色,和红绿的涨跌都区分得开)
+  // 分时轮询间隔。后端缓存 25s(intraday._TTL_LIVE),这里取 30s ——
+  // 比缓存略长,保证每次轮询大概率落在新数据上,而不是白白拿回同一份。
+  var MINUTE_POLL_MS = 30000;
 
   var $ = function (id) { return document.getElementById(id); };
   // esc() 用 util.js 里全站共用的实现(必须比本文件先加载)
@@ -66,6 +78,10 @@
   // (/api/{stock,index}/{code}/kline 本来就返回 OHLCV),切换样式只是换个画法,
   // 缓存下来就不用为切一下重新发一次请求。
   var slotRows = {};
+  // 分时是独立的一份:数据结构(按分钟的点 + 昨收基准)和日线完全不同,
+  // 两者互不复用,切换模式时各拿各的缓存。
+  var slotMinute = {};   // cardId -> 最近一次分时响应
+  var minuteTimers = {}; // cardId -> 轮询 timer
 
   function titleHtml(cur) {
     if (!cur) return '<span class="mb-name mb-name--empty">未选择</span>';
@@ -78,7 +94,7 @@
     return '<div class="mb-mode-seg" id="mbMode_' + cardId + '" role="group" aria-label="图表样式">' +
       CHART_MODES.map(function (m) {
         return '<button type="button" class="mb-mode-btn" data-chart-mode="' + m +
-          '" title="' + (m === "kline" ? "日K线 + 成交量" : "收盘价走势线") + '">' +
+          '" title="' + MODE_HINT[m] + '">' +
           MODE_LABEL[m] + "</button>";
       }).join("") + "</div>";
   }
@@ -114,7 +130,8 @@
   }
 
   function modeOf(cardId) {
-    return slotMode[cardId] === "kline" ? "kline" : "line";
+    // 白名单而不是"是不是 kline":模式已经有三种,再往后加也不用回来改这里
+    return CHART_MODES.indexOf(slotMode[cardId]) !== -1 ? slotMode[cardId] : "line";
   }
 
   function renderSlotMode(slot) {
@@ -352,10 +369,332 @@
     window.addEventListener("resize", onResize);
   }
 
+
+  /* ── 分时 ──────────────────────────────────────────────────────────────
+     和上面两种画法的三点不同,都是"库里没有分钟数据"派生出来的:
+       1. 数据来自 /api/{stock,index}/{code}/minute(后端实时透传外部行情源),
+          不是我们自己的行情库,所以取不到是常态,要有像样的降级
+       2. 零轴是**昨收**而不是数据自身的最小值 —— 分时图看的是"相对昨收涨了
+          多少",上下必须对称,否则"离中轴多远"这个最重要的视觉信息就是错的
+       3. 盘中要自己刷新。这是唯一一种会随时间变的卡片                     */
+
+  // 北京时间:交易所按北京时间走,而访客的机器可能在任何时区。用本地时间判
+  // "现在是不是盘中",时差用户要么永远不刷新、要么半夜狂刷。
+  function beijingNow() {
+    var d = new Date();
+    return new Date(d.getTime() + (d.getTimezoneOffset() + 480) * 60000);
+  }
+
+  function beijingToday() {
+    return fmtDate(beijingNow());
+  }
+
+  // 盘中窗口放宽到 09:15~15:10:早盘集合竞价 09:15 就有数据,收盘后源站还会
+  // 补几笔。节假日在这里判不了(前端没有交易日历),靠"数据日期不是今天就不
+  // 轮询"兜底 —— 节假日拿到的是上一个交易日,那份数据不会再变。
+  function inTradingWindow() {
+    var b = beijingNow();
+    var dow = b.getDay();
+    if (dow === 0 || dow === 6) return false;
+    var m = b.getHours() * 60 + b.getMinutes();
+    return m >= 9 * 60 + 15 && m <= 15 * 60 + 10;
+  }
+
+  function stopMinutePoll(cardId) {
+    if (minuteTimers[cardId]) {
+      clearTimeout(minuteTimers[cardId]);
+      delete minuteTimers[cardId];
+    }
+  }
+
+  function scheduleMinutePoll(slot, delayMs) {
+    stopMinutePoll(slot.id);
+    if (modeOf(slot.id) !== "minute" || !slotState[slot.id]) return;
+    // 页面在后台就停:切走的标签页刷新出来也没人看,白烧访客流量和源站配额。
+    // 切回来时 visibilitychange 会把这些卡片重新拉起。
+    if (document.visibilityState === "hidden") return;
+    if (!inTradingWindow()) return;
+    var d = slotMinute[slot.id];
+    if (d && d.date && d.date !== beijingToday()) return;
+    minuteTimers[slot.id] = setTimeout(function () {
+      loadMinute(slot, true);
+    }, delayMs || MINUTE_POLL_MS);
+  }
+
+  // 请求飞行途中卡片可能被删、被换成别的股票、或被切到别的画法。
+  // 回来时先确认"当初问的还是现在要的",否则把结果丢掉。
+  function stillCurrent(slot, asked) {
+    var cur = slotState[slot.id];
+    return !!cur && cur.code === asked.code && cur.type === asked.type &&
+      modeOf(slot.id) === "minute" && !!$("mbCard_" + slot.id);
+  }
+
+  function loadMinute(slot, quiet) {
+    var cur = slotState[slot.id];
+    if (!cur) return;
+    var url = (cur.type === "index" ? "/api/index/" : "/api/stock/") +
+      encodeURIComponent(cur.code) + "/minute";
+
+    fetch(url)
+      .then(function (r) {
+        if (!r.ok) throw new Error(r.status === 429 ? "请求太频繁" : "HTTP " + r.status);
+        return r.json();
+      })
+      .then(function (j) {
+        if (!stillCurrent(slot, cur)) return;
+        slotMinute[slot.id] = j;
+        fillMinute(slot, j);
+        scheduleMinutePoll(slot);
+        refreshCanvas();
+      })
+      .catch(function (e) {
+        if (!stillCurrent(slot, cur)) return;
+        // 轮询失败不该把已经画出来的图擦掉 —— 源站抖一下就白屏,比不刷新更糟。
+        // 保留旧图,等下一轮再试。
+        if (quiet && slotMinute[slot.id]) { scheduleMinutePoll(slot); return; }
+        var body = $("mbBody_" + slot.id);
+        if (body) {
+          body.innerHTML = '<div class="mb-error">暂时取不到分时数据（' +
+            esc(e.message) + '）<br>分时来自实时行情源，可稍后重试，' +
+            '或切到「走势」「K线」看历史。</div>';
+        }
+        scheduleMinutePoll(slot);
+        refreshCanvas();
+      });
+  }
+
+  // 分时的成交量单位确定是「手」:累计额 ÷ 累计量 ÷ 100 正好等于均价,已实测对上。
+  // 所以这里敢标单位 —— 与 volLabel 那句"故意不带单位"不矛盾,那说的是库里
+  // stock_kline 的历史单位断层,和这个实时源没关系。
+  function lotLabel(v) {
+    if (v == null) return "—";
+    var x = Number(v);
+    if (x >= 1e4) return (x / 1e4).toFixed(1) + "万手";
+    return Math.round(x) + "手";
+  }
+
+  function lastTradedPoint(pts) {
+    for (var i = pts.length - 1; i >= 0; i--) {
+      if (pts[i] && pts[i].price != null) return pts[i];
+    }
+    return null;
+  }
+
+  function fillMinute(slot, d) {
+    var body = $("mbBody_" + slot.id);
+    if (!body) return;
+    var pts = (d && d.data) || [];
+    var prev = d && d.prev_close;
+    var lastPt = lastTradedPoint(pts);
+    if (!pts.length || !prev || !lastPt) {
+      body.innerHTML = '<div class="mb-error">这只票当日没有分时数据（可能停牌或尚未开盘）</div>';
+      return;
+    }
+
+    var price = lastPt.price;
+    var chg = (price - prev) / prev * 100;
+    var cls = chg > 0 ? "mb-up" : (chg < 0 ? "mb-down" : "mb-flat");
+    var sign = chg > 0 ? "+" : "";
+    var isToday = d.date === beijingToday();
+    var live = isToday && inTradingWindow();
+    // 日期必须显式写出来:周一早上打开看到的是上周五的图,不标日期会被当成今天的。
+    var meta = (isToday ? "今日" : esc(d.date) + "（最近交易日）") +
+      "分时 · 昨收 " + num(prev) + " · 截至 " + esc(lastPt.t) +
+      (live ? " · 每 30 秒自动刷新" : " · 已收盘，不再刷新");
+
+    body.innerHTML =
+      '<div class="mb-quote">' +
+      '<span class="mb-close ' + cls + '">' + num(price) + "</span>" +
+      '<span class="mb-chg-chip ' + cls + '">' + arrowPrefix(chg) + sign + num(chg) + "%</span>" +
+      (live ? '<span class="mb-live-dot" title="盘中，正在自动刷新"></span>' : "") +
+      "</div>" +
+      '<div class="mb-meta">' + meta + "</div>" +
+      '<div class="mb-chart" id="mbChart_' + slot.id + '"></div>';
+
+    drawMinute(slot.id, d);
+  }
+
+  function minuteOption(d) {
+    var pts = d.data || [];
+    var prev = d.prev_close;
+    var times = pts.map(function (p) { return p.t; });
+
+    // 上下对称:零轴是昨收,+3% 和 -3% 必须等距。取全天离昨收最远的那一点
+    // (价格和均价都算)定半幅,再留 8% 余量免得贴边。
+    var dev = 0;
+    pts.forEach(function (p) {
+      if (p.price != null) dev = Math.max(dev, Math.abs(p.price - prev));
+      if (p.avg != null) dev = Math.max(dev, Math.abs(p.avg - prev));
+    });
+    // 全天一动不动(一字板 / 当天只成交一笔)时 dev=0,不给下限会压成一条线
+    if (dev <= 0) dev = prev * 0.01;
+    dev *= 1.08;
+    var pctMax = dev / prev * 100;
+    var lastPt = lastTradedPoint(pts);
+    var up = !lastPt || lastPt.price >= prev;
+    var lineColor = up ? UP_COLOR : DOWN_COLOR;
+
+    // 成交量柱按"比上一笔成交价涨还是跌"着色,与主流行情软件一致
+    var volColors = [];
+    var ref = prev;
+    pts.forEach(function (p) {
+      if (p.price == null) { volColors.push(DOWN_COLOR); return; }
+      volColors.push(p.price >= ref ? UP_COLOR : DOWN_COLOR);
+      ref = p.price;
+    });
+
+    // 只标 5 个关键时刻。242 个点全标会糊成一片,而分时图的横轴读者其实
+    // 只需要知道"走到上午还是下午了"。
+    var KEY_TIMES = { "09:30": 1, "10:30": 1, "13:00": 1, "14:00": 1, "15:00": 1 };
+
+    return {
+      animation: false,
+      // 不给 dataZoom:分时就一天,没有"放大某段"的需求,省下的高度留给图本身
+      // (卡片可以被拖到只有 300px 高)。
+      grid: [
+        { left: 52, right: 48, top: 12, bottom: 58 },
+        { left: 52, right: 48, bottom: 22, height: 30 },
+      ],
+      axisPointer: { link: [{ xAxisIndex: "all" }] },
+      tooltip: {
+        trigger: "axis",
+        axisPointer: { type: "cross" },
+        formatter: function (params) {
+          if (!params || !params.length) return "";
+          var p = pts[params[0].dataIndex];
+          if (!p) return "";
+          if (p.price == null) return "<b>" + esc(p.t) + "</b><br/>无成交";
+          var pct = (p.price - prev) / prev * 100;
+          var c = p.price >= prev ? UP_COLOR : DOWN_COLOR;
+          return "<b>" + esc(p.t) + "</b><br/>" +
+            "价格 " + '<b style="color:' + c + '">' + num(p.price) + "</b>　" +
+            '<span style="color:' + c + '">' + (pct > 0 ? "+" : "") + num(pct) + "%</span><br/>" +
+            "均价 " + num(p.avg) + "　量 " + lotLabel(p.volume);
+        },
+      },
+      xAxis: [
+        {
+          type: "category", data: times, gridIndex: 0, boundaryGap: false,
+          axisLine: AXIS_LINE, axisTick: { show: false }, splitLine: { show: false },
+          axisLabel: { show: false },
+        },
+        {
+          type: "category", data: times, gridIndex: 1, boundaryGap: false,
+          axisLine: AXIS_LINE, axisTick: { show: false }, splitLine: { show: false },
+          axisLabel: {
+            color: "#8a929c", fontSize: 10,
+            interval: function (i, v) { return KEY_TIMES[v] === 1; },
+          },
+        },
+      ],
+      yAxis: [
+        {
+          // 左轴价格。interval 写死成半幅,和右轴的百分比刻度一一对齐 ——
+          // 让 ECharts 各自算的话两边的网格线会错开,读起来很乱。
+          type: "value", gridIndex: 0,
+          min: prev - dev, max: prev + dev, interval: dev / 2,
+          splitLine: SPLIT_LINE,
+          axisLabel: {
+            fontSize: 11,
+            color: function (v) {
+              return v > prev ? UP_COLOR : (v < prev ? DOWN_COLOR : "#8a929c");
+            },
+            formatter: function (v) { return Number(v).toFixed(2); },
+          },
+        },
+        {
+          type: "value", gridIndex: 0, position: "right",
+          min: -pctMax, max: pctMax, interval: pctMax / 2,
+          splitLine: { show: false }, axisLine: { show: false }, axisTick: { show: false },
+          axisLabel: {
+            fontSize: 10,
+            color: function (v) {
+              return v > 0 ? UP_COLOR : (v < 0 ? DOWN_COLOR : "#8a929c");
+            },
+            formatter: function (v) { return Number(v).toFixed(1) + "%"; },
+          },
+        },
+        {
+          type: "value", gridIndex: 1, splitNumber: 2, splitLine: { show: false },
+          axisLabel: { color: "#8a929c", fontSize: 10, formatter: lotLabel },
+        },
+      ],
+      series: [
+        {
+          name: "价格", type: "line", xAxisIndex: 0, yAxisIndex: 0,
+          data: pts.map(function (p) { return p.price; }),
+          showSymbol: false, connectNulls: false,
+          lineStyle: { width: 1.6, color: lineColor },
+          itemStyle: { color: lineColor },
+          // origin 给数值(昨收)而不是坐标轴底 —— 涨的部分填在零轴上方、跌的
+          // 填在下方,这是分时图的常规读法。ECharts 5.4 起 origin 支持数值。
+          areaStyle: {
+            origin: prev,
+            color: up ? "rgba(207,34,46,.10)" : "rgba(26,127,55,.10)",
+          },
+          markLine: {
+            silent: true, symbol: "none",
+            label: { show: false },
+            lineStyle: { color: "#b1b7bf", type: "dashed", width: 1 },
+            // 昨收零轴 + 午休分界(13:00)
+            data: [{ yAxis: prev }, { xAxis: "13:00" }],
+          },
+        },
+        {
+          name: "均价", type: "line", xAxisIndex: 0, yAxisIndex: 0,
+          data: pts.map(function (p) { return p.avg; }),
+          showSymbol: false, connectNulls: false,
+          lineStyle: { width: 1.2, color: AVG_COLOR },
+          itemStyle: { color: AVG_COLOR },
+        },
+        {
+          name: "成交量", type: "bar", xAxisIndex: 1, yAxisIndex: 2,
+          data: pts.map(function (p) { return p.volume; }),
+          barMaxWidth: 3,
+          itemStyle: { color: function (q) { return volColors[q.dataIndex]; } },
+        },
+      ],
+    };
+  }
+
+  function drawMinute(slotId, d) {
+    if (!window.echarts) return;
+    var el = $("mbChart_" + slotId);
+    if (!el) return;
+    if (slotCharts[slotId]) { slotCharts[slotId].dispose(); }
+    if (slotResizeHandlers[slotId]) {
+      window.removeEventListener("resize", slotResizeHandlers[slotId]);
+      delete slotResizeHandlers[slotId];
+    }
+    var chart = echarts.init(el);
+    slotCharts[slotId] = chart;
+    chart.setOption(minuteOption(d), true);
+    var onResize = function () { chart.resize(); };
+    slotResizeHandlers[slotId] = onResize;
+    window.addEventListener("resize", onResize);
+  }
+
+  // 标签页切回前台:把分时卡片重新拉起。错开 250ms 一张,10 张卡同时回来
+  // 也不会在同一瞬间打出 10 个请求(后端按 symbol 缓存,但不同股票各算各的)。
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState !== "visible") {
+      boardCards.forEach(function (c) { stopMinutePoll(c.id); });
+      return;
+    }
+    var i = 0;
+    boardCards.forEach(function (c) {
+      if (c.kind !== "stock" || modeOf(c.id) !== "minute" || !slotState[c.id]) return;
+      scheduleMinutePoll(c, 400 + (i++) * 250);
+    });
+  });
+
   function loadSlot(slot) {
     var cur = slotState[slot.id];
     renderSlotBody(slot);
+    stopMinutePoll(slot.id);
     if (!cur) { refreshCanvas(); return; }
+    // 分时走另一条接口(外部实时源),和下面这段日线取数完全不相干
+    if (modeOf(slot.id) === "minute") { loadMinute(slot); return; }
 
     var end = new Date();
     var start = new Date(end.getTime() - DAYS_BACK * 86400000);
@@ -376,15 +715,26 @@
       });
   }
 
-  // 切换走势线 / K 线。两种画法用的是同一份数据,有缓存就直接重画,不再发请求;
-  // 没缓存说明上次压根没加载成功,那就重新拉一次。模式跟坐标、选中的股票一样
+  // 切换画法。走势线和 K 线共用同一份日线数据,有缓存就直接重画不再发请求;
+  // 分时是另一条接口的另一份数据,而且随时在变 —— 有缓存也只拿它先垫一下
+  // (避免切过去白屏一下),同时立刻拉一份新的。模式跟坐标、选中的股票一样
   // 随布局持久化,下次打开这张卡还是这个样子。
   function setSlotMode(slot, mode) {
     if (CHART_MODES.indexOf(mode) === -1 || modeOf(slot.id) === mode) return;
     slotMode[slot.id] = mode;
     renderSlotMode(slot);
+    stopMinutePoll(slot.id);
     if (slotState[slot.id]) {
-      if (slotRows[slot.id]) {
+      if (mode === "minute") {
+        if (slotMinute[slot.id]) {
+          fillMinute(slot, slotMinute[slot.id]);
+          refreshCanvas();
+          loadMinute(slot, true);   // 垫上旧图后立刻刷新,失败也不会擦掉它
+        } else {
+          renderSlotBody(slot);
+          loadMinute(slot);
+        }
+      } else if (slotRows[slot.id]) {
         fillQuote(slot, slotRows[slot.id]);
         refreshCanvas();
       } else {
@@ -439,6 +789,10 @@
   }
 
   function selectStock(slot, code, type, name) {
+    // 换股票 = 两份缓存全部作废。分时那份尤其不能留:它是"先画缓存再刷新",
+    // 不清的话切过去会先闪一下上一只股票的分时图。
+    delete slotRows[slot.id];
+    delete slotMinute[slot.id];
     slotState[slot.id] = { code: code, type: type, name: name };
     renderSlotTitle(slot);
     $("mbPop_" + slot.id).hidden = true;
@@ -1575,9 +1929,11 @@
         window.removeEventListener("resize", slotResizeHandlers[cardId]);
         delete slotResizeHandlers[cardId];
       }
+      stopMinutePoll(cardId);
       delete slotState[cardId];
       delete slotMode[cardId];
       delete slotRows[cardId];
+      delete slotMinute[cardId];
     } else if (card.kind === "compare") {
       if (compareCharts[cardId]) { compareCharts[cardId].dispose(); delete compareCharts[cardId]; }
       if (compareResizeHandlers[cardId]) {
@@ -1757,7 +2113,8 @@
         } else {
           slotState[card.id] = null;
         }
-        slotMode[card.id] = (saved2 && saved2.chart === "kline") ? "kline" : "line";
+        slotMode[card.id] = (saved2 && CHART_MODES.indexOf(saved2.chart) !== -1)
+          ? saved2.chart : "line";
         renderSlotTitle(card);
         renderSlotMode(card);
         bindSwitchUI(card);

@@ -425,6 +425,20 @@ scheduler.runner.run_due()  →  subprocess 跑各任务(全表见下方"调度�
 
 每次成功获取自动写回 `market_universe_snapshot`,确保下次离线可用。
 
+#### 分时(`app/data/intraday.py:get_intraday`)
+
+```
+1. 腾讯 web.ifzq.gtimg.cn/appstock/app/minute/query(唯一来源)
+```
+
+**这一类没有 DB 层,也不打算有。** 库里只存日线,分时是纯透传 + 内存缓存
+(盘中 25s / 收盘后 600s)。一天 242 点 × 5000 只 ≈ 120 万行/天,而回测、策略、
+选股全是日线口径,一行都读不到 —— 落库等于拿最贵的存储换第二天没人看的数据。
+
+代价要认:**源站挂了这张图就没有**,接口回 503、前端提示"稍后重试"并保留上一张图。
+选腾讯是因为它一个请求给全(242 点 + 昨收/今开/现价快照),新浪最细只到 5 分钟、
+东财 trends2 不带昨收。三家在生产机上都实测可达。
+
 ### 数据库表清单
 
 | 表 | 维护方 | 用途 |
@@ -545,7 +559,8 @@ app/
     universe.py                历史可交易股票集(防幸存者偏差)
     filters.py                 A 股准入(ST / 板块判断)
     calendar.py                交易日历(进程内缓存)
-    realtime.py                持仓页实时价(xuangu 单股查询)
+    realtime.py                持仓页实时价(sina 主 / xuangu 兜底)
+    intraday.py                当日分时(腾讯,纯透传不落库)
     stock_search.py            股票名称/代码模糊搜索
     quality.py                 K 线写入前质量校验(异常跳价/停牌恢复识别)
     dividend.py                除权事件查询 + 持仓除权调整算法
@@ -659,6 +674,7 @@ with get_conn() as conn:
 - `app/data/dividend.py` — 除权事件查询 + 持仓除权算法
 - `app/data/quality.py` — K 线写入前质量校验
 - `app/data/stock_search.py` — 股票名称/代码模糊搜索
+- `app/data/intraday.py` — 当日分时(`get_intraday` / `tencent_symbol`,含 242 时间槽对齐)
 - `app/engine/money.py` — Decimal 钱算工具
 - `app/ratelimit.py` — 滑动窗口限流(多处调用点共用一份实现)
 - `app/csrf.py` — 写接口同源检查
