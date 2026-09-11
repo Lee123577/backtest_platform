@@ -23,7 +23,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from ..json_safe import json_safe as _json_safe
 from ..auth.deps import get_current_user
 from ..subscription import service as sub_service
-from . import db
+from . import db, render
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +50,11 @@ def _row_out(row: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         out["context"] = json.loads(ctx_raw) if ctx_raw else None
     except (json.JSONDecodeError, TypeError):
         out["context"] = None
+    # 正文的 HTML 由服务端出一份带下发。前端本来有一套等价的 renderMarkdown,
+    # 但正文里的股票名链接要查名字索引(5000 多条),没道理搬到浏览器里再做一遍;
+    # 更重要的是两边各写一份必然会漂移 —— 首屏(服务端直出)和切换往期(JS 渲染)
+    # 之间会出现一篇有链接、一篇没有。前端优先用这份,拿不到才退回自己渲染。
+    out["content_html"] = render.md_to_html(out.get("content_md"))
     if out.get("status") == "failed":
         # 内部错误细节(DeepSeek 响应片段/DB 报错)不对匿名访客透出
         out["error_msg"] = "生成失败，详情见「定时任务」页运行日志"
@@ -64,6 +69,7 @@ def _locked_out(row: Dict[str, Any]) -> Dict[str, Any]:
         "status": row.get("status"),
         "locked": True,
         "content_md": None,
+        "content_html": None,
         "context": None,
     }
 

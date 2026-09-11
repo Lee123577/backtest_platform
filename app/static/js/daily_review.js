@@ -182,7 +182,9 @@
         esc(review.error_msg || "生成失败") + "</div>";
     } else {
       titleEl.textContent = review.title || (currentDate + " A股复盘");
-      bodyEl.innerHTML = renderMarkdown(review.content_md || "");
+      // 服务端那份带股票名链接(名字索引在后端,搬不过来);拿不到再自己渲染
+      bodyEl.innerHTML = review.content_html ||
+        renderMarkdown(review.content_md || "");
     }
     renderSummary(review.context);
     highlightHistory();

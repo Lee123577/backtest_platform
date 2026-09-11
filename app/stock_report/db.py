@@ -166,6 +166,76 @@ def count_today(report_date: _Date) -> int:
     return int(row["c"]) if row else 0
 
 
+def list_related(code: str, industry: Optional[str],
+                 limit: int = 8) -> List[Dict[str, Any]]:
+    """同行业的其他已有报告个股;不够就用最近分析过的补齐。
+
+    动机是实测:一周里有 72 个个股页被真人打开过,但每一页都是死胡同 ——
+    正文区一个站内链接都没有,读者看完只能关掉。同行业是最自然的下一跳
+    (看完中国船舶想看中国重工),而"补齐"这一步保证**任何**一页都有出口,
+    包括行业字段缺失的那些。
+
+    只收 status='generated' 的:链到一个还没有报告的空壳页,点进去是个
+    "生成 AI 分析"按钮,比不给链接更让人失望。
+    """
+    conn = _get_pool()
+    if conn is None:
+        return []
+    code = (code or "").strip()
+    out: List[Dict[str, Any]] = []
+    seen = {code}
+
+    def _collect(rows: Any) -> None:
+        for r in rows or []:
+            c = (r.get("code") or "").strip()
+            if not c or c in seen:
+                continue
+            seen.add(c)
+            out.append({"code": c, "name": (r.get("name") or "").strip(),
+                        "same_industry": r.get("same_industry", 0) == 1})
+
+    with conn.cursor() as cur:
+        if industry:
+            # 按最近分析过的排在前面:同行业里读者更可能关心最近有动静的那几只
+            cur.execute(
+                """
+                SELECT i.code, i.name, 1 AS same_industry
+                  FROM stock_info i
+                  JOIN (SELECT code, MAX(report_date) AS d
+                          FROM stock_ai_report
+                         WHERE status='generated'
+                         GROUP BY code) r ON r.code = i.code
+                 WHERE i.industry_sw1 = %s
+                   AND i.code <> %s
+                   AND i.delist_date IS NULL
+                 ORDER BY r.d DESC, i.code
+                 LIMIT %s
+                """,
+                (industry, code, int(limit)),
+            )
+            _collect(cur.fetchall())
+
+        if len(out) < limit:
+            cur.execute(
+                """
+                SELECT i.code, i.name, 0 AS same_industry
+                  FROM stock_info i
+                  JOIN (SELECT code, MAX(report_date) AS d
+                          FROM stock_ai_report
+                         WHERE status='generated'
+                         GROUP BY code) r ON r.code = i.code
+                 WHERE i.code <> %s
+                   AND i.delist_date IS NULL
+                 ORDER BY r.d DESC, i.code
+                 LIMIT %s
+                """,
+                (code, int(limit) * 3),   # 多取一些,去重后仍够填满
+            )
+            _collect(cur.fetchall())
+
+    return out[:limit]
+
+
 def list_codes_with_report(limit: int = 5000) -> List[Dict[str, Any]]:
     """有过成功报告的股票 + 各自最新日期 —— 给 sitemap 用。
 

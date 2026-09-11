@@ -332,3 +332,61 @@ def body_html(row: Optional[Dict[str, Any]], label: str) -> str:
             "</div>"
         )
     return md_to_html(row.get("content_md"))
+
+
+# ── 出口:拿这只票做点什么 ────────────────────────────────────────────────────
+# 这一块是实测逼出来的:一周有 172 个真人打开过个股页,但正文区**一个站内链接、
+# 一个按钮都没有** —— 每篇报告都在讲一只具体的股票,读者看完却不能对这只股票
+# 做任何事。内容页到工具页的转化因此只有 1.3%。
+#
+# 两个出口对应两种意图:想验证的去回测,想跟踪的加自选。加自选要登录,
+# 而登录闸正是那 30 个免费终生名额唯一有意义的曝光位 —— /subscribe 一周
+# 只有 2 个人打开过,名额根本没被看见。
+
+def actions_html(code: str, name: str, has_report: bool) -> str:
+    label = name or code
+    gen = ""
+    if not has_report:
+        gen = (
+            '<button type="button" class="sr-gen-btn" id="srGenBtn">生成 AI 分析</button>'
+            '<span class="sr-hint" id="srGenHint">约需 30 秒</span>'
+        )
+    c = _esc(code)
+    return (
+        f"{gen}"
+        '<div class="sr-cta">'
+        f'<div class="sr-cta-label">拿 {_esc(label)} 做点什么</div>'
+        '<div class="sr-cta-btns">'
+        f'<a class="sr-cta-btn sr-cta-btn--primary" href="/?code={c}">'
+        "📈 用它跑一次回测</a>"
+        f'<a class="sr-cta-btn" href="/watchlist?add={c}">⭐ 加入自选盯盘</a>'
+        "</div>"
+        '<div class="sr-cta-hint">'
+        "回测用本站行情库跑真实历史数据，含防过拟合检验；"
+        "盯盘在每个交易日收盘后按你选的策略扫描，命中信号发到邮箱（需登录）。"
+        "</div>"
+        "</div>"
+    )
+
+
+# ── 同行业其他个股 ───────────────────────────────────────────────────────────
+
+def related_html(items: List[Dict[str, Any]], industry: str = "") -> str:
+    """同行业(或最近分析过的)其他个股。空列表就整块不出,不留一个空壳标题。"""
+    if not items:
+        return ""
+    same = [x for x in items if x.get("same_industry")]
+    label = f"{_esc(industry)}板块的其他个股" if (same and industry) else "最近分析过的其他个股"
+    links = "".join(
+        '<a class="sr-rel-item" href="/stock/{c}">'
+        '<span class="sr-rel-name">{n}</span>'
+        '<span class="sr-rel-code">{c}</span></a>'.format(
+            c=_esc(x["code"]), n=_esc(x.get("name") or x["code"]))
+        for x in items
+    )
+    return (
+        '<nav class="panel sr-related">'
+        f'<div class="panel-title">{label}</div>'
+        f'<div class="sr-rel-grid">{links}</div>'
+        "</nav>"
+    )

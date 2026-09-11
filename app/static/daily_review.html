@@ -49,6 +49,15 @@
     <!--DR_INIT-->
     <h1 class="panel-title" id="drTitle"><!--DR_TITLE--></h1>
     <div class="md-body" id="drContent"><!--DR_BODY--></div>
+    <!-- 读完之后往哪走。直出而不是 JS 生成:这几个是真链接,爬虫也要能顺着爬 -->
+    <div class="dr-next" id="drNext">
+      <div class="dr-next-label">接着做点什么</div>
+      <div class="dr-next-btns">
+        <a class="dr-next-btn dr-next-btn--primary" href="/ai_hotsector">🔥 看今天的 AI 热门板块</a>
+        <a class="dr-next-btn" href="/">📈 拿策略回测验证一下</a>
+        <a class="dr-next-btn" href="/watchlist">⭐ 建自选，收盘自动盯信号</a>
+      </div>
+    </div>
   </article>
 
   <!-- 3. 历史复盘 —— 直出成真链接,爬虫顺着能抓到每一篇往期 -->

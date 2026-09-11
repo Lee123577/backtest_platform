@@ -106,6 +106,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const codeFilter = e.target.closest('.trades-code-filter');
     if (codeFilter) filterTradesByCode(+codeFilter.dataset.idx, codeFilter.value);
   });
+
+  // 从个股报告页「用它跑一次回测」过来:/?code=600519
+  // 直接把票填好并拉出 K 线 —— 让人带着一只具体的票落地却还要自己再输一遍,
+  // 等于把刚建立的意图丢掉。回测参数不替用户预设,让他自己挑策略。
+  const urlCode = new URLSearchParams(location.search).get('code');
+  if (/^\d{6}$/.test(urlCode || '')) {
+    document.getElementById('stockCode').value = urlCode;
+    loadKline();
+  }
 });
 
 function todayStr() {

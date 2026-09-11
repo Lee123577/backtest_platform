@@ -11,12 +11,23 @@
 
 安全：输入是 LLM 生成的 markdown，一律**先整体转义再做受限变换**，
 输出里不可能出现来自模型的原始 HTML —— 与前端同一套思路。
+
+正文里提到的股票名会被链成 ``/stock/{code}``。动机是实测出来的：复盘详情页
+一周 175 个真人 UV，但正文里 30 个链接全部指向**其他日期的复盘**，一个都不
+通向工具，读者看完只能在复盘之间打转 —— 内容页到工具页的转化只有 1.3%。
+模型写的是名字不是代码（"中国船舶和华银电力分别领涨板块"），所以匹配按名字走，
+索引见 ``app/data/stock_names.py``。
 """
 from __future__ import annotations
 
 import html
+import logging
 import re
 from typing import List, Optional
+
+from ..data import stock_names
+
+logger = logging.getLogger(__name__)
 
 # 与前端一致的受限语法
 _H_RE = re.compile(r"^(#{1,5})\s+(.*)$")
@@ -29,9 +40,45 @@ _LI_RES = (
 _STRONG_RE = re.compile(r"\*\*([^*]+)\*\*")
 _CODE_RE = re.compile(r"`([^`]+)`")
 
+# 一篇里最多链几只。上限不是怕慢,是怕正文变成一片蓝 —— 满屏链接读起来像
+# 采集站,真正有价值的就是开头提到的那几只领涨/领跌票。
+MAX_STOCK_LINKS = 6
+
 
 def _esc(s: str) -> str:
     return html.escape(s, quote=True)
+
+
+def linkify_stocks(escaped: str, limit: int = MAX_STOCK_LINKS) -> str:
+    """把正文里出现的股票名换成指向个股页的链接。
+
+    **入参必须是已转义的文本**,且此时还没有任何标签 —— 这是刻意选的时机:
+    在 md_to_html 里紧跟 _esc 之后、拆行之前做,一次处理整篇。
+      - 之前做会匹配到未转义的内容,之后做会匹配到 <a href> 里的字符
+      - 一次整篇处理才能实现"同一只票只链第一次",按行处理做不到
+
+    插进去的 ``<a href="/stock/600150">`` 不含 ``*`` 和反引号,所以后面
+    加粗/行内码那两条正则不会被它带偏;反过来 ``**中国船舶**`` 会变成
+    ``<strong><a ...>中国船舶</a></strong>``,也是对的。
+    """
+    if not escaped:
+        return escaped
+    try:
+        hits = stock_names.find_names(escaped, limit=limit)
+    except Exception as e:      # 索引不可用不该让整页复盘挂掉
+        logger.info("正文股票名链接化失败(按无链接渲染): %s", e)
+        return escaped
+    if not hits:
+        return escaped
+
+    out: List[str] = []
+    pos = 0
+    for start, end, name, code in hits:
+        out.append(escaped[pos:start])
+        out.append(f'<a class="dr-stock-link" href="/stock/{code}">{name}</a>')
+        pos = end
+    out.append(escaped[pos:])
+    return "".join(out)
 
 
 def _inline(s: str) -> str:
@@ -44,7 +91,7 @@ def md_to_html(md: Optional[str]) -> str:
     """受限 markdown → HTML（标题/加粗/行内码/列表/段落）。"""
     if not md:
         return ""
-    lines = _esc(md).split("\n")
+    lines = linkify_stocks(_esc(md)).split("\n")
     out: List[str] = []
     para: List[str] = []
     in_list = False

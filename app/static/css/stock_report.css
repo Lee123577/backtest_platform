@@ -418,3 +418,84 @@
   .sr-backtest { padding: 12px; }
   .sr-gen-btn { min-height: 44px; }
 }
+
+
+/* ── 出口:拿这只票做点什么 ──────────────────────────────────────────────
+   实测一周 172 个真人打开过个股页,而正文区此前一个站内链接、一个按钮都没有。
+   每篇报告都在讲一只具体的票,读者看完却不能对它做任何事 —— 这一块就是补
+   那个洞。放在正文正下方而不是页面最底:读者读完最后一段的当下最可能行动。 */
+.sr-cta {
+  margin: 22px 0 0;
+  padding: 18px;
+  border: 1px solid var(--border, #eaeef2);
+  border-radius: 10px;
+  background: var(--bg2, #f6f8fa);
+}
+.sr-cta-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--txt, #24292f);
+  margin-bottom: 12px;
+}
+.sr-cta-btns { display: flex; flex-wrap: wrap; gap: 10px; }
+.sr-cta-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 18px;
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 8px;
+  background: var(--bg, #fff);
+  color: var(--txt, #24292f);
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: border-color 120ms ease-out, background-color 120ms ease-out;
+}
+.sr-cta-btn:hover { border-color: var(--accent, #0969da); }
+.sr-cta-btn--primary {
+  background: #EF9F27;
+  border-color: #EF9F27;
+  color: #1a1d23;
+}
+.sr-cta-btn--primary:hover { background: #e0921c; border-color: #e0921c; }
+.sr-cta-hint {
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.8;
+  color: var(--txt2, #8a929c);
+}
+
+/* ── 同行业其他个股 ──────────────────────────────────────────────────────
+   此前 72 个被访问过的个股页彼此完全孤立。这一块让读者(和爬虫)能从一篇
+   走到下一篇 —— 看完中国船舶顺手看中国重工是最自然的下一跳。 */
+.sr-related { margin-top: 18px; }
+.sr-rel-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+}
+.sr-rel-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 9px 12px;
+  border: 1px solid var(--border, #eaeef2);
+  border-radius: 8px;
+  text-decoration: none;
+  transition: border-color 120ms ease-out, background-color 120ms ease-out;
+}
+.sr-rel-item:hover {
+  border-color: var(--accent, #0969da);
+  background: var(--bg2, #f6f8fa);
+}
+.sr-rel-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--txt, #24292f);
+}
+.sr-rel-code {
+  font-size: 12px;
+  color: var(--txt2, #8a929c);
+  font-variant-numeric: tabular-nums;
+}

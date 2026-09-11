@@ -49,6 +49,24 @@
 
   var $ = function (id) { return document.getElementById(id); };
 
+  // 从个股报告页「加入自选盯盘」过来:/watchlist?add=600519
+  // 未登录时先走登录闸,登录成功会重跑 init(),那时再补上这一手 ——
+  // 所以这里读的是 URL 而不是一次性变量。
+  function pendingAdd() {
+    var v = new URLSearchParams(location.search).get("add") || "";
+    return /^\d{6}$/.test(v) ? v : null;
+  }
+
+  // 加完就把参数从地址栏摘掉:留着的话刷新一次又加一遍,
+  // 用户看到的是"我明明只点了一次"却反复提示已添加。
+  function clearAddParam() {
+    try {
+      var u = new URL(location.href);
+      u.searchParams.delete("add");
+      history.replaceState(history.state, "", u.pathname + u.search + u.hash);
+    } catch (e) { /* 老浏览器不支持就算了,不影响主流程 */ }
+  }
+
   // ── 渲染：自选股 ────────────────────────────────────────────────────────
   function renderStocks() {
     $("wlCount").textContent = "（" + cfg.stocks.length + "/" + cfg.max_watchlist + "）";
@@ -234,6 +252,24 @@
   // ── 未登录挡板：拉公开的 /api/strategies(首页回测用的同一份策略注册表，
   // 盯盘策略是它的子集)渲染真实规则说明，而不是空喊"登录后可用" ──────────────
   var _gateStrategiesLoaded = false;
+  // 免费名额只在登录闸上提一次。这里是全站最该说它的位置:能走到这一步的人
+  // 已经明确表达了"我要盯这只票"的意图,而 /subscribe 一周只有 2 个人打开过 ——
+  // 名额发不出去不是名额不够吸引,是根本没人看见。
+  function loadGateOffer() {
+    var box = $("wlGateOffer");
+    if (!box) return;
+    fetch("/api/subscription/status")
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (s) {
+        var o = s && s.lifetime_offer;
+        if (!o || !o.remaining) return;      // 名额发完就不提,免得像画饼
+        box.innerHTML = "🎁 前 " + o.total + " 名注册用户免费领<b>终生会员</b>，" +
+          "还剩 <b>" + o.remaining + "</b> 个 —— 信号提醒是会员权益，登录后可直接领取。";
+        box.style.display = "";
+      })
+      .catch(function () { /* 拿不到就不显示,不影响登录 */ });
+  }
+
   function loadGateStrategies() {
     if (_gateStrategiesLoaded) return;
     _gateStrategiesLoaded = true;
@@ -254,6 +290,7 @@
     $("wlLoginGate").style.display = "";
     $("wlBody").style.display = "none";
     loadGateStrategies();
+    loadGateOffer();
     var b = $("wlLoginBtn");
     if (b) b.addEventListener("click", function () {
       window.SPAuth.requireLogin().then(function (u) { if (u) init(); });
@@ -278,6 +315,19 @@
         }
         $("wlSaveRules").addEventListener("click", saveRules);
         $("wlReadBtn").addEventListener("click", markRead);
+
+        var auto = pendingAdd();
+        if (auto) {
+          clearAddParam();
+          // 已经在自选里就别报错,直接当成功 —— 用户的诉求是"让它在里面"
+          if ((cfg.stocks || []).some(function (s) { return s.code === auto; })) {
+            setAddMsg("已在自选中", true);
+          } else {
+            postJson("/api/watchlist/add", { code: auto })
+              .then(function () { setAddMsg("已加入自选", true); reloadConfig(); })
+              .catch(function (e) { setAddMsg(e.message); });
+          }
+        }
       })
       .catch(function (e) {
         if (e && e.unauth) showGate();

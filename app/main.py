@@ -843,15 +843,6 @@ def _sr_head(row: Optional[Dict[str, Any]], code: str, name: str, canonical: str
     return "\n  ".join(head)
 
 
-def _sr_actions(row: Optional[Dict[str, Any]]) -> str:
-    if row is not None:
-        return ""
-    return (
-        '<button type="button" class="sr-gen-btn" id="srGenBtn">生成 AI 分析</button>'
-        '<span class="sr-hint" id="srGenHint">约需 30 秒</span>'
-    )
-
-
 @app.get("/stock/{code}", include_in_schema=False)
 def page_stock_report(code: str, request: Request):
     """个股 AI 分析报告页。已有报告则正文直出,没有则出生成入口 + noindex。"""
@@ -892,6 +883,15 @@ def page_stock_report(code: str, request: Request):
         except Exception as e:
             logger.info("个股页轻量快照取失败(%s，页面照常出): %s", norm, e)
             ctx = {}
+    # 同行业互链:此前每个个股页都是死胡同(正文区零站内链接)。取不到就整块不出,
+    # 一个页面少几条链接远好过整页 500。
+    industry = str((ctx.get("basic") or {}).get("industry_sw1") or "")
+    try:
+        related = _sr_db.list_related(norm, industry or None, limit=8)
+    except Exception as e:
+        logger.info("个股页相关个股取失败(%s，页面照常出): %s", norm, e)
+        related = []
+
     return _html(
         request, "stock_report.html",
         replacements={
@@ -903,7 +903,8 @@ def page_stock_report(code: str, request: Request):
             "<!--SR_METRICS-->": _sr_render.metrics_html(ctx),
             "<!--SR_BACKTEST-->": _sr_render.backtest_html(ctx),
             "<!--SR_BODY-->": _sr_render.body_html(row, label),
-            "<!--SR_ACTIONS-->": _sr_actions(row),
+            "<!--SR_ACTIONS-->": _sr_render.actions_html(norm, name, row is not None),
+            "<!--SR_RELATED-->": _sr_render.related_html(related, industry),
             "<!--SR_INIT-->": (
                 f'<span id="srInit" hidden data-code="{_htmlmod.escape(norm, quote=True)}" '
                 f'data-ssr="{"1" if row is not None else "0"}"></span>'

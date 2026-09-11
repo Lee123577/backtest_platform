@@ -674,6 +674,8 @@ with get_conn() as conn:
 - `app/data/dividend.py` — 除权事件查询 + 持仓除权算法
 - `app/data/quality.py` — K 线写入前质量校验
 - `app/data/stock_search.py` — 股票名称/代码模糊搜索
+- `app/data/stock_names.py` — 名称→代码索引(`find_names`),把复盘正文里提到的
+  股票名链成个股页;滑窗查字典、长名优先,不用 5000 分支的正则
 - `app/data/data_loader.py` — `volume_to_lots`:把库里两种口径的 volume
   (股/手,历史未回填且新旧交错)统一换算成「手」,展示层专用
 - `app/data/intraday.py` — 当日分时(`get_intraday` / `tencent_symbol`,含 242 时间槽对齐)

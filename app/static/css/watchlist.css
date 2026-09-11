@@ -159,3 +159,18 @@
 .wl-notify-foot { margin-top: 12px; font-size: 12px; color: var(--txt2, #9aa0aa); }
 .wl-notify-msg { font-size: 12px; color: #e0684d; margin-left: 8px; font-weight: 400; }
 .wl-notify-msg.ok { color: #2fa87d; }
+
+
+/* 登录闸上的免费名额提示。只在还有名额时由 JS 填内容并显示 —— 发完就消失,
+   挂一个"已抢光"在这儿只会让人转身就走。 */
+.wl-gate-offer {
+  margin: 14px 0 0;
+  padding: 12px 14px;
+  border: 1px solid #EF9F27;
+  border-radius: 8px;
+  background: rgba(239, 159, 39, .08);
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--txt, #24292f);
+}
+.wl-gate-offer b { color: #b06d00; }

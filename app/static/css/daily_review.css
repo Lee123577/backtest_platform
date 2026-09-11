@@ -93,3 +93,58 @@ h1.panel-title {
   padding: 10px 24px;
   cursor: pointer;
 }
+
+
+/* ── 正文里的个股链接 ────────────────────────────────────────────────────
+   复盘提到某只票时,读者最想做的就是点进去看它 —— 但此前正文里一个链接
+   都没有。样式刻意做得克制(不加下划线、只换色),满屏蓝链会让正文读起来
+   像采集站;真正引导动作的是下面那排按钮。 */
+.dr-stock-link {
+  color: var(--accent, #0969da);
+  text-decoration: none;
+  border-bottom: 1px solid rgba(9, 105, 218, .25);
+}
+.dr-stock-link:hover {
+  border-bottom-color: var(--accent, #0969da);
+}
+
+/* ── 读完之后往哪走 ──────────────────────────────────────────────────────
+   实测复盘详情页一周 175 个真人 UV,而正文里 30 个链接全指向其他日期的复盘,
+   读者只能在复盘之间打转。这一排是整页唯一通向工具的出口。 */
+.dr-next {
+  margin: 26px 0 0;
+  padding: 18px 0 0;
+  border-top: 1px solid var(--border, #eaeef2);
+}
+.dr-next-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .08em;
+  color: var(--txt2, #8a929c);
+  margin-bottom: 12px;
+}
+.dr-next-btns { display: flex; flex-wrap: wrap; gap: 10px; }
+.dr-next-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 16px;
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 8px;
+  background: var(--bg, #fff);
+  color: var(--txt, #24292f);
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: border-color 120ms ease-out, background-color 120ms ease-out;
+}
+.dr-next-btn:hover {
+  border-color: var(--accent, #0969da);
+  background: var(--bg2, #f6f8fa);
+}
+.dr-next-btn--primary {
+  background: #EF9F27;
+  border-color: #EF9F27;
+  color: #1a1d23;
+}
+.dr-next-btn--primary:hover { background: #e0921c; border-color: #e0921c; }
