@@ -559,7 +559,7 @@ app/
     universe.py                历史可交易股票集(防幸存者偏差)
     filters.py                 A 股准入(ST / 板块判断)
     calendar.py                交易日历(进程内缓存)
-    realtime.py                持仓页实时价(sina 主 / xuangu 兜底)
+    realtime.py                实时行情(sina 主 / xuangu 兜底,整行+取价两个出口)
     intraday.py                当日分时(腾讯,纯透传不落库)
     stock_search.py            股票名称/代码模糊搜索
     quality.py                 K 线写入前质量校验(异常跳价/停牌恢复识别)

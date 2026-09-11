@@ -67,22 +67,137 @@
     } catch (e) { /* 老浏览器不支持就算了,不影响主流程 */ }
   }
 
-  // ── 渲染：自选股 ────────────────────────────────────────────────────────
+  // ── 渲染：自选股行情表 ──────────────────────────────────────────────────
+  // 这一块以前是一排只有名字和代码的灰 chip,一个数字都没有 —— 而信号一天只出
+  // 一次、还得等到 17:20,中间十几个小时这一页无事可做,打开跟废了一样。
+  // 现在是一张真行情表,盘中每 15 秒自己刷新。
+
+  function num(v, d) {
+    return (v == null || isNaN(v)) ? "—" : Number(v).toFixed(d === undefined ? 2 : d);
+  }
+  function pctText(v) {
+    if (v == null || isNaN(v)) return "—";
+    return (v > 0 ? "+" : "") + Number(v).toFixed(2) + "%";
+  }
+  // A 股口径:涨红跌绿,别照搬西方配色
+  function udClass(v) {
+    if (v == null || isNaN(v) || v === 0) return "wl-flat";
+    return v > 0 ? "wl-up" : "wl-down";
+  }
+  function amountText(v) {
+    if (v == null || isNaN(v)) return "—";
+    var x = Number(v);
+    if (x >= 1e8) return (x / 1e8).toFixed(2) + "亿";
+    if (x >= 1e4) return (x / 1e4).toFixed(0) + "万";
+    return String(Math.round(x));
+  }
+  // 振幅 =(最高-最低)/昨收。一眼看出今天是死水还是过山车,
+  // 而这正是"要不要点进去看分时"的判断依据。
+  function ampText(r) {
+    if (r.high == null || r.low == null || !r.prev_close) return "—";
+    return ((r.high - r.low) / r.prev_close * 100).toFixed(2) + "%";
+  }
+
+  function stockRowHtml(r) {
+    var cls = udClass(r.pct_change);
+    return "<tr>" +
+      '<td class="wl-td-name">' +
+        '<a class="wl-name-link" href="/stock/' + esc(r.code) + '">' +
+          esc(r.name || r.code) + "</a>" +
+        (r.suspended ? '<span class="wl-susp">停牌</span>' : "") +
+        '<span class="wl-td-code">' + esc(r.code) + "</span></td>" +
+      '<td class="wl-td-num ' + cls + '">' + num(r.price) + "</td>" +
+      '<td class="wl-td-num ' + cls + '">' + pctText(r.pct_change) + "</td>" +
+      '<td class="wl-td-num wl-td-sub">' + ampText(r) + "</td>" +
+      '<td class="wl-td-num wl-td-sub">' + amountText(r.amount) + "</td>" +
+      '<td class="wl-td-op">' +
+        '<a class="wl-op-link" href="/?code=' + esc(r.code) + '" title="拿这只票跑回测">回测</a>' +
+        '<button type="button" class="wl-chip-x" data-code="' + esc(r.code) +
+          '" title="从自选移除">×</button></td>' +
+      "</tr>";
+  }
+
   function renderStocks() {
     $("wlCount").textContent = "（" + cfg.stocks.length + "/" + cfg.max_watchlist + "）";
     if (!cfg.stocks.length) {
       $("wlStocks").innerHTML = '<div class="no-data">还没有自选股，上方添加代码开始盯盘。</div>';
+      setLive(false);
+      stopQuotePoll();
       return;
     }
-    $("wlStocks").innerHTML = cfg.stocks.map(function (s) {
-      return '<span class="wl-chip">' + esc(s.name || "") +
-        ' <span style="color:var(--txt2)">' + esc(s.code) + "</span>" +
-        '<span class="wl-chip-x" data-code="' + esc(s.code) + '">×</span></span>';
-    }).join("");
+    // 先拿库里的名字+代码把表搭出来,价格留空等行情回来再填 ——
+    // 等行情才渲染的话,行情源慢一拍这一页就是空的
+    $("wlStocks").innerHTML =
+      '<div class="wl-table-wrap"><table class="wl-table">' +
+      "<thead><tr>" +
+        "<th>名称</th><th>现价</th><th>涨跌幅</th>" +
+        "<th>振幅</th><th>成交额</th><th></th>" +
+      "</tr></thead><tbody>" +
+      cfg.stocks.map(function (s) {
+        return stockRowHtml(quoteMap[s.code] || { code: s.code, name: s.name });
+      }).join("") +
+      "</tbody></table></div>";
     $("wlStocks").querySelectorAll(".wl-chip-x").forEach(function (x) {
       x.addEventListener("click", function () { removeStock(x.getAttribute("data-code")); });
     });
   }
+
+  // ── 实时行情 ────────────────────────────────────────────────────────────
+  // 三重闸和看板的分时卡是同一套:非交易时段不轮询、标签页切后台停、
+  // 行情日期不是今天(节假日看到的是上一个交易日)不轮询。
+
+  var quoteMap = {};        // code -> 行情
+  var quoteTimer = null;
+  var QUOTE_POLL_MS = 15000;   // 与后端 realtime._CACHE_TTL 对齐
+
+  function setLive(on) {
+    var el = $("wlLive");
+    if (el) el.hidden = !on;
+  }
+
+  function stopQuotePoll() {
+    if (quoteTimer) { clearTimeout(quoteTimer); quoteTimer = null; }
+  }
+
+  function scheduleQuotePoll() {
+    stopQuotePoll();
+    if (!cfg || !cfg.stocks.length) return;
+    if (document.visibilityState === "hidden") return;   // 切回来时再拉起
+    if (!SPMarket.inTradingWindow()) return;
+    quoteTimer = setTimeout(loadQuotes, QUOTE_POLL_MS);
+  }
+
+  function loadQuotes() {
+    if (!cfg || !cfg.stocks.length) return;
+    getJson("/api/watchlist/quotes")
+      .then(function (j) {
+        var rows = j.quotes || [];
+        quoteMap = {};
+        var stamp = "";
+        rows.forEach(function (r) {
+          quoteMap[r.code] = r;
+          if (r.time) stamp = r.time;
+        });
+        renderStocks();
+        // 数据日期不是今天 = 节假日/周末,看到的是上一个交易日那笔,不会再变
+        var fresh = rows.some(function (r) { return r.date === SPMarket.beijingToday(); });
+        var live = fresh && SPMarket.inTradingWindow();
+        setLive(live);
+        $("wlQuoteTime").textContent = stamp
+          ? (live ? "行情 " + stamp : "收盘价 " + (rows[0] && rows[0].date ? rows[0].date : ""))
+          : "";
+        if (live) scheduleQuotePoll();
+      })
+      .catch(function () {
+        // 行情拉不到就保留上一次的表,不擦成空白 —— 源站抖一下就白屏比不刷新更糟
+        if (SPMarket.inTradingWindow()) scheduleQuotePoll();
+      });
+  }
+
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState !== "visible") { stopQuotePoll(); return; }
+    if (cfg && cfg.stocks.length && SPMarket.inTradingWindow()) loadQuotes();
+  });
 
   // ── 渲染：盯盘策略 ──────────────────────────────────────────────────────
   function renderStrategies() {
@@ -240,10 +355,12 @@
       .catch(function () { renderAlerts({ alerts: [] }); });
   }
 
+  // 增删自选之后表要跟着变,行情也得补上新那只
   function reloadConfig() {
     return getJson("/api/watchlist/config").then(function (c) {
       cfg = c;
       renderStocks();
+      loadQuotes();        // 新加的那只票得立刻有价,不然要等到下一轮轮询
       renderStrategies();
       loadAlerts();
     });
@@ -304,6 +421,7 @@
         $("wlLoginGate").style.display = "none";
         $("wlBody").style.display = "";
         renderStocks();
+        loadQuotes();
         renderStrategies();
         loadAlerts();
         loadPrefs();

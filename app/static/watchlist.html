@@ -75,7 +75,11 @@
 
     <!-- 2. 自选股 -->
     <div class="panel">
-      <div class="panel-title">我的自选股 <span id="wlCount"></span></div>
+      <div class="panel-title">
+        我的自选股 <span id="wlCount"></span>
+        <span class="wl-live" id="wlLive" hidden><i></i>盘中，每 15 秒刷新</span>
+        <span class="wl-quote-time" id="wlQuoteTime"></span>
+      </div>
       <div class="wl-add">
         <input id="wlCodeInput" maxlength="20" placeholder="输入代码或名称，如 贵州茅台" />
         <button class="wl-addbtn" id="wlAddBtn">添加</button>

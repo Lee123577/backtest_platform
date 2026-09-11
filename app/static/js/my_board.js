@@ -380,27 +380,10 @@
           多少",上下必须对称,否则"离中轴多远"这个最重要的视觉信息就是错的
        3. 盘中要自己刷新。这是唯一一种会随时间变的卡片                     */
 
-  // 北京时间:交易所按北京时间走,而访客的机器可能在任何时区。用本地时间判
-  // "现在是不是盘中",时差用户要么永远不刷新、要么半夜狂刷。
-  function beijingNow() {
-    var d = new Date();
-    return new Date(d.getTime() + (d.getTimezoneOffset() + 480) * 60000);
-  }
-
-  function beijingToday() {
-    return fmtDate(beijingNow());
-  }
-
-  // 盘中窗口放宽到 09:15~15:10:早盘集合竞价 09:15 就有数据,收盘后源站还会
-  // 补几笔。节假日在这里判不了(前端没有交易日历),靠"数据日期不是今天就不
-  // 轮询"兜底 —— 节假日拿到的是上一个交易日,那份数据不会再变。
-  function inTradingWindow() {
-    var b = beijingNow();
-    var dow = b.getDay();
-    if (dow === 0 || dow === 6) return false;
-    var m = b.getHours() * 60 + b.getMinutes();
-    return m >= 9 * 60 + 15 && m <= 15 * 60 + 10;
-  }
+  // 北京时间/交易时段判断在 util.js 的 SPMarket 里 —— 自选盯盘也用同一套,
+  // 两处各写一份必然漂移成"一个页面收盘后还在刷,另一个不刷"。
+  var beijingToday = SPMarket.beijingToday;
+  var inTradingWindow = SPMarket.inTradingWindow;
 
   function stopMinutePoll(cardId) {
     if (minuteTimers[cardId]) {

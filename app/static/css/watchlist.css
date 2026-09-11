@@ -124,13 +124,19 @@
 .wl-add-msg, .wl-save-msg { font-size: 12px; color: #e0684d; }
 .wl-add-msg.ok, .wl-save-msg.ok { color: #2fa87d; }
 
-.wl-chip {
-  display: inline-flex; align-items: center; gap: 8px;
-  padding: 6px 10px; margin: 0 8px 8px 0;
-  border: 1px solid var(--border, #333); border-radius: 20px; font-size: 13px;
+/* 自选股从 chip 换成行情表后 .wl-chip 容器没人用了,只剩这个删除按钮 ——
+   它现在是 <button>,要把浏览器默认的边框/底色/内边距清掉 */
+.wl-chip-x {
+  cursor: pointer;
+  color: var(--txt2, #9aa0aa);
+  font-size: 16px;
+  line-height: 1;
+  padding: 2px 6px;
+  border: none;
+  background: none;
+  border-radius: 6px;
 }
-.wl-chip-x { cursor: pointer; color: var(--txt2, #9aa0aa); font-size: 15px; }
-.wl-chip-x:hover { color: #e0684d; }
+.wl-chip-x:hover { color: #e0684d; background: var(--bg2, #f0f1f3); }
 
 /* ── 盯盘策略 ─────────────────────────────────────────────── */
 .wl-strats { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
@@ -174,3 +180,104 @@
   color: var(--txt, #24292f);
 }
 .wl-gate-offer b { color: #b06d00; }
+
+
+/* ── 自选股行情表 ────────────────────────────────────────────────────────
+   替掉原来那排只有名字和代码的灰 chip。信号一天只出一次、还得等到 17:20,
+   中间十几个小时这一页得有东西可看。 */
+.wl-table-wrap { overflow-x: auto; }
+.wl-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+.wl-table th {
+  text-align: right;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--txt2, #8a929c);
+  padding: 0 10px 8px;
+  border-bottom: 1px solid var(--border, #eaeef2);
+  white-space: nowrap;
+}
+.wl-table th:first-child { text-align: left; }
+.wl-table td {
+  padding: 10px;
+  border-bottom: 1px solid var(--border, #f0f1f3);
+  white-space: nowrap;
+}
+.wl-table tbody tr:hover { background: var(--bg2, #f6f8fa); }
+
+.wl-td-name { display: flex; align-items: baseline; gap: 8px; }
+.wl-name-link {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--txt, #24292f);
+  text-decoration: none;
+}
+.wl-name-link:hover { color: var(--accent, #0969da); }
+.wl-td-code { font-size: 12px; color: var(--txt2, #8a929c); }
+.wl-susp {
+  font-size: 11px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--bg2, #f0f1f3);
+  color: var(--txt2, #8a929c);
+}
+
+.wl-td-num { text-align: right; font-size: 14px; font-weight: 600; }
+.wl-td-sub { font-weight: 400; color: var(--txt2, #8a929c); font-size: 13px; }
+/* A 股口径:涨红跌绿 */
+.wl-up { color: #cf222e; }
+.wl-down { color: #1a7f37; }
+.wl-flat { color: var(--txt, #24292f); }
+
+.wl-td-op { text-align: right; white-space: nowrap; }
+.wl-op-link {
+  font-size: 12px;
+  color: var(--txt2, #8a929c);
+  text-decoration: none;
+  padding: 3px 8px;
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 6px;
+  margin-right: 6px;
+}
+.wl-op-link:hover { color: var(--accent, #0969da); border-color: var(--accent, #0969da); }
+
+/* ── 盘中刷新指示 ────────────────────────────────────────────────────────
+   只在"行情日期=今天且在交易时段"时出现。收盘后这张表不再变,还闪着
+   会让人以为数字在动。动效对 prefers-reduced-motion 关掉。 */
+.wl-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--txt2, #8a929c);
+}
+.wl-live i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #cf222e;
+  animation: wl-live-pulse 2s ease-in-out infinite;
+}
+@keyframes wl-live-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: .35; transform: scale(.82); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wl-live i { animation: none; }
+}
+.wl-quote-time {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--txt2, #8a929c);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 窄屏:振幅和成交额是"锦上添花"的两列,先让位给价格和涨跌幅 */
+@media (max-width: 560px) {
+  .wl-table th:nth-child(4), .wl-table td:nth-child(4),
+  .wl-table th:nth-child(5), .wl-table td:nth-child(5) { display: none; }
+}
