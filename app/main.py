@@ -402,6 +402,73 @@ def _footer(*, legal_links: bool = True, contact: bool = True,
     return "\n".join(parts)
 
 
+# ── 首页首屏证据条(单一事实来源)────────────────────────────────────────────
+# 品牌审核结论(2026-09-14,品析)第 4 节缺口1:首页只说"我很诚实 / 我做了防过拟合"
+# 仍属自述,必须把**可核验的实证**前置——实盘净值天数、个股实测页数、复盘篇数。
+# 数字全部取自本站自己的库,可点进对应页面自行核对;取不到就退回定性表述,
+# 从不编造。缓存 10 分钟:这三个数一天最多变一轮。
+_EVIDENCE_CACHE: Dict[str, Any] = {}
+_EVIDENCE_TTL = 600.0
+
+
+def _evidence_bar() -> str:
+    now = time.time()
+    if _EVIDENCE_CACHE and now - _EVIDENCE_CACHE["ts"] < _EVIDENCE_TTL:
+        return _EVIDENCE_CACHE["html"]
+
+    equity_days = 0
+    try:
+        equity_days = len(paper_db.get_equity_curve() or [])
+    except Exception as e:
+        logger.info("首页证据条取实盘净值天数失败(本次略过): %s", e)
+
+    stock_pages = 0
+    try:
+        stock_pages = len(_sr_db.list_codes_with_report(5000) or [])
+    except Exception as e:
+        logger.info("首页证据条取个股报告数失败(本次略过): %s", e)
+
+    review_pages = 0
+    try:
+        review_pages = len(_dr_db.list_review_dates(365) or [])
+    except Exception as e:
+        logger.info("首页证据条取复盘篇数失败(本次略过): %s", e)
+
+    items: List[str] = []
+    if equity_days:
+        items.append(
+            '<a class="hero-ev-item hero-ev-item--link" href="/paper_trading">'
+            f'<strong>{equity_days}</strong> 个交易日实盘净值记录'
+            '<span class="hero-ev-go">可查看 →</span></a>'
+        )
+    if stock_pages:
+        items.append(
+            '<span class="hero-ev-item">'
+            f'<strong>{stock_pages}</strong> 只个股的回测实测页</span>'
+        )
+    if review_pages:
+        items.append(
+            '<span class="hero-ev-item">'
+            f'<strong>{review_pages}</strong> 篇每日复盘</span>'
+        )
+
+    if not items:
+        # 三个数一个都没取到 —— 退回定性表述,不留数字空位也不编数
+        html = ('<div class="hero-evidence">'
+                "每只个股都有可查的近两年 9 策略实测记录，"
+                "实盘观察账户每个交易日更新净值曲线。</div>")
+    else:
+        html = (
+            '<div class="hero-evidence">'
+            '<span class="hero-ev-label">已验证的实证</span>'
+            + "".join(items)
+            + '<span class="hero-ev-note">数据每日更新，点进页面可自行核对</span>'
+            "</div>"
+        )
+    _EVIDENCE_CACHE.update(ts=now, html=html)
+    return html
+
+
 def _html(request: Request, *parts: str,
           replacements: Optional[Dict[str, str]] = None,
           footer: Optional[str] = None) -> Response:
@@ -480,7 +547,10 @@ def _kline_records(df: pd.DataFrame, *, is_index: bool = False) -> List[Dict[str
 
 @app.get("/")
 async def root(request: Request):
-    return _html(request, "index.html")
+    # 证据条是首页唯一由服务端注入的动态块(数字来自本站库,非按人变化,
+    # 进 HTML 可被共享缓存安全复用)
+    return _html(request, "index.html",
+                 replacements={"<!--EVIDENCE-->": _evidence_bar()})
 
 
 @app.get("/paper_trading")
@@ -670,7 +740,11 @@ def _dr_body(row: Optional[Dict[str, Any]], locked: bool) -> str:
         return ('<div class="no-data">还没有生成过复盘 —— 每个交易日 17:45 '
                 "数据入库后自动生成。</div>")
     if row.get("status") == "failed":
-        return '<div class="no-data">该日复盘生成失败</div>'
+        # 品牌审核结论 2.8.4:公开页**绝不暴露"生成失败"**这类生产事故字样 ——
+        # 对访客是信任损伤,对爬虫是低质信号(诊断实测:连续 10 天公开挂着失败占位)。
+        # 改为不含事故信息的友好态,并把访客导向最近一个有效交易日。
+        return ('<div class="no-data">该交易日复盘正在补录，'
+                "可先查看最近一个交易日的复盘内容。</div>")
     if locked:
         # 免费预览 + 付费墙。付费墙整段包在 .dr-paid 里 —— 与 _dr_head() 里
         # hasPart.cssSelector 对应,是向搜索引擎声明"这里确实是会员内容"的锚点。
@@ -716,7 +790,7 @@ def _dr_history(limit: int = 30) -> str:
             f'<a class="dr-history-item" href="/daily_review/{d}" data-date="{d}">'
             f'<span class="dr-history-date">{d}</span>'
             f'<span class="dr-history-title">{_htmlmod.escape(t)}</span>'
-            + ('<span class="dr-history-failed">生成失败</span>'
+            + ('<span class="dr-history-failed">待更新</span>'
                if r.get("status") == "failed" else "")
             + "</a>"
         )
@@ -791,8 +865,9 @@ def _sr_desc_fallback(label: str) -> str:
     return f"{label} 的技术面、估值与量化策略回测实证，AI 基于本站行情库自动解读。"
 
 
-def _sr_head(row: Optional[Dict[str, Any]], code: str, name: str, canonical: str) -> str:
-    """个股报告页 <head>。没有报告时带 noindex。"""
+def _sr_head(row: Optional[Dict[str, Any]], code: str, name: str, canonical: str,
+             ctx: Optional[Dict[str, Any]] = None) -> str:
+    """个股报告页 <head>。没有报告时带 noindex;有报告时附 FAQPage 结构化数据。"""
     label = f"{name}({code})" if name else code
     if row is None:
         title = f"{label} AI 数据分析 | shoupan"
@@ -840,6 +915,19 @@ def _sr_head(row: Optional[Dict[str, Any]], code: str, name: str, canonical: str
             + json.dumps(article, ensure_ascii=False)
             + "</script>"
         )
+        # FAQPage 与页面上的 FAQ **同源**(都来自 render.faq_items),内容对不上会被
+        # 搜索引擎判为结构化数据作弊。没有回测数据时 faq_items 返回空,此处不出。
+        faq = _sr_render.faq_items(ctx or {}, code, name)
+        if faq:
+            head.append(_json_ld({
+                "@context": "https://schema.org",
+                "@type": "FAQPage",
+                "mainEntity": [
+                    {"@type": "Question", "name": q,
+                     "acceptedAnswer": {"@type": "Answer", "text": a}}
+                    for q, a in faq
+                ],
+            }))
     return "\n  ".join(head)
 
 
@@ -895,8 +983,10 @@ def page_stock_report(code: str, request: Request):
     return _html(
         request, "stock_report.html",
         replacements={
-            "<!--SR_HEAD-->": _sr_head(row, norm, name, canonical),
+            "<!--SR_HEAD-->": _sr_head(row, norm, name, canonical, ctx),
             "<!--SR_HEADER-->": _sr_render.header_html(ctx, norm, name),
+            "<!--SR_TLDR-->": _sr_render.tldr_html(ctx, norm, name),
+            "<!--SR_FAQ-->": _sr_render.faq_html(ctx, norm, name),
             "<!--SR_TITLE-->": _htmlmod.escape(art_title),
             "<!--SR_META-->": (f"数据截至 {_htmlmod.escape(date_txt)}" if date_txt else ""),
             "<!--SR_SCORE-->": _sr_render.score_html(row),

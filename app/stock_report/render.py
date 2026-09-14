@@ -390,3 +390,144 @@ def related_html(items: List[Dict[str, Any]], industry: str = "") -> str:
         f'<div class="sr-rel-grid">{links}</div>'
         "</nav>"
     )
+
+
+# ── TL;DR 摘要块 + FAQ(GEO:可被 AI 单独摘出 + FAQPage 结构化数据)──────────────
+# 品牌审核结论(2026-09-14,品析)第五块 5.1/5.2:个股页要有一个"前 100 字内出现
+# 股票名+代码+回测"、独立成段、可被 AI 单独摘出的摘要块;以及一组"直接给结论、
+# 不下买卖判断"的 FAQ。问法按审核要求去掉了推荐色彩
+# (「{股票名} 适合哪种策略？」→「哪种策略表现相对靠前？」)。
+#
+# 两块都**只在确有回测数据时出**:没有实测支撑的空摘要/空 FAQ 既误导读者,
+# 又不该进 FAQPage 结构化数据。
+
+def _pick_best(strategies: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """收益最高的策略(与回测表同口径:区间总收益)。数据缺失返回 None。"""
+    best: Optional[Dict[str, Any]] = None
+    best_val: Optional[float] = None
+    for s in strategies:
+        v = _num(s.get("total_return_pct"))
+        if v is None:
+            continue
+        if best_val is None or v > best_val:
+            best, best_val = s, v
+    return best
+
+
+def _best_label(s: Optional[Dict[str, Any]]) -> str:
+    if not s:
+        return ""
+    return str(s.get("strategy_name") or s.get("strategy_id") or "")
+
+
+def _best_bits(best: Optional[Dict[str, Any]]) -> List[str]:
+    """把最优策略的核心数字读成短语(缺失的项跳过,不补 0)。"""
+    if not best:
+        return []
+    bits: List[str] = []
+    ret = _num(best.get("total_return_pct"))
+    win = _num(best.get("win_rate_pct"))
+    dd = _num(best.get("max_drawdown_pct"))
+    n = best.get("trade_count")
+    if ret is not None:
+        bits.append(f"区间收益 {_signed(ret)}")
+    if win is not None:
+        bits.append(f"胜率 {win:.0f}%")
+    if dd is not None:
+        bits.append(f"最大回撤 {dd:.1f}%")
+    if n is not None:
+        bits.append(f"交易 {int(n)} 笔")
+    return bits
+
+
+def tldr_html(context: Dict[str, Any], code: str, name: str) -> str:
+    """个股页顶部的 TL;DR 摘要块。无回测数据时返回空串(整块不出)。"""
+    bt = context.get("backtest") or {}
+    strategies = bt.get("strategies") or []
+    if not strategies:
+        return ""
+    label = f"{name or code}({code})"
+    years = bt.get("window_years") or 2
+    best = _pick_best(strategies)
+    detail = ""
+    if best:
+        bits = _best_bits(best)
+        detail = (
+            f"其中 <strong>{_esc(_best_label(best))}</strong> 的区间表现相对靠前"
+            + (f"（{'、'.join(bits)}）" if bits else "")
+            + "。"
+        )
+    return (
+        '<section class="sr-tldr" aria-label="回测摘要">'
+        "<p>"
+        f"<strong>{_esc(label)}回测摘要：</strong>"
+        f"本页用近 {_esc(years)} 年真实日线、按本站回测引擎，"
+        f"对 {_esc(label)} 逐一实测 {len(strategies)} 种内置技术策略"
+        "（含双边佣金与印花税）。"
+        f"{detail}"
+        "历史回测不代表未来收益，本页数据仅供研究参考。"
+        "</p>"
+        '<p class="sr-tldr-meta">'
+        f"覆盖 {len(strategies)} 种策略 · 近 {_esc(years)} 年区间 · "
+        "数据来自本站行情库与回测引擎"
+        "</p>"
+        "</section>"
+    )
+
+
+def faq_items(context: Dict[str, Any], code: str, name: str) -> List[tuple]:
+    """FAQ 三问(问 + 答)。无回测数据返回空列表。
+
+    同一份问答既用于页面渲染,也用于 main.py 生成 FAQPage 结构化数据 ——
+    两处必须同源,否则页面与结构化数据对不上会被判为作弊。
+    """
+    bt = context.get("backtest") or {}
+    strategies = bt.get("strategies") or []
+    if not strategies:
+        return []
+    label = f"{name or code}({code})"
+    best = _pick_best(strategies)
+    best_name = _best_label(best) or "表现靠前的策略"
+    years = bt.get("window_years") or 2
+    bits = _best_bits(best)
+
+    q1 = f"{label} 的历史回测里，哪种策略表现相对靠前？"
+    a1 = (
+        f"在近 {years} 年数据的回测里，{best_name} 的区间表现相对靠前"
+        + (f"（{'、'.join(bits)}）" if bits else "")
+        + "。但历史表现会随行情和时间变化，不等于未来，也不构成任何买卖建议。"
+        "建议你自己在页面上跑一遍不同策略再判断。"
+    )
+    q2 = "回测胜率高，就等于能赚钱吗？"
+    a2 = (
+        "不等于。胜率高只说明赢的次数占比大，还要看单次盈亏幅度和最大回撤。"
+        "而且回测基于历史数据，未来行情可能完全不同。胜率是一个参考，不是赚钱的保证。"
+    )
+    q3 = f"{label} 的这份回测结果可信吗？"
+    a3 = (
+        "本站回测引擎已内置 A 股真实规则（前后复权、涨跌停、停牌、最小 100 股、"
+        "双边佣金与印花税），使用本地行情库的真实日线；同时提供参数 ±20% 扰动与"
+        "样本内外 70/30 拆分检验。但任何回测都只描述历史，不能预测未来，"
+        "请结合自身判断，仅供研究参考。"
+    )
+    return [(q1, a1), (q2, a2), (q3, a3)]
+
+
+def faq_html(context: Dict[str, Any], code: str, name: str) -> str:
+    items = faq_items(context, code, name)
+    if not items:
+        return ""
+    body = "".join(
+        '<details class="sr-faq-item">'
+        f"<summary>{_esc(q)}</summary>"
+        f'<div class="sr-faq-a">{_esc(a)}</div>'
+        "</details>"
+        for q, a in items
+    )
+    return (
+        '<section class="sr-faq">'
+        '<h2 class="sr-faq-title">常见问题</h2>'
+        f"{body}"
+        '<p class="sr-faq-foot">以上问答仅供研究，不构成任何投资建议。</p>'
+        "</section>"
+    )

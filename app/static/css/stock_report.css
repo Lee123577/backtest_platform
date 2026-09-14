@@ -499,3 +499,71 @@
   color: var(--txt2, #8a929c);
   font-variant-numeric: tabular-nums;
 }
+
+/* ── TL;DR 摘要块 ────────────────────────────────────────────────────────
+   独立成段、可被 AI 单独摘出：前 100 字内出现「股票名+代码+回测」。
+   放在 H1 之后、行情表之前 —— 先给结论，再上数字。 */
+.sr-tldr {
+  margin: 14px 0 18px;
+  padding: 14px 16px;
+  border: 1px solid var(--border, #d0d7de);
+  border-left: 3px solid var(--accent, #185FA5);
+  border-radius: 8px;
+  background: var(--bg2, #f6f8fa);
+}
+.sr-tldr p {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.85;
+  color: var(--txt, #24292f);
+}
+.sr-tldr strong { color: var(--txt, #24292f); }
+.sr-tldr .sr-tldr-meta {
+  margin-top: 8px;
+  font-size: 11.5px;
+  color: var(--txt2, #57606a);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── FAQ ────────────────────────────────────────────────────────────────── */
+.sr-faq {
+  margin: 22px 0 0;
+  padding: 16px;
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 10px;
+}
+.sr-faq-title {
+  margin: 0 0 10px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--txt, #24292f);
+}
+.sr-faq-item {
+  border-bottom: 1px solid rgba(128, 128, 128, .14);
+}
+.sr-faq-item:last-of-type { border-bottom: none; }
+.sr-faq-item > summary {
+  cursor: pointer;
+  padding: 10px 2px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--txt, #24292f);
+  list-style: none;
+}
+.sr-faq-item > summary::-webkit-details-marker { display: none; }
+.sr-faq-item > summary::before {
+  content: "▸ ";
+  color: var(--accent, #185FA5);
+}
+.sr-faq-item[open] > summary::before { content: "▾ "; }
+.sr-faq-a {
+  padding: 0 2px 12px 18px;
+  font-size: 13px;
+  line-height: 1.85;
+  color: var(--txt2, #57606a);
+}
+.sr-faq-foot {
+  margin: 10px 0 0;
+  font-size: 11.5px;
+  color: var(--txt2, #57606a);
+}

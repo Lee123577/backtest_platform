@@ -20,7 +20,9 @@ from typing import Any, Dict, List
 #     正文从四节扩到五节(新增"板块聚焦"),字数 400~700
 # v4: 板块数据源东财→新浪(东财封锁云机房 IP,"板块聚焦"一节在生产上从上线起
 #     就没成功过);字段口径 up/down → stock_count
-REVIEW_PROMPT_VERSION = "v4"
+# v5: 品牌审核结论 P2-1 —— 末节"后市观察"明确写成"只列关注角度、不做方向预测"
+#     (原表述易被读成对次日方向的暗示)。
+REVIEW_PROMPT_VERSION = "v5"
 
 
 def review_messages(review_date: _Date, context: Dict[str, Any]) -> List[dict]:
@@ -77,8 +79,9 @@ def review_messages(review_date: _Date, context: Dict[str, Any]) -> List[dict]:
         "注意按近似口径措辞\n"
         "## AI 策略表现 —— 点评 ai_hotsector 的结算战绩和今日新选板块；"
         "数据缺失就如实说明，不要硬编\n"
-        "## 后市观察 —— 基于当日数据和已知产业/政策背景的定性观察，"
-        "不构成投资建议，不给出具体买卖操作\n\n"
+        "## 后市观察 —— 只列值得继续跟踪的**关注角度**（如量能能否延续、"
+        "某板块的持续性、某指数的关键位置），站在当日已发生的事实上做定性观察；"
+        "**不得预测次日或未来的涨跌方向**，不给出具体买卖操作，不暗示操作时点。\n\n"
         "严格按以下 JSON 格式输出，不要有多余文字：\n"
         '{"title": "15-25字的复盘标题,概括当日行情特征,可含领涨板块名", '
         '"content_md": "markdown 正文"}'

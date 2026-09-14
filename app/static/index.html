@@ -26,7 +26,7 @@
     "inLanguage": "zh-CN",
     "description": "A 股单股回测工具：不写代码即可用均线、MACD、RSI、KDJ、布林带等内置策略回测单只股票的历史表现，并用参数扰动与样本内外拆分做防过拟合检查。",
     "featureList": [
-      "11 种内置技术指标策略回测",
+      "9 种内置技术指标策略回测（另有 3 种选股组合策略）",
       "防过拟合检查：参数 ±20% 扰动 + 样本内/外 70/30 拆分",
       "A 股规则内置：前后复权、涨跌停、停牌",
       "全市场选股与定期调仓的组合回测",
@@ -80,24 +80,29 @@
       不写一行代码，把一只 A 股放进历史里跑一遍 ——
       再告诉你这个结果是真规律，还是「调」出来的。
     </p>
+    <!-- 三个卖点按品牌审核结论(2026-09-14)由"功能自述"改写为"用户利益":
+         零门槛 / 结果更接近真实 / 把防过拟合翻译成损失规避(骗你亏钱)。 -->
     <ul class="hero-points">
       <li>
-        <strong>不用写代码</strong>
-        填股票代码、选日期、点开始，三步出报告
+        <strong>不写一行代码，也能跑出一份回测报告</strong>
+        填股票代码、选一段日期、勾一个内置策略（均线、MACD、RSI 等 9 种），点一下就好——不用装环境、不用会 Python。
       </li>
       <li>
-        <strong>A 股规则内置</strong>
-        前后复权、涨跌停、停牌、最小 100 股，都替你算好了
+        <strong>按 A 股的真实规则算，不是理想化数字</strong>
+        前复权/后复权、涨跌停、停牌、最小 100 股、双边佣金与印花税，都已内置。
       </li>
       <li>
-        <strong>防过拟合检查</strong>
-        参数 ±20% 扰动 + 样本内外 70/30 拆分，直接告诉你结果稳不稳
+        <strong>别让一个漂亮的回测曲线，骗你亏钱</strong>
+        每个参数 ±20% 扰动重跑，再把时间切成前 70% / 后 30% 独立验证——看它是真本事，还是刚好拟合了这段历史。
       </li>
     </ul>
     <div class="hero-cta">
       <button class="btn btn-accent" id="heroDemoBtn" type="button">用示例试跑一次</button>
       <span class="hero-cta-hint">平安银行 000001 · 均线交叉 · 自 2022 年起</span>
     </div>
+    <!-- 首屏证据条(审核结论第 4 节缺口1):把可核验的实证前置。
+         数字由服务端按当时的真实库状态注入,见 app/main.py 的 _evidence_bar()。 -->
+    <!--EVIDENCE-->
   </section>
 
   <!-- ══════════════════════════════════════════════════════
@@ -269,6 +274,9 @@
       <button class="btn btn-outline" id="shareLinkBtn" type="button">🔗 生成分享链接</button>
       <span class="share-msg" id="shareMsg"></span>
     </div>
+    <!-- 一句话结论(审核结论 2.8.2):把平铺的一堆数字先收成一句"有先后的故事"。
+         内容由 app.js 的 renderConclusion() 填充,无数据时整块隐藏。 -->
+    <div id="resultConclusion" class="result-conclusion" hidden></div>
     <div class="metrics-scroll" id="metricsWrap"></div>
     <div class="section-title">净值曲线</div>
     <div class="chart-wrap-sm" id="equityChart"></div>
@@ -281,6 +289,40 @@
     <div class="section-title">交易记录</div>
     <div id="tradesWrap"></div>
   </div>
+
+  <!-- ══════════════════════════════════════════════════════
+       功能地图(审核结论 2.8.5):把"页面与功能对不上"补成一张地图——
+       一句一功能,顺序即使用顺序,末一条为延伸。全部是站内真链接。
+  ══════════════════════════════════════════════════════ -->
+  <section class="func-map" aria-label="功能地图">
+    <div class="func-map-title">这个站能做什么</div>
+    <ol class="func-map-list">
+      <li>
+        <a href="/">回测你的想法</a>
+        <span>填代码选策略，几十秒出一份单股回测报告（主力功能）</span>
+      </li>
+      <li>
+        <a href="/stock/600519">看别人的股票实测</a>
+        <span>每只个股近两年 9 种策略实测表 + AI 数据解读</span>
+      </li>
+      <li>
+        <a href="/daily_review">每天发生了什么</a>
+        <span>每个交易日收盘后自动生成的 A 股复盘</span>
+      </li>
+      <li>
+        <a href="/ai_hotsector">哪些板块在动</a>
+        <span>AI 热门板块追踪与结算战绩</span>
+      </li>
+      <li>
+        <a href="/paper_trading">我们用一套模拟盘在跟踪</a>
+        <span>实盘观察：可查看的每日净值记录</span>
+      </li>
+      <li>
+        <a href="/watchlist">把你的股票交给我们盯</a>
+        <span>自选盯盘：命中信号在收盘后发到邮箱（需登录）</span>
+      </li>
+    </ol>
+  </section>
 
 </main>
 

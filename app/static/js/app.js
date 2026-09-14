@@ -688,6 +688,7 @@ function renderKline(data, title) {
 function renderResults(results, benchmark, subtitle, isPortfolio = false) {
   document.getElementById('resultSubtitle').textContent = subtitle;
   shareMsg('');   // 上一次的分享链接是上一次回测的,别留在新结果旁边
+  renderConclusion(results, benchmark);
   renderMetrics(results, benchmark);
   renderEquityChart(results, benchmark);
   renderYearlyBreakdown(results, benchmark);
@@ -1029,6 +1030,53 @@ function renderRobustness(results) {
   });
 
   wrap.innerHTML = html;
+}
+
+// ── 一句话结论(审核结论 2.8.2)─────────────────────────────────────────────────
+// 结果页原先是"一上来一张平铺的大表",用户不知道该先看哪个数。这里把结果先收成
+// 一句人话:哪套策略相对靠前、它稳不稳。只描述数字读出来是什么,不做任何
+// "该不该用"的判断 —— 买卖建议是红线。
+const _STAB_LABEL = { good: '较稳', warn: '一般', bad: '偏敏感' };
+
+function renderConclusion(results, benchmark) {
+  const el = document.getElementById('resultConclusion');
+  if (!el) return;
+  const ok = results.filter(r => !r.error);
+  if (!ok.length) { el.hidden = true; el.innerHTML = ''; return; }
+
+  const metricOf = r => {
+    const m = r.metrics || {};
+    const v = m.annual_return != null ? m.annual_return : m.total_return;
+    return (typeof v === 'number' && isFinite(v)) ? v : null;
+  };
+  const best = ok.slice().sort((a, b) => (metricOf(b) ?? -Infinity) - (metricOf(a) ?? -Infinity))[0];
+  const bestVal = metricOf(best);
+
+  const verdicts = [];
+  ok.forEach(r => {
+    const parts = [sensitivityVerdict(r), oosVerdict(r)].filter(Boolean);
+    if (parts.length) {
+      verdicts.push(parts.reduce((a, b) => _LEVEL_RANK[b.level] > _LEVEL_RANK[a.level] ? b : a));
+    }
+  });
+  const worst = verdicts.length
+    ? verdicts.reduce((a, b) => _LEVEL_RANK[b.level] > _LEVEL_RANK[a.level] ? b : a)
+    : null;
+
+  let line = `本次回测里，<strong>${esc(best.strategy_name)}</strong> 的区间表现相对靠前`;
+  if (bestVal != null) line += `（年化 ${round1(bestVal)}%）`;
+  line += '。';
+  if (worst) {
+    line += `它的防过拟合评级：<strong class="rc-${worst.level}">${_STAB_LABEL[worst.level] || '一般'}</strong>。`;
+  } else {
+    line += '本次未开启防过拟合检查，稳定性未知。';
+  }
+
+  el.innerHTML =
+    '<div class="rc-head">一句话结论</div>' +
+    `<div class="rc-line">${line}</div>` +
+    '<div class="rc-note">历史回测只描述过去，不构成任何买卖建议。</div>';
+  el.hidden = false;
 }
 
 // ── 分享 ──────────────────────────────────────────────────────────────────────
