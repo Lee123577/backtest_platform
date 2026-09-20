@@ -206,6 +206,57 @@ def count_visitors(start: _Date, end: _Date) -> int:
     return int(row["n"] or 0) if row else 0
 
 
+def page_breakdown(start: _Date, end: _Date, limit: int = 20) -> List[Dict[str, Any]]:
+    """按页面拆的 PV/UV —— 只数 page_view 事件,即只数真人。
+
+    和 user_visit_log 里那份"每页多少 UV"不是一回事:那份含爬虫,而这份的每一行
+    都对应一次真实的浏览器渲染。
+    """
+    ensure_tables()
+    conn = _get_pool()
+    if conn is None:
+        return []
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT path,
+                   COUNT(*) AS pv,
+                   COUNT(DISTINCT COALESCE(session_id, CAST(user_id AS CHAR), ip)) AS uv
+              FROM user_event_log
+             WHERE event = 'page_view'
+               AND created_at >= %s AND created_at < %s + INTERVAL 1 DAY
+               AND path IS NOT NULL AND path <> ''
+             GROUP BY path
+             ORDER BY uv DESC, pv DESC
+             LIMIT %s
+            """,
+            (start, end, int(limit)),
+        )
+        return [{"path": r["path"], "pv": int(r["pv"] or 0), "uv": int(r["uv"] or 0)}
+                for r in cur.fetchall()]
+
+
+def first_event_date(event: str) -> Optional[str]:
+    """某个事件最早出现在哪天。
+
+    给"漏斗第一层换了口径"的过渡期用:page_view 是后加的,而下游事件有历史
+    数据,窗口跨过启用日时转化率会算出 300% 这种数。把启用日标出来,
+    读的人就知道那段是没数据而不是真的暴涨;数据攒够之后这行自己消失。
+    """
+    ensure_tables()
+    conn = _get_pool()
+    if conn is None:
+        return None
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT MIN(created_at) AS d FROM user_event_log WHERE event = %s",
+            (event,),
+        )
+        row = cur.fetchone()
+    d = row["d"] if row else None
+    return str(d.date()) if d else None
+
+
 def count_events(start: _Date, end: _Date) -> Dict[str, int]:
     """区间内各事件的独立主体数(同一访客重复触发只算一次)。"""
     ensure_tables()

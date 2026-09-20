@@ -21,6 +21,11 @@ logger = logging.getLogger(__name__)
 
 # 事件白名单：值是给运维页显示的中文名
 EVENTS: Dict[str, str] = {
+    # page_view 是唯一一个"不是动作"的事件,它存在的理由很具体:
+    # 访问日志(user_visit_log)数出来的访客量被爬虫灌满 —— 伪装成 Mac Chrome
+    # 的无头抓取一个页面打一次就走,UA 关键字根本拦不住。而**爬虫不跑 JS**,
+    # 所以从浏览器发出来的 page_view 天然干净。漏斗第一层因此改用它。
+    "page_view":           "打开页面",
     "backtest_run":        "跑过回测",
     "register":            "注册",
     "order_created":       "创建订单",
@@ -30,9 +35,14 @@ EVENTS: Dict[str, str] = {
     "lifetime_claimed":    "领取终生会员",
 }
 
-# 漏斗层级(顺序即漏斗顺序)。visitors 不是事件，来自访问日志。
+# 漏斗层级(顺序即漏斗顺序)。
+#
+# 第一层曾经是 visitors(来自 user_visit_log 的去重访客)。**那个数不能用**:
+# 它把伪装成浏览器的无头抓取算了进去,实测一周 1000+ "访客"里真人只有二十几个,
+# 拿它当分母算出来的转化率全是假的,还会把"爬虫爱抓内容页不抓工具页"这种
+# 抓取量差异误读成产品问题。现在第一层是 JS 发的 page_view —— 爬虫不跑 JS。
 FUNNEL_STEPS = [
-    ("visitors", "访客"),
+    ("page_view", "真人访客"),
     ("backtest_run", "跑过回测"),
     ("register", "注册"),
     ("order_created", "创建订单"),

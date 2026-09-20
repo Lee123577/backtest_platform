@@ -1177,12 +1177,10 @@ function copyToClipboard(text) {
 }
 
 // 前端埋点:只上报服务端看不见的动作。失败静默,绝不打扰用户
+// 埋点实现在 util.js 的 SPTrack 里 —— 以前只定义在本文件,导致除首页外
+// 所有页面都发不出事件。保留这个名字是为了本文件里几处调用不用全改。
 function reportEvent(event, meta) {
-  fetch('/api/event', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ event, meta }),
-  }).catch(() => {});
+  SPTrack.event(event, meta);
 }
 
 // ── Trade history ─────────────────────────────────────────────────────────────

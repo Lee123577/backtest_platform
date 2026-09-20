@@ -55,6 +55,15 @@
     .funnel-arrow { align-self: center; color: #8c959f; font-size: 14px; }
     .funnel-channels { margin-top: 14px; }
     .funnel-ch-title { font-size: 12px; font-weight: 600; color: var(--txt2); margin-bottom: 6px; }
+    /* 真人 vs 爬虫的对照行。刻意用警示色:这一行是防止下次又有人拿访问日志的
+       访客数去算转化率 —— 那个错误已经犯过一次,代价是整套结论推倒重来。 */
+    .funnel-botnote {
+      margin: 12px 0 0; padding: 10px 12px;
+      border-left: 3px solid #EF9F27; background: rgba(239, 159, 39, .07);
+      font-size: 12px; line-height: 1.9; color: var(--txt2);
+    }
+    .funnel-botnote b { color: var(--txt); }
+    .funnel-pages { margin-top: 16px; }
 
     /* ── 今日数据入库详情 ───────────────────────────────────────────── */
     .ds-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
@@ -248,7 +257,7 @@
   <div class="panel">
     <div class="panel-title">
       转化漏斗
-      <span class="tip-badge">访客 → 回测 → 注册 → 下单 → 开通，按事件去重</span>
+      <span class="tip-badge">真人访客 → 回测 → 注册 → 下单 → 开通，按事件去重</span>
       <select id="funnelRange" style="margin-left:auto;width:auto;padding:4px 8px;">
         <option value="7">最近 7 天</option>
         <option value="30">最近 30 天</option>
@@ -256,6 +265,8 @@
       </select>
     </div>
     <div class="funnel-row" id="funnelRow"><div class="no-data">加载中…</div></div>
+    <div class="funnel-botnote" id="funnelBotNote"></div>
+    <div class="funnel-pages" id="funnelPages"></div>
     <div class="funnel-channels" id="funnelChannels"></div>
   </div>
 

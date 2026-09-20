@@ -45,18 +45,43 @@ def _rate_limit(request: Request) -> None:
 
 class EventReq(BaseModel):
     event: str = Field(max_length=32)
+    # 触发事件的**页面**路径。不给的话服务端只能拿 request.url.path,那是
+    # /api/event 本身 —— 曾经所有 demo_click 的 path 都存成了 /api/event,
+    # 这一列标着"触发页面"却没有一行是页面。
+    path: Optional[str] = Field(default=None, max_length=255)
     # 只收少量标量,不当通用日志管道用
     meta: Optional[Dict[str, Any]] = None
 
 
-def request_context(request: Request) -> Dict[str, Any]:
-    """从请求里取埋点要用的身份与归因(不查库的部分)。"""
+def safe_page_path(raw: Optional[str]) -> Optional[str]:
+    """客户端报上来的页面路径,只认站内绝对路径。
+
+    不能原样入库:这是公开接口,任意字符串都会被写进一张运维页要展示的表 ——
+    `//evil.com` 这种会被浏览器当成协议相对 URL,`javascript:` 更不必说。
+    只放行以单个 / 开头的路径,查询串一律丢掉(它会把同一个页面拆成无数行,
+    而这张表要回答的是"哪个页面有人看")。
+    """
+    if not raw or not isinstance(raw, str):
+        return None
+    p = raw.strip()
+    if not p.startswith("/") or p.startswith("//"):
+        return None
+    p = p.split("?", 1)[0].split("#", 1)[0]
+    return p[:255] or None
+
+
+def request_context(request: Request, page_path: Optional[str] = None) -> Dict[str, Any]:
+    """从请求里取埋点要用的身份与归因(不查库的部分)。
+
+    page_path 由调用方给(前端上报的页面);没给就退回请求自身的 path ——
+    服务端就地记的事件(注册/下单)本来也没有页面可言。
+    """
     sid = request.cookies.get(attribution.SID_COOKIE)
     return {
         "session_id": sid if attribution.valid_sid(sid) else None,
         "utm": attribution.decode_attr(request.cookies.get(attribution.ATTR_COOKIE)),
         "ip": _client_ip(request),
-        "path": request.url.path,
+        "path": page_path or request.url.path,
     }
 
 
@@ -65,7 +90,7 @@ def post_event(req: EventReq, request: Request, _rl: None = Depends(_rate_limit)
     if not service.is_valid_event(req.event):
         raise HTTPException(400, "未知事件")
     user = get_current_user(request)
-    ctx = request_context(request)
+    ctx = request_context(request, safe_page_path(req.path))
     ok = service.record(
         req.event,
         user_id=int(user["id"]) if user else None,
@@ -90,9 +115,31 @@ def get_funnel(
     except Exception as e:
         logger.warning("渠道拆分查询失败: %s", e)
         channels = []
+    try:
+        pages = db.page_breakdown(start, end)
+    except Exception as e:
+        logger.warning("页面拆分查询失败: %s", e)
+        pages = []
+    # 访问日志那个数照样给,但只当对照:两者的差就是爬虫量。摆在一起才防得住
+    # "下次又有人拿访问日志的访客数去算转化率"。
+    try:
+        raw_visitors = db.count_visitors(start, end)
+    except Exception as e:
+        logger.warning("访问日志访客数查询失败: %s", e)
+        raw_visitors = None
+    # 窗口起点早于 page_view 启用日时,前端要提示"那段没有真人数据",
+    # 否则 300% 的转化率会被当成真的
+    try:
+        pv_since = db.first_event_date("page_view")
+    except Exception as e:
+        logger.warning("page_view 起始日查询失败: %s", e)
+        pv_since = None
     return {
         "range": {"start": str(start), "end": str(end), "days": days},
+        "page_view_since": pv_since,
         "steps": data["steps"],
         "events": data["events"],
         "channels": channels,
+        "pages": pages,
+        "raw_visitors": raw_visitors,
     }

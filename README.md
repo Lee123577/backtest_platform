@@ -683,6 +683,9 @@ with get_conn() as conn:
 - `app/ratelimit.py` — 滑动窗口限流(多处调用点共用一份实现)
 - `app/csrf.py` — 写接口同源检查
 - `app/json_safe.py` — Decimal/date/NaN → JSON 安全转换
+- `app/static/js/util.js` — 全站共用前端工具:`esc` / `SPMarket`(北京时间与交易时段)
+  / `SPTrack`(埋点,自动发 page_view)。**统计只认埋点,别用访问日志**——
+  后者被伪装成浏览器的无头抓取灌满,实测一周 1000+「访客」里真人只有二十几个
 
 ### 测试
 

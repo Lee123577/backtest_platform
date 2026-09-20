@@ -406,9 +406,14 @@ function renderDataStatus(data) {
 }
 
 // ── 转化漏斗 ────────────────────────────────────────────────────────────────
-// 数据来自自建的 user_event_log + user_visit_log,不接第三方分析。
+// 数据来自自建的 user_event_log,不接第三方分析。
 // 每层显示绝对数 + 相对上一层的转化率;上一层为 0 时显示"—"而不是 0%,
 // "没有上游"和"上游全流失"不是一回事。
+//
+// **第一层是 JS 埋点发的 page_view,不是访问日志的访客数。** 后者被伪装成
+// 浏览器的无头抓取灌满(实测一周 1000+ 里真人只有二十几个),拿它当分母
+// 算转化率全是假的。两个数并排摆在下面那行对照里 —— 差值就是爬虫量,
+// 摆出来是为了下次不再有人拿错的那个去算。
 async function loadFunnel() {
   const row = document.getElementById('funnelRow');
   const days = document.getElementById('funnelRange').value;
@@ -419,6 +424,8 @@ async function loadFunnel() {
   } catch (e) {
     row.innerHTML = `<div class="no-data">加载失败：${esc(e.message)}</div>`;
     document.getElementById('funnelChannels').innerHTML = '';
+    document.getElementById('funnelPages').innerHTML = '';
+    document.getElementById('funnelBotNote').innerHTML = '';
   }
 }
 
@@ -431,6 +438,9 @@ function renderFunnel(data) {
       <div class="funnel-step-rate">${s.rate == null ? '—' : s.rate + '%'}</div>
     </div>
   `).join('<div class="funnel-arrow">→</div>');
+
+  renderBotNote(data);
+  renderPages(data.pages || []);
 
   const ch = data.channels || [];
   const wrap = document.getElementById('funnelChannels');
@@ -446,6 +456,51 @@ function renderFunnel(data) {
     '</tr></thead><tbody>' +
     ch.map(r => `<tr><td class="row-label">${esc(r.source)}</td>` +
       `<td>${esc(r.event)}</td><td>${Number(r.n).toLocaleString()}</td></tr>`).join('') +
+    '</tbody></table></div>';
+}
+
+// 真人 vs 访问日志的对照。这一行存在的唯一目的是让"访问日志那个数不能用"
+// 这件事以后一眼可见,而不是藏在某次排查的结论里。
+function renderBotNote(data) {
+  const el = document.getElementById('funnelBotNote');
+  const raw = data.raw_visitors;
+  const real = (data.steps || []).find(s => s.key === 'page_view');
+  const realN = real ? Number(real.count || 0) : 0;
+  // 口径切换的过渡期:窗口起点早于 page_view 启用日时,前面那段没有真人数据,
+  // 而下游事件有历史 —— 不说明的话转化率会出现 300% 这种数。攒够数据自动消失。
+  const since = data.page_view_since;
+  const rangeStart = (data.range || {}).start;
+  let warn = '';
+  if (since && rangeStart && since > rangeStart) {
+    warn = `<div style="margin-bottom:6px;color:#9a6700;">` +
+      `真人访客从 <b>${esc(since)}</b> 起才开始记录，` +
+      `本区间前半段没有这项数据 —— 这期间的转化率（可能超过 100%）不作数。</div>`;
+  }
+  if (raw == null) { el.innerHTML = warn; return; }
+  const bots = Math.max(0, Number(raw) - realN);
+  const pct = raw > 0 ? Math.round(bots / raw * 100) : 0;
+  el.innerHTML = warn +
+    `同期访问日志去重访客 <b>${Number(raw).toLocaleString()}</b>，` +
+    `其中约 <b>${bots.toLocaleString()}</b>（${pct}%）没有跑 JS，基本都是爬虫和扫描器。` +
+    `漏斗第一层用的是上面的真人数，<b>不要拿访问日志那个数算转化率</b>。`;
+}
+
+// 按页面拆的 PV/UV,只数 page_view —— 每一行都对应一次真实的浏览器渲染
+function renderPages(pages) {
+  const wrap = document.getElementById('funnelPages');
+  if (!pages.length) {
+    wrap.innerHTML = '<div class="no-data">该区间还没有 page_view 事件。' +
+      '每个页面加载时由 util.js 的 SPTrack 自动上报，运维页本身不计入。</div>';
+    return;
+  }
+  wrap.innerHTML =
+    '<div class="funnel-ch-title">真人页面浏览（爬虫不跑 JS，进不来）</div>' +
+    '<div class="metrics-scroll"><table class="metrics-tbl"><thead><tr>' +
+    '<th style="text-align:left">页面</th><th>UV</th><th>PV</th>' +
+    '</tr></thead><tbody>' +
+    pages.map(r => `<tr><td class="row-label">${esc(r.path)}</td>` +
+      `<td>${Number(r.uv).toLocaleString()}</td>` +
+      `<td>${Number(r.pv).toLocaleString()}</td></tr>`).join('') +
     '</tbody></table></div>';
 }
 

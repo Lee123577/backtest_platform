@@ -100,7 +100,61 @@ def test_record_rejects_unknown_event_without_touching_db():
     assert service.record("not_a_real_event") is False
 
 
-def test_funnel_steps_start_with_visitors():
+def test_漏斗第一层是JS埋点而不是访问日志():
+    """这条是一个真实误判的回归。
+
+    第一层曾经是 visitors(user_visit_log 去重访客)。那个数被伪装成浏览器的
+    无头抓取灌满 —— 实测一周 1000+ "访客"里真人只有二十几个。拿它当分母算出来
+    的转化率全是假的,还会把"爬虫爱抓内容页、不抓工具页"这种抓取量差异误读成
+    "内容页到工具页有 96% 的流失"。
+
+    page_view 是浏览器里的 JS 发的,爬虫不跑 JS,所以它是干净的。
+    """
     keys = [k for k, _ in service.FUNNEL_STEPS]
-    assert keys[0] == "visitors"
+    assert keys[0] == "page_view"
+    assert "visitors" not in keys
     assert keys[-1] == "subscribe_activated"
+
+
+def test_page_view_在事件白名单里():
+    # 不在白名单的话前端每次上报都被 400,漏斗第一层永远是 0
+    assert service.is_valid_event("page_view")
+
+
+# ── 上报的页面路径 ───────────────────────────────────────────────────────────
+# path 这一列标着"触发页面",但服务端能拿到的 request.url.path 是 /api/event
+# 本身 —— 改之前所有 demo_click 的 path 都存成了 /api/event,整列没有一行是页面。
+# 现在由前端显式上报,而这是个公开接口,所以必须当不可信输入洗。
+
+from app.analytics.api import safe_page_path
+
+
+@pytest.mark.parametrize("raw,want", [
+    ("/stock/600519", "/stock/600519"),
+    ("/watchlist", "/watchlist"),
+    ("/", "/"),
+])
+def test_站内路径原样收(raw, want):
+    assert safe_page_path(raw) == want
+
+
+def test_查询串被剥掉():
+    """不剥的话 /stock/600519 会按 ?from=xxx 裂成无数行,
+    而这张表要回答的是"哪个页面有人看"。"""
+    assert safe_page_path("/watchlist?add=600519") == "/watchlist"
+    assert safe_page_path("/daily_review/2026-09-10#top") == "/daily_review/2026-09-10"
+
+
+@pytest.mark.parametrize("bad", [
+    "//evil.com",                 # 协议相对 URL,浏览器会当外链跳出去
+    "https://evil.com/x",
+    "javascript:alert(1)",
+    "relative/path",
+    "", None, 123, [],
+])
+def test_站外和畸形路径一律丢掉(bad):
+    assert safe_page_path(bad) is None
+
+
+def test_超长路径截断():
+    assert len(safe_page_path("/" + "a" * 900)) == 255

@@ -48,3 +48,49 @@ var SPMarket = (function () {
     fmtDate: fmtDate,
   };
 })();
+
+
+/**
+ * 埋点。以前 reportEvent 只定义在 app.js 里,所以**只有首页能发事件** ——
+ * 30 天全站总共 16 条事件,其中一半来自首页那两个按钮,别的页面一条都发不出来。
+ * 提到这里之后每个页面都能用,顺带自动发 page_view。
+ *
+ * **为什么非要用 JS 发 page_view,而不是数访问日志**:访问日志里伪装成
+ * Mac Chrome 的无头抓取一个页面打一次就走,UA 关键字拦不住 —— 实测一周
+ * 1000+ "访客"里真人只有二十几个。爬虫不跑 JS,所以这条路天然干净。
+ */
+var SPTrack = (function () {
+  // 运维页不计入:那是我们自己在看,算进去等于自己给自己刷数
+  var SKIP = { "/tasks": 1, "/admin/tasks": 1 };
+
+  function send(event, meta) {
+    try {
+      fetch("/api/event", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        // path 必须前端给:服务端拿到的 request.url.path 是 /api/event 本身,
+        // 那一列标着"触发页面"却没有一行是页面
+        body: JSON.stringify({
+          event: event,
+          path: location.pathname,
+          meta: meta || null,
+        }),
+      }).catch(function () {});     // 埋点失败绝不能影响页面
+    } catch (e) { /* 老浏览器没有 fetch 就算了 */ }
+  }
+
+  function pageView() {
+    if (SKIP[location.pathname]) return;
+    // 预渲染的页面不算"有人看了" —— 浏览器可能在用户点进来之前就先跑一遍
+    if (document.prerendering) return;
+    send("page_view");
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", pageView);
+  } else {
+    pageView();
+  }
+
+  return { event: send };
+})();
