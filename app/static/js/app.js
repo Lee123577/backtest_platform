@@ -21,7 +21,8 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('endDate').value = todayStr();
   document.getElementById('pEndDate').value = todayStr();
 
-  loadStrategies();
+  // 策略要先加载完,深链(/?strategy=xxx)才有东西可选
+  loadStrategies().then(applyDeepLink);
 
   const urlMode = new URLSearchParams(location.search).get('mode');
   if (urlMode === 'portfolio') switchMode('portfolio');
@@ -66,6 +67,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // ── 动态渲染内容的事件委托(容器本身是静态的，内容随策略/回测结果重绘)──────
   document.getElementById('signalStrategyGrid').addEventListener('click', e => {
+    if (e.target.closest('a')) return;   // 卡片里的「原理」链接:正常跳转,别顺手把策略加进列表
     const quickBtn = e.target.closest('.sc-quickrun');
     if (quickBtn) { quickRun(quickBtn.dataset.id); return; }
     const card = e.target.closest('.strategy-card');
@@ -73,6 +75,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   document.getElementById('portfolioStrategyGrid').addEventListener('click', e => {
+    if (e.target.closest('a')) return;
     const card = e.target.closest('.strategy-card');
     if (card) selectPortfolioStrategy(card.dataset.id);
   });
@@ -110,8 +113,10 @@ document.addEventListener('DOMContentLoaded', () => {
   // 从个股报告页「用它跑一次回测」过来:/?code=600519
   // 直接把票填好并拉出 K 线 —— 让人带着一只具体的票落地却还要自己再输一遍,
   // 等于把刚建立的意图丢掉。回测参数不替用户预设,让他自己挑策略。
-  const urlCode = new URLSearchParams(location.search).get('code');
-  if (/^\d{6}$/.test(urlCode || '')) {
+  const urlQs = new URLSearchParams(location.search);
+  const urlCode = urlQs.get('code');
+  // 带了 strategy 的深链由 applyDeepLink 统一处理(它要等策略列表加载完)
+  if (/^\d{6}$/.test(urlCode || '') && !urlQs.get('strategy')) {
     document.getElementById('stockCode').value = urlCode;
     loadKline();
   }
@@ -157,6 +162,7 @@ function renderSignalStrategyGrid() {
           ${hasAdded ? `<span class="sc-count-badge">${count}</span>` : ''}
         </div>
         <div class="sc-desc">${esc(s.description)}</div>
+        <a class="sc-learn" href="/strategy/${encodeURIComponent(s.id)}">原理与全市场实测 ›</a>
         <div class="sc-btn-row">
           <button class="btn btn-ghost sc-add sc-add-primary">${hasAdded ? `＋ 再添加（已选 ${count}）` : '＋ 添加'}</button>
           <button class="btn sc-quickrun" title="用推荐参数直接跑一遍示例回测，看看这个策略长什么样"
@@ -180,6 +186,64 @@ function quickRun(strategyId) {
   return runBacktest();
 }
 
+// 从策略专题页 /strategy/{id} 过来的深链:
+//   单股:/?strategy=ma_cross&code=000001&p_short_window=10&run=1
+//   选股:/?mode=portfolio&strategy=small_cap&p_stock_num=5
+// 带着一套具体参数落地,就把它原样摆好 —— 让人跳过来还要自己再挑一遍策略、
+// 再敲一遍参数,等于把专题页上建立的意图丢掉。参数只认该策略 schema 里有的键,
+// 越界就用边界值(后端同样会校验,这里只是不让人吃一个报错)。
+function deepLinkParams(strategy, qs) {
+  const params = {};
+  for (const [k, schema] of Object.entries(strategy.params || {})) {
+    params[k] = schema.default;
+    const raw = qs.get('p_' + k);
+    if (raw === null || raw === '') continue;
+    let v = schema.type === 'float' ? parseFloat(raw) : parseInt(raw, 10);
+    if (isNaN(v)) continue;
+    if (schema.min != null) v = Math.max(schema.min, v);
+    if (schema.max != null) v = Math.min(schema.max, v);
+    params[k] = v;
+  }
+  return params;
+}
+
+function applyDeepLink() {
+  const qs = new URLSearchParams(location.search);
+  const sid = qs.get('strategy');
+  if (!sid) return;
+
+  const portfolio = portfolioStrategies.find(s => s.id === sid);
+  if (portfolio) {
+    if (currentMode !== 'portfolio') switchMode('portfolio');
+    selectPortfolioStrategy(sid);
+    selectedPortfolio.params = deepLinkParams(portfolio, qs);
+    renderPortfolioInstanceCard();
+    document.getElementById('portfolioSelectedArea').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    return;
+  }
+
+  const strategy = signalStrategies.find(s => s.id === sid);
+  if (!strategy) return;
+  if (currentMode !== 'signal') switchMode('signal');
+  const code = qs.get('code');
+  if (/^\d{6}$/.test(code || '')) document.getElementById('stockCode').value = code;
+  if (!addInstance(sid)) return;
+  instances[instances.length - 1].params = deepLinkParams(strategy, qs);
+  renderInstances();
+
+  if (qs.get('run') === '1') {
+    // 和首屏示例同一条路:没填合法代码就用示例股,跑完滚到结果
+    Promise.resolve(quickRun(sid)).then(() => {
+      const panel = document.getElementById('resultsPanel');
+      if (panel.style.display !== 'none') {
+        panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    });
+  } else if (/^\d{6}$/.test(code || '')) {
+    loadKline();
+  }
+}
+
 function renderPortfolioStrategyGrid() {
   document.getElementById('portfolioStrategyGrid').innerHTML = portfolioStrategies.map(s => {
     const isSelected = selectedPortfolio?.id === s.id;
@@ -191,6 +255,7 @@ function renderPortfolioStrategyGrid() {
           ${isSelected ? '<span class="sc-count-badge">✓</span>' : ''}
         </div>
         <div class="sc-desc">${esc(s.description)}</div>
+        <a class="sc-learn" href="/strategy/${encodeURIComponent(s.id)}">规则详解 ›</a>
         <button class="btn ${isSelected ? 'btn-accent' : 'btn-ghost'} sc-add">
           ${isSelected ? '✓ 已选择' : '✓ 选择'}
         </button>

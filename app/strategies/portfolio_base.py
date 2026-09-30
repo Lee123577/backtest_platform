@@ -23,6 +23,8 @@ class PortfolioBaseStrategy(ABC):
     name: str = ""
     description: str = ""
     strategy_type: str = "portfolio"
+    # 策略家族,/strategy 专题页分组用;组合策略都是 factor(因子选股)
+    family: str = "factor"
     param_schema: Dict[str, Dict[str, Any]] = {}
 
     def __init__(self, params: Dict[str, Any] = None):
@@ -79,6 +81,7 @@ class PortfolioBaseStrategy(ABC):
             "name": cls.name,
             "description": cls.description,
             "strategy_type": cls.strategy_type,
+            "family": cls.family,
             "params": cls.param_schema,
             "detail": getattr(cls, "detail", None),  # 可选结构化详情(前端说明面板)
         }

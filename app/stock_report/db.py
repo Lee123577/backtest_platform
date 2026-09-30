@@ -258,3 +258,41 @@ def list_codes_with_report(limit: int = 5000) -> List[Dict[str, Any]]:
             (int(limit),),
         )
         return cur.fetchall() or []
+
+
+def list_latest_backtests(limit: int = 6000) -> List[Dict[str, Any]]:
+    """每只有报告的股票取最新一份快照里的回测块 —— 给策略专题页做全市场汇总。
+
+    返回 [{code, name, report_date, backtest}],backtest 是 JSON 字符串
+    (context_json 里 $.backtest 那一段),由调用方解析。
+
+    只抽 $.backtest 而不是整份 context_json:1000+ 行 × 整份快照要搬十几 MB,
+    这一段只有几百字节。JSON_VALID 兜住历史上写坏的快照 —— 否则一行坏
+    JSON 会让 JSON_EXTRACT 把整条查询报错。库不支持 JSON 函数(MySQL < 5.7)
+    时退回取整份快照,慢一点但结果一样。
+    """
+    conn = _get_pool()
+    if conn is None:
+        return []
+    base = """
+        SELECT r.code, i.name, r.report_date, {col} AS backtest
+          FROM stock_ai_report r
+          JOIN (SELECT code, MAX(report_date) AS d
+                  FROM stock_ai_report
+                 WHERE status='generated'
+                 GROUP BY code) m
+            ON m.code = r.code AND m.d = r.report_date
+          LEFT JOIN stock_info i ON i.code = r.code
+         WHERE r.status = 'generated'
+         LIMIT %s
+    """
+    json_col = ("CASE WHEN JSON_VALID(r.context_json) "
+                "THEN JSON_EXTRACT(r.context_json, '$.backtest') END")
+    with conn.cursor() as cur:
+        try:
+            cur.execute(base.format(col=json_col), (int(limit),))
+            return cur.fetchall() or []
+        except Exception as e:
+            logger.info("JSON_EXTRACT 不可用,退回整份快照: %s", e)
+        cur.execute(base.format(col="r.context_json"), (int(limit),))
+        return cur.fetchall() or []

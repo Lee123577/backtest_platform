@@ -197,6 +197,17 @@ TASKS: Dict[str, TaskDef] = {
         "depends_on": "daily_review_generate",
         "description": "每日复盘+AI热门板块推送邮件(18:00,依赖daily_review_generate)",
     },
+    # 新手引导:注册后第 0/1/3/7 天各一封。每天(含周末 —— 周末也有人注册)
+    # 上午 10 点发,不跟收盘后那一串任务挤;不依赖任何行情任务。
+    # 幂等键是"第几封",一天跑几遍都不会重复发;宽限期 2 天,任务停一两天
+    # 恢复后照样接得上,停更久的那几封直接作废不补发。
+    "onboarding_mail": {
+        "cmd": ["python", "scripts/notify_onboarding.py"],
+        "schedule": "daily:10:00",
+        "timeout_sec": 20 * 60,
+        "depends_on": None,
+        "description": "新手引导邮件(注册后第 0/1/3/7 天各一封,每天 10:00)",
+    },
 }
 
 

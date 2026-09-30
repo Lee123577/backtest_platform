@@ -51,10 +51,20 @@ class FakeDB:
     def create_pref(self, user_id, token):
         self.prefs.setdefault(user_id, {
             "user_id": user_id, "unsub_token": token,
-            # 与 DDL 默认值一致：事务性的默认开，内容推送默认关
+            # 与 DDL 默认值一致：事务性的默认开，内容推送默认关，
+            # 新手引导(有终点的 4 封)默认开
             "watchlist_alert": 1, "daily_review": 0, "ai_hotsector": 0,
+            "onboarding": 1,
             "email": f"u{user_id}@example.com", "display_name": None,
         })
+
+    # 新手引导名单:[(user_id, created_at)];测试里直接往这里塞
+    users = ()
+
+    def new_users(self, since):
+        return [{"user_id": uid, "email": f"u{uid}@example.com",
+                 "display_name": None, "created_at": created}
+                for uid, created in self.users if created >= since]
 
     def set_flags(self, user_id, flags):
         row = self.prefs.get(user_id)
@@ -116,9 +126,11 @@ def mail(monkeypatch):
 
 def test_prefs_lazy_created_with_defaults(fake):
     out = service.get_prefs(UID)
-    # 盯盘提醒是用户自己配策略换来的结果，默认开；两个内容推送必须自己勾
+    # 盯盘提醒是用户自己配策略换来的结果，默认开；两个内容推送必须自己勾；
+    # 新手引导只有 4 封、发完即止，默认开
     assert out["prefs"] == {"watchlist_alert": True,
-                            "daily_review": False, "ai_hotsector": False}
+                            "daily_review": False, "ai_hotsector": False,
+                            "onboarding": True}
 
 
 def test_update_prefs_only_known_keys(fake):
@@ -358,4 +370,130 @@ def test_unsub_page_escapes_query_params(fake):
     body = _html(resp)
     assert "<script>" not in body
     assert "&lt;script&gt;" in body
+
+
+# ── 6. 新手引导(注册后第 0/1/3/7 天各一封) ───────────────────────────────────
+# 最容易出错的三件事:同一封发两遍、任务停几天后一口气补发好几封、
+# 老用户被拉进来收"欢迎"信。下面每条都锁一件。
+
+from datetime import datetime, timedelta   # noqa: E402
+
+TODAY = date(2026, 9, 29)
+
+
+def _registered(days_ago, uid=UID):
+    return (uid, datetime.combine(TODAY - timedelta(days=days_ago), datetime.min.time())
+            + timedelta(hours=9))
+
+
+@pytest.fixture
+def no_board(monkeypatch):
+    """第 1 天那封的实测前三要查库,测试里不查。"""
+    monkeypatch.setattr(service, "_onboarding_board", lambda: None)
+
+
+@pytest.mark.parametrize("age,step", [
+    (0, "d0"), (1, "d1"), (2, "d1"), (3, "d3"), (4, "d3"),
+    (5, None), (6, None), (7, "d7"), (8, "d7"), (9, None), (30, None),
+])
+def test_onboarding_step_schedule(age, step):
+    assert service.onboarding_step_due(age) == step
+
+
+def test_onboarding_sends_due_step_once(fake, mail, no_board):
+    fake.users = (_registered(0),)
+    first = service.send_onboarding(TODAY)
+    again = service.send_onboarding(TODAY)
+    assert first["sent"] == 1 and first["by_step"] == {"d0": 1}
+    assert again["sent"] == 0                       # 同一封不发第二遍
+    assert len(mail.outbox) == 1
+    assert "欢迎" in mail.outbox[0]["subject"]
+
+
+def test_onboarding_creates_pref_row_for_new_user(fake, mail, no_board):
+    """新账号多半还没有偏好行 —— 引导默认开,得替他补上再发。"""
+    fake.users = (_registered(1),)
+    assert UID not in fake.prefs
+    service.send_onboarding(TODAY)
+    assert UID in fake.prefs and len(mail.outbox) == 1
+
+
+def test_onboarding_respects_unsubscribe(fake, mail, no_board):
+    fake.users = (_registered(3),)
+    service.get_prefs(UID)
+    service.unsubscribe(TOKEN, "onboarding")
+    out = service.send_onboarding(TODAY)
+    assert out["sent"] == 0 and mail.outbox == []
+
+
+def test_onboarding_unsubscribe_does_not_touch_other_switches(fake):
+    service.update_prefs(UID, {"daily_review": True})
+    service.unsubscribe(TOKEN, "onboarding")
+    prefs = service.get_prefs(UID)["prefs"]
+    assert prefs["onboarding"] is False
+    assert prefs["daily_review"] is True and prefs["watchlist_alert"] is True
+
+
+def test_onboarding_skips_old_users(fake, mail, no_board):
+    """老用户不在窗口里,一封都不会收到。"""
+    fake.users = (_registered(40),)
+    out = service.send_onboarding(TODAY)
+    assert out["users"] == 0 and mail.outbox == []
+
+
+def test_onboarding_one_mail_per_day_even_after_outage(fake, mail, no_board):
+    """任务停了一天:第 1 天时 d0、d1 都还在宽限期里,只发最新那封。"""
+    fake.users = (_registered(1),)
+    service.send_onboarding(TODAY)
+    assert len(mail.outbox) == 1
+    assert "策略" in mail.outbox[0]["subject"]      # d1,不是 d0 的欢迎信
+
+
+def test_onboarding_failed_send_is_retried(fake, monkeypatch, no_board):
+    fake.users = (_registered(0),)
+    monkeypatch.setattr(service, "mailer", FakeMailer(fail=True))
+    out = service.send_onboarding(TODAY)
+    assert out["failed"] == 1
+    ok = FakeMailer()
+    monkeypatch.setattr(service, "mailer", ok)
+    assert service.send_onboarding(TODAY)["sent"] == 1
+
+
+def test_onboarding_mail_has_one_click_unsubscribe(fake, mail, no_board):
+    fake.users = (_registered(7),)
+    service.send_onboarding(TODAY)
+    m = mail.outbox[0]
+    assert "kind=onboarding" in m["headers"]["List-Unsubscribe"]
+    assert "kind=onboarding" in m["text"] and "kind=onboarding" in m["html"]
+
+
+@pytest.mark.parametrize("step", render.ONBOARDING_STEPS)
+def test_onboarding_mail_basics(step):
+    user = {"email": "abcdef@example.com", "display_name": "<b>老王</b>"}
+    subject, text, html = render.onboarding_mail(user, step, TOKEN)
+    assert render.SITE_NAME in subject
+    assert render.DISCLAIMER in html                # 页脚免责声明
+    assert "<b>老王</b>" not in html                # 昵称转义
+    assert "&lt;b&gt;老王&lt;/b&gt;" in html
+    assert render.site_url("/") in text            # 纯文本也带可点的绝对地址
+
+
+def test_onboarding_day1_includes_board_when_available():
+    board = [{"id": "donchian", "name": "唐奇安通道", "median_return": 5.6}]
+    _, text, html = render.onboarding_mail({"email": "a@b.c"}, "d1", TOKEN, board=board)
+    assert "唐奇安通道" in text and "+5.6%" in html
+    assert render.site_url("/strategy/donchian") in html
+
+
+def test_onboarding_last_mail_invites_feedback():
+    _, text, _ = render.onboarding_mail({"email": "a@b.c"}, "d7", TOKEN)
+    assert "/?feedback=praise" in text
+    assert "最后一封" in text
+
+
+def test_onboarding_scheduled_task_registered():
+    from app.scheduler import registry
+    t = registry.get_task("onboarding_mail")
+    assert t and t["cmd"][-1] == "scripts/notify_onboarding.py"
+    assert t["schedule"].startswith("daily:")      # 周末也有人注册
 

@@ -48,6 +48,10 @@ from .stock_report import context as _sr_context
 from .stock_report import db as _sr_db
 from .stock_report import render as _sr_render
 from .stock_report import service as _sr_service
+from .strategy_pages import render as _st_render
+from .strategy_pages import stats as _st_stats
+from .feedback import render as _fb_render
+from .feedback import service as _fb_service
 from .data.calendar import count_trading_days, next_n_trading_days
 from .data.data_loader import (
     get_kline_data,
@@ -546,11 +550,19 @@ def _kline_records(df: pd.DataFrame, *, is_index: bool = False) -> List[Dict[str
 
 
 @app.get("/")
-async def root(request: Request):
-    # 证据条是首页唯一由服务端注入的动态块(数字来自本站库,非按人变化,
-    # 进 HTML 可被共享缓存安全复用)
+def root(request: Request):
+    # 证据条与评价墙是首页仅有的两块服务端注入的动态内容(都来自本站库、
+    # 不按人变化,进 HTML 可被共享缓存安全复用)。
+    # 用 def 而不是 async def:两者都是同步查库(各有进程缓存,但缓存过期那次
+    # 仍要查),放在 async 里会把整个事件循环卡住;def 路由由 FastAPI 丢进线程池。
     return _html(request, "index.html",
-                 replacements={"<!--EVIDENCE-->": _evidence_bar()})
+                 replacements={"<!--EVIDENCE-->": _evidence_bar(),
+                               "<!--TESTIMONIALS-->": _testimonials_block()})
+
+
+def _testimonials_block() -> str:
+    """评价墙。没有同意公开且被精选的评价时返回空串,整块不出。"""
+    return _fb_render.wall_html(_fb_service.testimonials(6))
 
 
 @app.get("/paper_trading")
@@ -591,8 +603,10 @@ def page_daily_review_dated(review_date: str, request: Request):
 
 
 @app.get("/subscribe", include_in_schema=False)
-async def page_subscribe(request: Request):
-    return _html(request, "subscribe.html")
+def page_subscribe(request: Request):
+    # 订阅页是最需要社会证明的地方:掏钱之前想知道别人用得怎么样
+    return _html(request, "subscribe.html",
+                 replacements={"<!--TESTIMONIALS-->": _testimonials_block()})
 
 
 @app.get("/watchlist", include_in_schema=False)
@@ -1003,6 +1017,54 @@ def page_stock_report(code: str, request: Request):
     )
 
 
+# ── 策略百科:服务端直出(SEO)──────────────────────────────────────────────
+# 页面完全由策略注册表驱动:往 STRATEGY_REGISTRY / PORTFOLIO_REGISTRY 加一个
+# 策略,它的专题页、索引卡片、sitemap 条目都自动出现。实测数字来自个股报告
+# 快照的汇总(6 小时进程缓存),取不到就不出实测块,页面照常。
+_ST_ID_RE = re.compile(r"^[a-z0-9_]{1,40}$")
+
+
+@app.get("/strategy", include_in_schema=False)
+def page_strategy_index(request: Request):
+    stats = _st_stats.get_stats()
+    canonical = f"{_SITE_ORIGIN}/strategy"
+    return _html(
+        request, "strategy_index.html",
+        replacements={
+            "<!--ST_HEAD-->": _st_render.index_head_html(stats, canonical, _SITE_ORIGIN),
+            "<!--ST_HERO-->": _st_render.index_hero_html(stats),
+            "<!--ST_BOARD-->": _st_render.leaderboard_html(stats),
+            "<!--ST_GROUPS-->": _st_render.index_groups_html(stats),
+        },
+    )
+
+
+@app.get("/strategy/{strategy_id}", include_in_schema=False)
+def page_strategy(strategy_id: str, request: Request):
+    sid = (strategy_id or "").strip().lower()
+    meta = _st_render.strategy_meta(sid) if _ST_ID_RE.match(sid) else None
+    if meta is None:
+        raise HTTPException(404, "页面不存在")
+    if sid != strategy_id:
+        # 大小写/空白不同的 URL 统一 301 到规范写法,别让同一页被收录两次
+        return RedirectResponse(f"/strategy/{sid}", status_code=301)
+    stats = _st_stats.get_stats()
+    s = _st_stats.for_strategy(sid) if meta["kind"] == "signal" else None
+    canonical = f"{_SITE_ORIGIN}/strategy/{sid}"
+    return _html(
+        request, "strategy.html",
+        replacements={
+            "<!--ST_HEAD-->": _st_render.head_html(meta, s, canonical, _SITE_ORIGIN),
+            "<!--ST_HERO-->": _st_render.hero_html(meta, s),
+            "<!--ST_RULES-->": _st_render.rules_html(meta),
+            "<!--ST_STATS-->": _st_render.stats_html(meta, s),
+            "<!--ST_PARAMS-->": _st_render.params_html(meta),
+            "<!--ST_FAQ-->": _st_render.faq_html(meta, s),
+            "<!--ST_OTHERS-->": _st_render.others_html(meta, stats),
+        },
+    )
+
+
 # (路径, 更新频率, 优先级) —— 仅收录面向用户的功能页；/admin/tasks、/tasks 是运维监控页不收录
 # /subscribe 在这里是**有意为之**:它不在侧边栏(入口走场景内引导,见 shell.js 的
 # NAV 注释),但页面正常收单,该吃的搜索流量要吃。别因为"侧边栏里没有"就摘掉。
@@ -1012,6 +1074,7 @@ _SITEMAP_PAGES = [
     ("/cloudmap", "daily", "0.7"),
     ("/ai_hotsector", "daily", "0.7"),
     ("/daily_review", "daily", "0.7"),
+    ("/strategy", "weekly", "0.7"),
     ("/watchlist", "daily", "0.6"),
     ("/my_board", "weekly", "0.5"),
     ("/subscribe", "weekly", "0.5"),
@@ -1075,6 +1138,15 @@ def _sitemap_stock_urls() -> str:
     return xml
 
 
+def _sitemap_strategy_urls() -> str:
+    """每个注册策略一条 —— 纯内存数据,不查库,不用缓存。"""
+    return "".join(
+        f"  <url><loc>{_SITE_ORIGIN}/strategy/{m['id']}</loc>"
+        f"<changefreq>weekly</changefreq><priority>0.6</priority></url>\n"
+        for m in _st_render.all_meta()
+    )
+
+
 @app.get("/robots.txt", include_in_schema=False)
 async def robots_txt():
     body = (
@@ -1101,6 +1173,7 @@ def sitemap_xml():
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
         f"{urls}"
+        f"{_sitemap_strategy_urls()}"
         f"{_sitemap_review_urls()}"
         f"{_sitemap_stock_urls()}"
         "</urlset>\n"

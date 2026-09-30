@@ -27,13 +27,30 @@ class FakeDB:
         pass
 
     def insert_feedback(self, user_id, category, content, contact, ip,
-                        user_agent, page=None):
+                        user_agent, page=None, public_ok=False, display_name=None):
         self.rows.append({
+            "id": len(self.rows) + 1,
             "user_id": user_id, "category": category, "content": content,
             "contact": contact, "ip": ip, "user_agent": user_agent,
-            "page": page,
+            "page": page, "public_ok": int(bool(public_ok)),
+            "display_name": display_name, "featured": 0, "created_at": None,
         })
         return len(self.rows)
+
+    # 与 db.set_featured 同一条规矩:没同意公开的精选不上
+    def set_featured(self, fid, featured):
+        for r in self.rows:
+            if r["id"] == fid:
+                if featured and not r["public_ok"]:
+                    return 0
+                changed = r["featured"] != int(featured)
+                r["featured"] = int(featured)
+                return 1 if changed else 0
+        return 0
+
+    def list_testimonials(self, limit=12):
+        rows = [r for r in self.rows if r["featured"] and r["public_ok"]]
+        return rows[::-1][:limit]
 
 
 @pytest.fixture
@@ -170,3 +187,112 @@ def test_notify_sender_falls_back_to_email_prefix(monkeypatch):
     user = {"id": 3, "email": "someone@x.com", "display_name": None}
     service._notify_admin(2, user, "bug", "x", None, IP, None)
     assert "someone" in box["text"]
+
+
+def test_notify_flags_public_praise(monkeypatch):
+    """同意公开的评价要在通知里点出来,不然会沉在列表里没人去精选。"""
+    box = _capture_mail(monkeypatch)
+    service._notify_admin(5, None, "praise", "好用", None, IP, "首页(/)", public_ok=True)
+    assert "使用评价" in box["subject"]
+    assert "同意公开" in box["text"]
+
+
+# ── 评价墙:两道闸(用户同意公开 + 管理员精选)都开才上墙 ─────────────────────
+
+@pytest.fixture
+def wall(fake):
+    service._wall_cache.clear()
+    yield fake
+    service._wall_cache.clear()
+
+
+def test_praise_is_a_valid_category(fake):
+    service.submit(None, "praise", "很好用", None, IP, "UA")
+    assert fake.rows[0]["category"] == "praise"
+
+
+def test_display_name_dropped_when_not_public(fake):
+    """不公开就不需要署名 —— 别存一份用不上的个人信息。"""
+    service.submit(None, "praise", "很好用", None, IP, "UA",
+                   public_ok=False, display_name="老王")
+    assert fake.rows[0]["public_ok"] == 0
+    assert fake.rows[0]["display_name"] is None
+
+
+def test_display_name_kept_when_public(fake):
+    service.submit(None, "praise", "很好用", None, IP, "UA",
+                   public_ok=True, display_name="  上海 · 老王  ")
+    assert fake.rows[0]["display_name"] == "上海 · 老王"
+
+
+def test_display_name_too_long_rejected(fake):
+    with pytest.raises(FeedbackError, match="署名"):
+        service.submit(None, "praise", "好", None, IP, "UA", public_ok=True,
+                       display_name="名" * (service.MAX_DISPLAY_NAME + 1))
+
+
+def test_cannot_feature_without_consent(wall):
+    fid = service.submit(None, "praise", "私下说一句", None, IP, "UA", public_ok=False)
+    assert service.set_featured(fid, True) is False
+    assert service.testimonials() == []
+
+
+def test_consent_alone_does_not_publish(wall):
+    service.submit(None, "praise", "同意了但没人审", None, IP, "UA", public_ok=True)
+    assert service.testimonials() == []
+
+
+def test_featured_public_praise_shows_on_wall(wall):
+    fid = service.submit(None, "praise", "回测结果很直观\n\n帮我避开了一个坑",
+                         "wx-secret", IP, "UA", public_ok=True, display_name="老王")
+    assert service.set_featured(fid, True) is True
+    items = service.testimonials()
+    assert len(items) == 1
+    it = items[0]
+    assert it["name"] == "老王"
+    assert it["content"] == "回测结果很直观 帮我避开了一个坑"   # 换行压成空格
+    assert "wx-secret" not in str(it)                 # 联系方式绝不上墙
+
+
+def test_wall_uses_anonymous_name_and_truncates(wall):
+    fid = service.submit(None, "praise", "好" * 400, None, IP, "UA", public_ok=True)
+    service.set_featured(fid, True)
+    it = service.testimonials()[0]
+    assert it["name"] == service.WALL_ANON_NAME
+    assert it["content"].endswith("…")
+    assert len(it["content"]) == service.WALL_MAX_CHARS + 1
+
+
+def test_unfeature_is_idempotent(wall):
+    fid = service.submit(None, "praise", "好", None, IP, "UA", public_ok=True)
+    assert service.set_featured(fid, False) is True   # 本来就没精选,也算成功
+    service.set_featured(fid, True)
+    assert service.set_featured(fid, False) is True
+    assert service.testimonials() == []
+
+
+def test_wall_db_error_returns_empty(wall, monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("db down")
+    monkeypatch.setattr(wall, "list_testimonials", boom)
+    assert service.testimonials() == []
+
+
+def test_wall_html_empty_when_no_items():
+    from app.feedback import render
+    assert render.wall_html([]) == ""
+
+
+def test_wall_html_escapes_and_offers_write_button():
+    from app.feedback import render
+    html = render.wall_html([{"id": 1, "content": "<img src=x onerror=1>",
+                              "name": "<b>x</b>", "when": "2026-09"}])
+    assert "<img" not in html and "<b>x</b>" not in html
+    assert 'data-feedback="praise"' in html
+    assert "2026-09" in html
+
+
+def test_homepage_block_has_no_wall_without_testimonials(monkeypatch):
+    import app.main as main
+    monkeypatch.setattr(main._fb_service, "testimonials", lambda limit=6: [])
+    assert main._testimonials_block() == ""

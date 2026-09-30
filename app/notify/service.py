@@ -5,7 +5,8 @@
 对外三件事：
   1. 偏好读写（get_prefs / update_prefs）—— 给设置页用
   2. 退订（describe_token / unsubscribe）—— 给邮件里的退订链接用
-  3. 两个发送任务（send_watchlist_alerts / send_daily_digest）—— 给定时脚本用
+  3. 三个发送任务（send_watchlist_alerts / send_daily_digest / send_onboarding）
+     —— 给定时脚本用
 
 发送任务的共同骨架：**先占位、再发信、失败就释放占位**。
 占位表是 email_send_log，(user_id, kind, 交易日) 唯一，于是：
@@ -77,6 +78,7 @@ _UNSUB_GROUPS = {
     "daily_review": ["daily_review", "ai_hotsector"],
     "ai_hotsector": ["daily_review", "ai_hotsector"],
     "watchlist_alert": ["watchlist_alert"],
+    "onboarding": ["onboarding"],
 }
 
 
@@ -262,6 +264,107 @@ def send_daily_digest(trade_date: Optional[_Date] = None) -> Dict[str, Any]:
     return {"trade_date": ref, "users": len(people), "sent": sent,
             "skipped": skipped, "failed": failed,
             "has_review": bool(review), "has_hotsector": bool(hotsector)}
+
+
+# ── 发送：新手引导（注册后一周 4 封） ─────────────────────────────────────────
+
+# 第几天发哪一封。天数按自然日算:注册当天是第 0 天。
+ONBOARDING_SCHEDULE = (("d0", 0), ("d1", 1), ("d3", 3), ("d7", 7))
+# 某一封到期后,最多再等这么多天。任务停了几天再恢复时,过期的那几封直接作废,
+# 不会补发 —— 一口气补三封"欢迎/第一天/第三天"比漏掉一封糟得多。
+ONBOARDING_GRACE_DAYS = 2
+# 名单只看最近这么多天注册的账号:最后一封 d7 + 宽限期,再往前的账号一封都不会到期
+ONBOARDING_WINDOW_DAYS = 7 + ONBOARDING_GRACE_DAYS
+
+
+def onboarding_step_due(age_days: int) -> Optional[str]:
+    """注册满 age_days 天的账号,今天该发哪一封。没有到期的返回 None。
+
+    同时有多封落在宽限期里时(比如任务停了一天,d0 与 d1 都还没过期)
+    只发最新的那一封 —— 一天最多一封引导信。
+    """
+    due = None
+    for step, offset in ONBOARDING_SCHEDULE:
+        if offset <= age_days < offset + ONBOARDING_GRACE_DAYS:
+            due = step
+    return due
+
+
+def _onboarding_board() -> Optional[List[Dict[str, Any]]]:
+    """第 1 天那封里的"实测前三"。取不到就 None,信照发。"""
+    try:
+        from ..strategy_pages import stats as st_stats
+        from ..strategies.registry import STRATEGY_REGISTRY
+        data = st_stats.get_stats()
+    except Exception as e:
+        logger.info("引导信取策略实测失败(不带这一段): %s", e)
+        return None
+    rows = [s for sid, s in (data.get("strategies") or {}).items()
+            if sid in STRATEGY_REGISTRY and s.get("median_return") is not None
+            and s.get("solid")]
+    rows.sort(key=lambda s: s["median_return"], reverse=True)
+    return [{"id": s["id"], "name": s["name"], "median_return": s["median_return"]}
+            for s in rows[:3]] or None
+
+
+def send_onboarding(today: Optional[_Date] = None) -> Dict[str, Any]:
+    """给注册一周内的新账号发当天到期的那一封引导信。返回统计。
+
+    幂等键是 (user, "onboarding", 第几封):同一封永远只发一次,任务一天跑几遍都行。
+    """
+    db.ensure_tables()
+    today = today or _Date.today()
+    since = _DT.combine(today - timedelta(days=ONBOARDING_WINDOW_DAYS), _DT.min.time())
+    users = db.new_users(since)
+    if not users:
+        return {"date": str(today), "users": 0, "sent": 0, "skipped": 0, "failed": 0}
+
+    uids = [int(u["user_id"]) for u in users]
+    prefs = db.pref_for_users(uids)
+    # 新账号多半还没有偏好行(懒建),而引导默认开 —— 补上再取一次
+    missing = [u for u in uids if u not in prefs]
+    for uid in missing:
+        try:
+            db.create_pref(uid, db.new_token())
+        except Exception as e:
+            logger.info("建偏好行失败 user=%s: %s", uid, e)
+    if missing:
+        prefs = db.pref_for_users(uids)
+
+    board = None
+    sent = skipped = failed = 0
+    by_step: Dict[str, int] = {}
+    for u in users:
+        uid = int(u["user_id"])
+        created = u.get("created_at")
+        created_day = created.date() if isinstance(created, _DT) else created
+        if not isinstance(created_day, _Date):
+            skipped += 1
+            continue
+        step = onboarding_step_due((today - created_day).days)
+        pref = prefs.get(uid)
+        if step is None or not pref or not pref.get("onboarding"):
+            skipped += 1
+            continue
+        if step == "d1" and board is None:
+            board = _onboarding_board() or []
+        subject, text, html = render.onboarding_mail(
+            pref, step, str(pref["unsub_token"]), board=board or None,
+        )
+        ok = _deliver(uid, "onboarding", step, pref, subject, text, html,
+                      unsub_kind="onboarding")
+        if ok is None:
+            skipped += 1
+        elif ok:
+            sent += 1
+            by_step[step] = by_step.get(step, 0) + 1
+        else:
+            failed += 1
+
+    logger.info("[notify] 新手引导 %s: 发出 %d %s, 跳过 %d, 失败 %d",
+                today, sent, by_step, skipped, failed)
+    return {"date": str(today), "users": len(users), "sent": sent,
+            "skipped": skipped, "failed": failed, "by_step": by_step}
 
 
 # ── 投递（幂等 + 退订头） ─────────────────────────────────────────────────────

@@ -2,11 +2,12 @@
 通知邮件正文渲染
 ==================
 
-两封信：
+三类信：
   watchlist_alert_mail — 收盘后你的自选触发了哪些信号
   daily_digest_mail    — 每日复盘摘要 + AI 热门板块（按用户开关拼，两块都没开就不发）
+  onboarding_mail      — 新手引导：注册后第 0/1/3/7 天各一封，发完即止
 
-三条贯穿两封信的规矩：
+三条贯穿所有信的规矩：
   1. **正文只放摘要，全文回站里看**。付费内容不能从邮件漏出去，顺带把人带回站上。
   2. **每封信都带退订链接**，而且是能一键点的绝对地址。少了它，QQ/Gmail
      会把整个发信域名的信誉打下来 —— 比少发几封信严重得多。
@@ -222,3 +223,179 @@ def daily_digest_mail(
     # 退订链接落在 daily_review 上：这封信里两块内容用的是同一个"每日推送"位，
     # 用户想退的是"每天这封信"，退订页会把两个开关一起关掉。
     return subject, text, _shell("".join(html_parts), token, "daily_review", kind_label)
+
+
+# ── 新手引导（注册后一周 4 封） ───────────────────────────────────────────────
+#
+# 每封只讲一件事、只给一个主按钮：第 0 天跑通第一次回测，第 1 天认识策略，
+# 第 3 天学会怀疑回测结果，第 7 天把"天天打开网站"换成"收盘后等邮件"。
+# 顺序就是一个新用户从"好奇"到"留下来"要走的路。
+#
+# 内容里提到的功能必须是站上真有的 —— 样本外检验 / 参数敏感性在
+# engine/robustness.py，邮件推送开关在自选盯盘页底部（#notify）。
+
+ONBOARDING_LABEL = "新手引导"
+
+_ONBOARDING: Dict[str, Dict[str, Any]] = {
+    "d0": {
+        "subject": "欢迎来到收盘：3 分钟跑出你的第一份回测",
+        "intro": "注册好了。收盘做的事很简单：把一套买卖规则放进真实的历史行情里跑一遍，"
+                 "看它到底赚不赚钱 —— 用数据代替感觉。下面三步，每步不到一分钟：",
+        "steps": [
+            ("用示例试跑一次",
+             "什么都不用填：平安银行 + 均线交叉，点一下就出完整报告，"
+             "包括收益曲线、每一笔交易和防过拟合评级。",
+             "/?strategy=ma_cross&code=000001&run=1"),
+            ("换成你关心的股票",
+             "在首页输入名称或代码，拉出 K 线，再挑两三个策略放在一起对比。",
+             "/"),
+            ("加进自选盯盘",
+             "收盘后，如果你选的策略在自选股上出了信号，站内会标出来，会员还能收到邮件提醒。",
+             "/watchlist"),
+        ],
+        "cta": ("开始第一次回测", "/?strategy=ma_cross&code=000001&run=1"),
+    },
+    "d1": {
+        "subject": "9 种单股策略，各自适合什么行情？",
+        "intro": "单股策略大致分两派：趋势跟踪（涨起来才买、转弱就卖）和超买超卖反转"
+                 "（跌过头买、涨过头卖）。趋势行情里前者占优，震荡行情里后者占优 —— "
+                 "没有永远最好的规则，只有更适合当下的规则。",
+        "steps": [
+            ("策略百科",
+             "每个策略的买卖规则、适合与不适合的行情、参数怎么调，"
+             "以及它在一千多只真实个股上跑出来的结果，都在这里。",
+             "/strategy"),
+        ],
+        "cta": ("打开策略百科", "/strategy"),
+    },
+    "d3": {
+        "subject": "回测收益很高，为什么还不能全信？",
+        "intro": "回测最常见的坑叫「过拟合」：参数被调到恰好贴合过去那段行情，"
+                 "换一段时间就失灵。收盘的每份回测报告里，有三项检查专门防这个：",
+        "steps": [
+            ("样本外检验",
+             "把回测区间切成前 70% 和后 30%，同一组参数各跑一遍。"
+             "后一段明显差于前一段，是过拟合的典型信号。",
+             "/"),
+            ("参数敏感性",
+             "把每个参数各自上下挪 20% 再跑。好的规则在一片参数上都不差；"
+             "挪一点就大起大落的，大概率是巧合。",
+             "/"),
+            ("对比买入持有",
+             "策略赚 30% 不一定好 —— 同期什么都不做可能赚 50%。"
+             "每份报告都会把这个基准摆在旁边。",
+             "/"),
+        ],
+        "cta": ("带着这三个问题再跑一次", "/"),
+    },
+    "d7": {
+        "subject": "一周了：让收盘后的结论自己来找你",
+        "intro": "如果你已经有了想盯的股票和策略，接下来可以把「每天打开网站看一眼」"
+                 "换成「收盘后等一封邮件」：",
+        "steps": [
+            ("AI 每日复盘",
+             "每个交易日收盘后，基于当天真实行情生成的市场复盘："
+             "指数、涨跌家数、成交额放缩量、涨停梯队。",
+             "/daily_review"),
+            ("自选盯盘提醒",
+             "你的自选股触发所选策略的信号时，当天汇总成一封信（会员功能）。",
+             "/watchlist"),
+            ("在哪里打开",
+             "自选盯盘页底部的「邮件通知」，勾上就生效，随时可关。",
+             "/watchlist#notify"),
+        ],
+        "cta": ("打开邮件推送设置", "/watchlist#notify"),
+        # 引导的最后一封：顺带请人说说感受 —— 用了一周的人给的反馈最有用
+        "ps": ("这是新手引导的最后一封，之后不会再收到这类邮件。"
+               "用得怎么样？哪里不顺手、想要什么功能，都可以直接告诉我们：",
+               "写一句反馈或评价", "/?feedback=praise"),
+    },
+}
+
+ONBOARDING_STEPS = tuple(_ONBOARDING)
+
+
+def onboarding_mail(
+    user: Dict[str, Any], step: str, token: str,
+    board: Optional[List[Dict[str, Any]]] = None,
+) -> Tuple[str, str, str]:
+    """新手引导第 step 封。返回 (subject, text, html)。
+
+    board: 第 1 天那封可选带上策略实测前三([{id, name, median_return}]),
+           取不到就不带 —— 信照发,只是少一段数字。
+    """
+    tpl = _ONBOARDING[step]
+    hello = greeting(user)
+    subject = f"{tpl['subject']} · {SITE_NAME}"
+
+    text = [f"{hello}，你好：", "", tpl["intro"], ""]
+    html = [
+        f'<p style="margin:0 0 6px;font-size:15px;color:#111827;">{_esc(hello)}，你好：</p>'
+        f'<p style="margin:0 0 18px;font-size:14px;color:#4b5563;line-height:1.9;">'
+        f'{_esc(tpl["intro"])}</p>'
+    ]
+
+    if step == "d1" and board:
+        text.append("本站个股实测里，中位收益前三的单股策略：")
+        rows = []
+        for b in board[:3]:
+            ret = b.get("median_return")
+            ret_txt = "—" if ret is None else f"{ret:+.1f}%"
+            color = "#d64545" if (ret or 0) > 0 else "#2fa87d"
+            link = site_url(f"/strategy/{b['id']}")
+            text.append(f"  · {b['name']}  {ret_txt}  {link}")
+            rows.append(
+                f'<tr><td style="padding:8px 10px;border-bottom:1px solid #f0f1f3;font-size:14px;">'
+                f'<a href="{_esc(link)}" style="color:#111827;text-decoration:none;font-weight:600;">'
+                f'{_esc(b["name"])}</a></td>'
+                f'<td style="padding:8px 10px;border-bottom:1px solid #f0f1f3;font-size:14px;'
+                f'font-weight:700;text-align:right;color:{color};">{_esc(ret_txt)}</td></tr>'
+            )
+        text.append("")
+        html.append(
+            '<div style="margin:0 0 18px;">'
+            '<div style="font-size:12px;color:#9ca3af;letter-spacing:1px;margin-bottom:6px;">'
+            '本站个股实测 · 中位收益前三</div>'
+            f'<table style="width:100%;border-collapse:collapse;">{"".join(rows)}</table>'
+            '<p style="margin:6px 0 0;font-size:12px;color:#9ca3af;">'
+            '近 2 年、默认参数；只说明过去这段行情，不代表未来。</p></div>'
+        )
+
+    for i, (title, body, path) in enumerate(tpl["steps"], 1):
+        link = site_url(path)
+        num = f"{i}. " if len(tpl["steps"]) > 1 else ""
+        text += [f"{num}{title}", f"   {body}", f"   {link}", ""]
+        badge = (
+            f'<td style="width:28px;vertical-align:top;padding:2px 10px 0 0;">'
+            f'<span style="display:inline-block;width:22px;height:22px;line-height:22px;'
+            f'border-radius:50%;background:#E6F1FB;color:#185FA5;font-size:12px;'
+            f'font-weight:700;text-align:center;">{i}</span></td>'
+            if len(tpl["steps"]) > 1 else ""
+        )
+        html.append(
+            '<table style="width:100%;border-collapse:collapse;margin:0 0 14px;"><tr>'
+            f"{badge}"
+            '<td style="vertical-align:top;">'
+            f'<a href="{_esc(link)}" style="font-size:15px;font-weight:700;color:#185FA5;'
+            f'text-decoration:none;">{_esc(title)}</a>'
+            f'<div style="margin-top:4px;font-size:13.5px;color:#4b5563;line-height:1.8;">'
+            f'{_esc(body)}</div></td></tr></table>'
+        )
+
+    cta_label, cta_path = tpl["cta"]
+    text += [f"{cta_label}：{site_url(cta_path)}", ""]
+    html.append(_btn(site_url(cta_path), cta_label))
+
+    ps = tpl.get("ps")
+    if ps:
+        ps_text, ps_label, ps_path = ps
+        text += [ps_text, f"{ps_label}：{site_url(ps_path)}", ""]
+        html.append(
+            '<p style="margin:26px 0 0;padding-top:16px;border-top:1px solid #f0f1f3;'
+            'font-size:13px;color:#6b7280;line-height:1.8;">'
+            f'{_esc(ps_text)}<a href="{_esc(site_url(ps_path))}" style="color:#185FA5;">'
+            f'{_esc(ps_label)}</a></p>'
+        )
+
+    text_body = "\n".join(text) + _text_footer(token, "onboarding", ONBOARDING_LABEL)
+    return subject, text_body, _shell("".join(html), token, "onboarding", ONBOARDING_LABEL)

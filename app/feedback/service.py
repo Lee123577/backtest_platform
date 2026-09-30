@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime as _DT
 from typing import Optional
 
@@ -21,14 +22,23 @@ from . import db
 
 logger = logging.getLogger(__name__)
 
-CATEGORIES = {"bug", "feature", "other"}
+CATEGORIES = {"bug", "feature", "other", "praise"}
 MAX_CONTENT = 2000
 MAX_CONTACT = 100
 MAX_PAGE = 200
+MAX_DISPLAY_NAME = 20
 IP_MAX_PER_HOUR = 5
 
 # 与前端 feedback.js 的 CATS 一致，用于邮件标题/正文展示
-CATEGORY_LABELS = {"bug": "问题反馈", "feature": "功能建议", "other": "其他"}
+CATEGORY_LABELS = {"bug": "问题反馈", "feature": "功能建议", "other": "其他",
+                   "praise": "使用评价"}
+
+# 评价墙:上墙的内容最长这么多字(超出截断加省略号),署名为空时显示这个
+WALL_MAX_CHARS = 180
+WALL_ANON_NAME = "匿名用户"
+# 进程缓存:首页每个请求都要出这一块,评价一天也变不了几次
+WALL_TTL = 300.0
+_wall_cache: dict = {}
 
 # 邮件标题里内容摘要的最大长度
 SUBJECT_SNIPPET = 40
@@ -68,6 +78,7 @@ def _sender_desc(user: Optional[dict], ip: str) -> str:
 def _notify_admin(
     fid: int, user: Optional[dict], category: str, content: str,
     contact: Optional[str], ip: str, page: Optional[str],
+    public_ok: bool = False,
 ) -> None:
     """给 ADMIN_EMAILS 里的每个管理员发反馈通知邮件。尽力而为，失败不抛。"""
     to_addrs = sorted(settings.ADMIN_EMAILS)
@@ -82,6 +93,9 @@ def _notify_admin(
     sender = _sender_desc(user, ip)
     page = page or "未上报"
     contact_text = contact or "未留"
+    if public_ok:
+        # 管理员得知道这条能上墙,否则同意公开的好评会沉在列表里
+        page += "（用户同意公开展示，可在运维页精选到评价墙）"
 
     text = (
         f"收到一条新的用户反馈(#{fid})。\n\n"
@@ -125,6 +139,8 @@ def submit(
     contact: Optional[str], ip: str, user_agent: Optional[str],
     page: Optional[str] = None,
     user: Optional[dict] = None,
+    public_ok: bool = False,
+    display_name: Optional[str] = None,
 ) -> int:
     db.ensure_tables()
 
@@ -144,15 +160,67 @@ def submit(
 
     page = (page or "").strip()[:MAX_PAGE] or None
 
+    display_name = (display_name or "").strip() or None
+    if display_name and len(display_name) > MAX_DISPLAY_NAME:
+        raise FeedbackError(f"署名最多 {MAX_DISPLAY_NAME} 个字")
+    public_ok = bool(public_ok)
+    if not public_ok:
+        display_name = None     # 不公开就不需要署名,别存一份用不上的个人信息
+
     if not _ip_allowed(ip):
         raise FeedbackRateLimitError("提交过于频繁，请稍后再试")
 
     ua = (user_agent or "")[:255] or None
-    fid = db.insert_feedback(user_id, category, content, contact, ip, ua, page)
+    fid = db.insert_feedback(user_id, category, content, contact, ip, ua, page,
+                             public_ok=public_ok, display_name=display_name)
 
     try:
-        _notify_admin(fid, user, category, content, contact, ip, page)
+        _notify_admin(fid, user, category, content, contact, ip, page,
+                      public_ok=public_ok)
     except Exception:
         # _notify_admin 内部已兜 send_mail 的异常，这层兜它自己漏出来的任何意外
         logger.exception("反馈 #%s 通知环节异常(反馈已落库)", fid)
     return fid
+
+
+# ── 评价墙(社会证明) ─────────────────────────────────────────────────────────
+
+def _wall_item(row: dict) -> dict:
+    content = " ".join(str(row.get("content") or "").split())   # 换行/多空格压成一个
+    if len(content) > WALL_MAX_CHARS:
+        content = content[:WALL_MAX_CHARS].rstrip() + "…"
+    created = row.get("created_at")
+    when = created.strftime("%Y-%m") if isinstance(created, _DT) else str(created or "")[:7]
+    return {
+        "id": int(row["id"]),
+        "content": content,
+        "name": (row.get("display_name") or "").strip() or WALL_ANON_NAME,
+        "when": when,
+    }
+
+
+def testimonials(limit: int = 6) -> list:
+    """上墙的评价(用户同意公开 + 管理员精选)。5 分钟进程缓存;取不到返回空列表 ——
+    评价墙只是锦上添花,DB 抖动时首页不能因此出错,也不能拿假评价顶上。"""
+    now = time.time()
+    hit = _wall_cache.get(limit)
+    if hit and now - hit[0] < WALL_TTL:
+        return hit[1]
+    try:
+        db.ensure_tables()
+        items = [_wall_item(r) for r in db.list_testimonials(limit) if r.get("content")]
+    except Exception as e:
+        logger.info("评价墙取数失败(本次不出): %s", e)
+        items = []
+    _wall_cache[limit] = (now, items)
+    return items
+
+
+def set_featured(feedback_id: int, featured: bool) -> bool:
+    """管理员精选/取消。用户没同意公开的,精选会失败(返回 False)。"""
+    db.ensure_tables()
+    changed = db.set_featured(feedback_id, featured) > 0
+    _wall_cache.clear()     # 精选完马上就该在首页看到,别等 5 分钟
+    # MySQL 对"值没变"的 UPDATE 回 0 行:取消一条本来就没精选的也算成功;
+    # 精选时回 0 才说明不存在或用户没同意公开
+    return changed or not featured

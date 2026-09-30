@@ -15,6 +15,10 @@
                             属于事务性邮件；
   daily_review / ai_hotsector 默认关 —— 这两个是内容推送，性质接近营销，
                             必须用户自己勾选（opt-in），不能替他决定。
+  onboarding 默认开 —— 新手引导是**有终点**的一组信：只发给注册 9 天内的新账号、
+                            一共 4 封、第 7 天那封之后永不再发；讲的是"怎么用这个
+                            刚注册的产品"，属于注册流程的延续，不是持续的内容推送。
+                            每封都带一键退订，退订后这里也同步关掉。
 """
 from __future__ import annotations
 
@@ -32,6 +36,7 @@ KINDS: Dict[str, str] = {
     "watchlist_alert": "自选盯盘信号提醒",
     "daily_review": "AI 每日复盘",
     "ai_hotsector": "AI 热门板块",
+    "onboarding": "新手引导邮件",
 }
 
 DDL_STATEMENTS = [
@@ -41,6 +46,7 @@ DDL_STATEMENTS = [
         watchlist_alert TINYINT  NOT NULL DEFAULT 1 COMMENT '自选信号提醒(事务性,默认开)',
         daily_review    TINYINT  NOT NULL DEFAULT 0 COMMENT '每日复盘推送(内容,需自己开)',
         ai_hotsector    TINYINT  NOT NULL DEFAULT 0 COMMENT '热门板块推送(内容,需自己开)',
+        onboarding      TINYINT  NOT NULL DEFAULT 1 COMMENT '新手引导(注册后一周4封,有终点,默认开)',
         unsub_token     CHAR(43) NOT NULL COMMENT '退订令牌(邮件链接携带,不含账号信息)',
         created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -74,8 +80,43 @@ def ensure_tables() -> None:
     with conn.cursor() as cur:
         for sql in DDL_STATEMENTS:
             cur.execute(sql)
+    _migrate_email_pref(conn)
     _tables_ready = True
     logger.info("notify 表已就绪")
+
+
+def _migrate_email_pref(conn) -> None:
+    """给上线前就建好的 email_pref 补 onboarding 列。
+
+    与 feedback 模块同款:MySQL 的 ADD COLUMN 没有 IF NOT EXISTS,先查
+    INFORMATION_SCHEMA;失败只 WARNING,不让 ensure_tables 整个炸掉。
+    老行补出来的值是 1 也没关系 —— 引导信只发给注册 9 天内的账号,
+    老用户天然不在名单里。
+    """
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COLUMN_NAME AS col
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE table_schema = DATABASE() AND table_name = 'email_pref'
+                """
+            )
+            cols = {r["col"] for r in cur.fetchall()}
+    except Exception as e:
+        logger.warning("探测 email_pref 结构失败，跳过迁移: %s", e)
+        return
+    if not cols or "onboarding" in cols:
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "ALTER TABLE email_pref ADD COLUMN onboarding TINYINT NOT NULL DEFAULT 1 "
+                "COMMENT '新手引导(注册后一周4封,有终点,默认开)' AFTER ai_hotsector"
+            )
+        logger.info("email_pref 迁移：补 onboarding 列完成")
+    except Exception as e:
+        logger.warning("email_pref 迁移：补 onboarding 列失败(下次重试): %s", e)
 
 
 def new_token() -> str:
@@ -169,13 +210,36 @@ def pref_for_users(user_ids: List[int]) -> Dict[int, Dict[str, Any]]:
         cur.execute(
             f"""
             SELECT p.user_id, p.watchlist_alert, p.daily_review, p.ai_hotsector,
-                   p.unsub_token, u.email, u.display_name
+                   p.onboarding, p.unsub_token, u.email, u.display_name
             FROM email_pref p JOIN app_user u ON u.id = p.user_id
             WHERE p.user_id IN ({holes}) AND u.email IS NOT NULL AND u.email <> ''
             """,
             tuple(user_ids),
         )
         return {int(r["user_id"]): r for r in cur.fetchall()}
+
+
+def new_users(since: _DT) -> List[Dict[str, Any]]:
+    """since 之后注册、状态正常、有邮箱的账号 [{user_id, email, display_name, created_at}]。
+
+    新手引导的名单。只看注册时间,不看偏好表 —— 新账号多半还没有偏好行
+    (偏好行是懒建的),由调用方补建后再判断开关。
+    """
+    conn = _get_pool()
+    if conn is None:
+        return []
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id AS user_id, email, display_name, created_at
+            FROM app_user
+            WHERE created_at >= %s AND status = 'active'
+              AND email IS NOT NULL AND email <> ''
+            ORDER BY created_at
+            """,
+            (since,),
+        )
+        return cur.fetchall() or []
 
 
 # ── 发送账本 ──────────────────────────────────────────────────────────────────

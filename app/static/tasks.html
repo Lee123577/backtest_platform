@@ -270,6 +270,23 @@
     <div class="funnel-channels" id="funnelChannels"></div>
   </div>
 
+  <!-- ══════════════ 用户反馈 & 评价墙 ══════════════
+       以前反馈只能靠管理员邮件看,库里的状态列没人能改;评价墙的"精选"也得有个地方点。
+       逻辑在 admin_feedback.js,接口是 /api/feedback/list、/status、/feature(均仅管理员)。 -->
+  <div class="panel">
+    <div class="panel-title">
+      用户反馈
+      <span class="tip-badge">「上墙」只对用户勾选了同意公开的评价可用</span>
+      <select id="afFilter" style="margin-left:auto;width:auto;padding:4px 8px;">
+        <option value="">全部状态</option>
+        <option value="new" selected>未处理</option>
+        <option value="read">已读</option>
+        <option value="done">已处理</option>
+      </select>
+    </div>
+    <div id="afList"><div class="no-data">加载中…</div></div>
+  </div>
+
   <div class="panel">
     <div class="panel-title">
       定时任务总览
@@ -319,6 +336,7 @@
 
 <script src="/static/js/util.js"></script>
 <script src="/static/js/tasks.js"></script>
+<script src="/static/js/admin_feedback.js"></script>
 <script src="/static/js/feedback.js"></script>
 <script src="/static/js/auth.js"></script>
 <script src="/static/js/shell.js"></script>

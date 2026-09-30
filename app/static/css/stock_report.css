@@ -300,6 +300,13 @@
   color: var(--txt, #24292f);
   white-space: nowrap;
 }
+.sr-bt-name a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: rgba(128, 128, 128, .4);
+  text-underline-offset: 3px;
+}
+.sr-bt-name a:hover { color: var(--accent, #185FA5); text-decoration-color: currentColor; }
 /* 对比条：一眼看出哪些跑赢、哪些是负的，比读一串数字快得多 */
 .sr-bt-bar {
   width: 40%;
