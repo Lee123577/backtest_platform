@@ -76,6 +76,25 @@
 - ECharts treemap,按行业 / 板块聚类
 - 60s 进程缓存,数据来源 stock_kline 表
 
+**策略百科(`/strategy`、`/strategy/{id}`)**
+- **完全由策略注册表驱动**:每个策略类上的 `family` + `detail`(原理/买入/卖出/适用行情/局限/调参)
+  直接渲染成专题页。往 registry 里加一个策略,它的专题页、索引卡片、sitemap 条目自动出现
+- "示例结果"不另跑回测:把所有个股报告快照里的 9 策略实测**按策略汇总**,得到每个策略在
+  一千多只真实个股上的中位收益 / 跑赢买入持有占比 / 盈利占比 / 中位回撤,外加表现最好/最差的个股
+  (链回个股页)。用中位数不用平均数 —— 一只妖股 +500% 就能把平均数拉到失真。6 小时进程缓存
+- 参数表本身是一个 `GET /` 的表单,没有 JS 也能提交:`/?strategy=rsi&code=000001&p_period=10&run=1`
+  直接在首页摆好策略和参数并自动运行(首页 `applyDeepLink`)
+- 服务端直出 + TechArticle / BreadcrumbList / FAQPage 结构化数据(FAQ 与页面同源);
+  索引页有单股策略全市场实测排行(零轴居中的正负条形)
+- 个股页的策略实测表、首页策略卡片都链到对应专题页
+
+**用户评价墙(社会证明)**
+- 反馈弹窗新增「使用评价」分类,用户可勾选"同意公开展示"并自填署名(默认不勾)
+- 上墙要**两道闸同时打开**:用户同意公开 + 管理员在 `/admin/tasks` 的反馈面板里精选。
+  条件写在 SQL 里(`WHERE public_ok=1`),接口漏判也上不了墙
+- 首页、订阅页服务端直出;一条精选都没有时整块不出 —— 不拿示例文案冒充评价
+- 联系方式、IP 永不上墙;正文截断到 180 字
+
 **账号体系(邮箱验证码登录)**
 - 无密码:输邮箱 → 收 6 位验证码 → 登录,首次登录自动建号(少一套密码存储/找回/强度校验)
 - 验证码 5 分钟有效、最多错 5 次、用过即作废(防重放);同址 60s 冷却 + 单址单日 10 条 + 单 IP 每小时 20 条
@@ -96,6 +115,10 @@
 
 **邮件通知(`app/notify/`)**
 - 两封信:收盘后的**自选信号提醒**(17:25)、**每日复盘 + AI 热门板块**推送(18:00)
+- **新手引导**:注册后第 0/1/3/7 天各一封(跑通第一次回测 → 认识策略 → 学会怀疑回测结果 →
+  打开收盘后邮件推送),每天 10:00 发。只发给注册 9 天内的账号,第 7 天那封之后永不再发;
+  某封到期后宽限 2 天,任务停更久就作废不补发,同一天最多一封。默认开(有终点的注册流程延续,
+  不是持续的内容推送),每封带一键退订
 - 一天最多一封:复盘和热门板块合成同一封,分两封就成了每天两条广告
 - 正文只放摘要 + 回站链接 —— 复盘全文是会员内容,不能从邮件漏出去
 - 幂等靠 `email_send_log` 的 `(user_id, kind, 交易日)` 唯一键:**先占位再发信**,
@@ -224,6 +247,8 @@ python run.py
 |---|---|
 | `/` | 回测页:单股信号 / 组合选股两种模式页内切换,组合回测带 SSE 进度流 |
 | `/stock/{code}` | 个股页:AI 分析报告 + 9 种内置策略在这只票上的实证回测 |
+| `/strategy` | 策略百科:12 套策略按家族分组 + 单股策略全市场实测排行 |
+| `/strategy/{id}` | 策略专题页:规则拆解 / 全市场实测 / 参数表(可改参数直接带去回测) / FAQ |
 | `/paper_trading` | 模拟盘:持仓/收益曲线/成交流水/参数编辑 |
 | `/ai_hotsector` | AI 热门板块:每日预测/胜率统计/资金曲线/盘中浮盈 |
 | `/daily_review` | AI 每日复盘:最新一篇(当日数据概览 + DeepSeek 复盘正文 + 历史列表) |
@@ -269,6 +294,13 @@ import pandas as pd
 
 class MyStrategy(BaseStrategy):
     name = "我的策略"
+    description = "一句话说明规则"
+    family = "trend"            # trend 趋势跟踪 / reversal 超买超卖反转(策略百科按它分组)
+    # 策略专题页 /strategy/my 的规则拆解,照 generate_signals 的真实写法描述
+    detail = {
+        "logic": "原理", "buy": "买入条件", "sell": "卖出条件",
+        "fits": "适合的行情", "risk": "局限", "tuning": "调参思路",
+    }
     param_schema = {
         "window": {"default": 10, "min": 2, "max": 100,
                    "description": "窗口期", "type": "int"},
@@ -286,6 +318,10 @@ class MyStrategy(BaseStrategy):
 from .my_strategy import MyStrategy
 STRATEGY_REGISTRY["my"] = MyStrategy
 ```
+
+注册后 `/strategy/my` 专题页、策略百科卡片、sitemap 条目自动出现;
+`tests/test_strategy_pages.py` 会检查单股策略的 `detail` 六项是否写全。
+全市场实测要等个股报告重新生成(快照里带上新策略)后才会出现,在那之前实测块整块不出。
 
 ### 组合策略
 
@@ -463,7 +499,7 @@ scheduler.runner.run_due()  →  subprocess 跑各任务(全表见下方"调度�
 | `lifetime_grant` | subscription | 终生会员免费名额(建表时预置 30 个空座位,抢占式领取) |
 | `email_pref` / `email_send_log` | notify | 邮件通知开关 + 退订令牌 / 发信账本(一天一封的幂等闸) |
 | `user_board_layout` | my_board | 登录用户的看板布局(每人一行) |
-| `user_feedback` | feedback | 用户反馈(分类/处理状态) |
+| `user_feedback` | feedback | 用户反馈(分类/处理状态) + 评价墙(用户同意公开 `public_ok` × 管理员精选 `featured`) |
 | `backtest_share` | share | 回测结果分享快照(`/s/{token}` 的内容) |
 | `user_event_log` | analytics | 前端埋点事件(转化漏斗/渠道归因) |
 | `task_run_log` | scheduler | 定时任务运行日志 |
@@ -488,6 +524,7 @@ scheduler.runner.run_due()  →  subprocess 跑各任务(全表见下方"调度�
 | `daily_digest_mail` | weekday 18:00 | `daily_review_generate` | 复盘摘要 + AI 热门板块合成一封推送邮件(顺带清理 90 天前的发信账本) |
 | `stock_report_batch` | weekday 18:10 | `daily_update` | 个股 AI 报告批量预生成(成交额前 50,长尾访客按需触发) |
 | `backfill_geo` | daily 00:00 | — | 访问日志 IP 地理回填(离线 xdb) |
+| `onboarding_mail` | daily 10:00 | — | 新手引导邮件(注册后第 0/1/3/7 天各一封,幂等键是"第几封") |
 | `backfill_dividend_full` | 每月 1 号 02:00 | — | 全市场 ex_div 事件兜底回填 |
 | `backfill_market_cap_full` | 每月 1 号 03:00 | — | 历史 market_cap 增量回填(只补新上市/缺口) |
 | `backfill_stock_industry` | 每月 1 号 04:00 | — | 回填 stock_info 行业分类与股本(baostock 全市场一次) |
@@ -570,6 +607,9 @@ app/
     robustness.py              样本外切分 + 参数敏感性
     fees.py / metrics.py / money.py   费用 / 绩效指标 / Decimal 钱算
   strategies/                策略实现(9 单股 + 3 组合 + base/portfolio_base/registry)
+  strategy_pages/            策略百科(注册表驱动的专题页)
+    stats.py                   个股报告快照 → 按策略汇总的全市场实测(6 小时缓存)
+    render.py                  索引页/专题页各区块的服务端直出 HTML
   paper_trading/             模拟盘
     runner.py                  每日运行器(被 daily_signal.py 调用)
     db.py                      paper_* 表 DDL + CRUD
@@ -581,10 +621,10 @@ app/
     deps.py                    get_current_user / require_login 依赖
   watchlist/                 自选盯盘(自选股 + 盯盘策略 + 收盘信号提醒)
   subscription/              订阅会员(订单 → QQ 人工核对 → 管理员履约 / 前 30 名免费领终生会员)
-  notify/                    邮件通知(盯盘信号提醒 + 每日复盘/热门板块推送)
+  notify/                    邮件通知(盯盘信号提醒 + 每日复盘/热门板块推送 + 新手引导)
     db.py                      email_pref 开关与退订令牌 / email_send_log 发信账本
     service.py                 先占位再发信、失败释放占位(任务重跑不会重复打扰)
-    render.py                  两封信的纯文本 + HTML 正文(退订链接与免责声明必带)
+    render.py                  各封信的纯文本 + HTML 正文(退订链接与免责声明必带)
     api.py                     偏好接口(需登录) + 退订页(公开,不挂同源闸)
   my_board/                  个人数据看板(登录后各自保存布局,未登录只读)
   cloudmap/                  大盘云图(ECharts treemap)
@@ -601,11 +641,11 @@ app/
     context.py / render.py / runner.py / db.py
   share/                     回测结果分享快照(/s/{token},限流 + IP 日配额)
   analytics/                 埋点与转化漏斗(前端白名单事件 + 服务端就地落点)
-  feedback/                  用户反馈(匿名可提,管理员处理)
+  feedback/                  用户反馈(匿名可提,管理员处理) + 评价墙(render.py)
   data_status/               数据完整性状态查询
   scheduler/                 任务调度
     runner.py                  subprocess 执行 + 日志写入 task_run_log
-    registry.py                任务清单(15 个任务,唯一事实来源)
+    registry.py                任务清单(16 个任务,唯一事实来源)
     db.py                      task_run_log CRUD
   static/                    各页面 HTML/JS(服务端直出)
 
@@ -621,6 +661,7 @@ scripts/
   scan_watchlist_alerts.py   自选盯盘信号扫描(17:20)
   notify_watchlist_alerts.py 盯盘信号提醒邮件(17:25)
   notify_daily_digest.py     每日复盘+热门板块推送邮件(18:00)
+  notify_onboarding.py       新手引导邮件(每天 10:00)
   backfill_dividend.py       Ex-div 事件回填(支持 --day-of-month / --holdings-only)
   backfill_kline.py          K 线指定区间补漏
   backfill_market_cap.py     历史市值回填(--only-uncovered 只补缺口)

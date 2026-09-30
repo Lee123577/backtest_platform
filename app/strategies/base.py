@@ -12,6 +12,14 @@ class BaseStrategy(ABC):
 
     name: str = ""
     description: str = ""
+    # 策略家族:trend=趋势跟踪 / reversal=超买超卖反转。/strategy 专题页按它分组
+    family: str = ""
+    # 结构化详情(策略专题页 /strategy/{id} 用),键都可选:
+    #   logic 原理 · buy 买入条件 · sell 卖出条件 · fits 适合的行情
+    #   risk 局限 · tuning 调参思路
+    # 必须照 generate_signals 的实际写法描述 —— 页面上的说法和回测跑的
+    # 不是一回事,读者照着页面理解去调参只会越调越糊涂。
+    detail: Dict[str, str] = {}
     # {"param_key": {"default": val, "min": val, "max": val, "description": str, "type": "int"|"float"}}
     param_schema: Dict[str, Dict[str, Any]] = {}
 
@@ -62,5 +70,7 @@ class BaseStrategy(ABC):
         return {
             "name": cls.name,
             "description": cls.description,
+            "family": cls.family,
             "params": cls.param_schema,
+            "detail": cls.detail or None,
         }

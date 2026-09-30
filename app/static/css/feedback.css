@@ -117,10 +117,186 @@
 }
 .fb-cancel:hover { background: #f2f4f6; color: #24292f; }
 
+/* ── 「使用评价」专属:同意公开 + 署名 ───────────────────────────────────
+   只有选中「使用评价」时出现。默认不勾:公开展示必须是用户自己的动作。 */
+.fb-praise {
+  margin: -2px 0 12px;
+  padding: 12px 14px;
+  border: 1px dashed #dfe3e8;
+  border-radius: 10px;
+  background: #fbfcfd;
+}
+.fb-praise[hidden] { display: none; }
+.fb-consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #3d444d;
+  cursor: pointer;
+}
+.fb-consent input { flex: none; width: 16px; height: 16px; margin-top: 2px; accent-color: var(--accent, #185FA5); }
+.fb-consent small { display: block; color: #8a929c; font-size: 12px; }
+.fb-praise .sp-field { margin: 10px 0 0; }
+.fb-praise .sp-field[hidden] { display: none; }
+
+/* ── 评价墙(首页 / 订阅页,服务端直出) ───────────────────────────────── */
+.tm-wall { position: relative; }
+.tm-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.tm-title { font-size: 18px; font-weight: 700; color: var(--txt, #24292f); }
+.tm-write {
+  height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 8px;
+  background: var(--bg, #fff);
+  color: var(--txt, #24292f);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color .15s, color .15s;
+}
+.tm-write:hover { border-color: var(--accent, #185FA5); color: var(--accent, #185FA5); }
+.tm-write:focus-visible { outline: 2px solid var(--accent, #185FA5); outline-offset: 2px; }
+.tm-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+}
+.tm-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 0;
+  padding: 18px 18px 14px;
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, rgba(var(--accent-rgb, 24, 95, 165), .035), transparent 60%),
+    var(--bg, #fff);
+}
+/* 大引号只是装饰,放在卡片右上角,不挤正文 */
+.tm-card::before {
+  content: "\201C";
+  position: absolute;
+  top: 2px;
+  right: 14px;
+  font: 700 54px/1 Georgia, "Times New Roman", serif;
+  color: rgba(var(--accent-rgb, 24, 95, 165), .14);
+  pointer-events: none;
+}
+.tm-quote {
+  margin: 0;
+  padding-right: 30px;          /* 给右上角的装饰引号让位 */
+  font-size: 14px;
+  line-height: 1.85;
+  color: var(--txt, #24292f);
+  word-break: break-word;
+}
+.tm-by {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--txt2, #57606a);
+}
+.tm-avatar {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--accent-light, #E6F1FB);
+  color: var(--accent, #185FA5);
+  font-size: 12px;
+  font-weight: 700;
+}
+.tm-name { font-weight: 600; color: var(--txt, #24292f); }
+.tm-when { margin-left: auto; font-variant-numeric: tabular-nums; }
+.tm-note { margin-top: 12px; font-size: 11.5px; color: var(--txt2, #57606a); }
+
+/* ── 运维页 · 反馈管理面板(admin_feedback.js) ────────────────────────── */
+.af-list { display: flex; flex-direction: column; gap: 10px; }
+.af-item {
+  padding: 12px 14px;
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 10px;
+  background: var(--bg, #fff);
+}
+.af-item--featured { border-color: var(--brand-2, #EF9F27); background: var(--brand-2-light, #FAEEDA); }
+.af-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  font-size: 12px;
+  color: var(--txt2, #57606a);
+}
+.af-cat {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--bg3, #f0f2f5);
+  color: var(--txt, #24292f);
+  font-weight: 600;
+}
+.af-cat--bug { background: #fdecec; color: #b42318; }
+.af-cat--feature { background: var(--accent-light, #E6F1FB); color: var(--accent, #185FA5); }
+.af-cat--praise { background: #e8f5ec; color: #1a7f37; }
+.af-id { font-variant-numeric: tabular-nums; }
+.af-pub { color: #1a7f37; font-weight: 600; }
+.af-content {
+  margin: 8px 0;
+  font-size: 14px;
+  line-height: 1.75;
+  color: var(--txt, #24292f);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.af-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--txt2, #57606a);
+}
+.af-actions { display: inline-flex; align-items: center; gap: 8px; }
+.af-btn {
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 7px;
+  background: var(--bg, #fff);
+  color: var(--txt, #24292f);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.af-btn:hover:not([disabled]) { border-color: var(--brand-2, #EF9F27); }
+.af-btn--on { background: var(--brand-2, #EF9F27); border-color: var(--brand-2, #EF9F27); color: #1a1d23; }
+.af-btn[disabled] { opacity: .5; cursor: not-allowed; }
+.af-status { height: 30px; width: auto; padding: 0 6px; font-size: 12.5px; }
+
 /* ── 响应式(≤480px 手机) ──────────────────────────────────────────────
    字号顶到 16px:iOS Safari 对 font-size < 16px 的输入框会在聚焦时自动
    放大整个页面,而且不会自己缩回去(同 auth.css 里的处理)。 */
 @media (max-width: 480px) {
   .fb-textarea { font-size: 16px; }
   .fb-fab { right: 14px; bottom: 14px; }
+  .fb-cats { flex-wrap: wrap; }
+  .fb-cat { flex: 1 1 40%; }
+  .tm-write { height: 44px; width: 100%; }
 }

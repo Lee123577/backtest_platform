@@ -5,6 +5,8 @@
 POST /api/feedback           — 提交反馈(匿名可提;登录则带 user_id)，落库后邮件通知管理员
 GET  /api/feedback/list      — 【仅管理员】查看反馈列表(运营三角)
 POST /api/feedback/{id}/status {status}  — 【仅管理员】标记处理状态
+POST /api/feedback/{id}/feature {featured} — 【仅管理员】精选到评价墙(用户须已同意公开)
+GET  /api/feedback/testimonials  — 评价墙(公开;只出同意公开且被精选的)
 """
 from __future__ import annotations
 
@@ -35,10 +37,16 @@ class FeedbackReq(BaseModel):
     content: str
     contact: Optional[str] = None
     page: Optional[str] = None
+    public_ok: bool = False
+    display_name: Optional[str] = None
 
 
 class StatusReq(BaseModel):
     status: str
+
+
+class FeatureReq(BaseModel):
+    featured: bool
 
 
 @router.post("")
@@ -54,6 +62,8 @@ def submit(req: FeedbackReq, request: Request):
             user_agent=request.headers.get("user-agent"),
             page=req.page,
             user=user,
+            public_ok=req.public_ok,
+            display_name=req.display_name,
         )
     except service.FeedbackRateLimitError as e:
         raise HTTPException(429, str(e))
@@ -83,3 +93,19 @@ def update_status(
     if affected == 0:
         raise HTTPException(404, "反馈不存在")
     return {"ok": True}
+
+
+@router.post("/{feedback_id}/feature")
+def update_featured(
+    feedback_id: int,
+    req: FeatureReq,
+    _admin: dict = Depends(require_admin),
+):
+    if not service.set_featured(feedback_id, req.featured):
+        raise HTTPException(400, "这条反馈不存在，或提交人没有同意公开展示")
+    return {"ok": True}
+
+
+@router.get("/testimonials")
+def testimonials(limit: int = 6):
+    return {"items": service.testimonials(max(1, min(limit, 12)))}

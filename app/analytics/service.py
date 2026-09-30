@@ -32,6 +32,7 @@ EVENTS: Dict[str, str] = {
     "subscribe_activated": "开通会员",
     "share_click":         "点击分享",
     "demo_click":          "点首屏示例",
+    "strategy_try":        "策略页去回测",
     "lifetime_claimed":    "领取终生会员",
 }
 

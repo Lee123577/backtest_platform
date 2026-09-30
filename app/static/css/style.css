@@ -397,6 +397,15 @@ input[type=text]:focus, input[type=date]:focus, input[type=number]:focus, select
   overflow: hidden;
   min-height: 2.8em;
 }
+/* 卡片里通往策略专题页的出口:看不懂规则的人点这里,而不是瞎试参数 */
+.sc-learn {
+  align-self: flex-start;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: none;
+}
+.sc-learn:hover { text-decoration: underline; }
 .sc-add { margin-top: 8px; font-size: 12px; padding: 4px 10px; }
 .sc-btn-row { display: flex; align-items: center; gap: 6px; }
 .sc-btn-row .sc-add-primary { flex: 1; white-space: nowrap; font-weight: 700; }

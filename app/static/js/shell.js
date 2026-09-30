@@ -22,6 +22,7 @@
     { title: "策略工具", items: [
       { label: "单股策略", href: "/", ico: "📉" },
       { label: "选股策略", href: "/?mode=portfolio", ico: "🧮" },
+      { label: "策略百科", href: "/strategy", ico: "📚" },
       { label: "实盘观察", href: "/paper_trading", ico: "💹" },
       { label: "自选盯盘", href: "/watchlist", ico: "⭐" },
     ]},
@@ -48,6 +49,8 @@
     var portfolio = qs.get("mode") === "portfolio";
     if (href === "/") return path === "/" && !portfolio;
     if (href === "/?mode=portfolio") return path === "/" && portfolio;
+    // 策略百科:索引页和每个策略专题页(/strategy/xxx)都算在它名下
+    if (href === "/strategy") return path === "/strategy" || path.indexOf("/strategy/") === 0;
     return path === href.replace(/\/$/, "");
   }
 

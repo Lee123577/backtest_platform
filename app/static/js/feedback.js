@@ -16,12 +16,14 @@
   "use strict";
 
   var CATS = [
-    { code: "bug", label: "问题反馈" },
-    { code: "feature", label: "功能建议" },
-    { code: "other", label: "其他" },
+    { code: "bug", label: "问题反馈", ph: "请描述你遇到的问题…" },
+    { code: "feature", label: "功能建议", ph: "你希望这里多一个什么功能？" },
+    { code: "praise", label: "使用评价", ph: "用下来感觉怎么样？哪一点对你最有用？" },
+    { code: "other", label: "其他", ph: "想说什么都可以…" },
   ];
 
   var mask = null, textarea, contactInput, submitBtn, msgEl, catEls;
+  var praiseBox, publicCb, nameWrap, nameInput;
   var category = "bug";
 
   function postJson(url, body) {
@@ -60,6 +62,15 @@
       '  </div>' +
       '  <div class="fb-cats"></div>' +
       '  <textarea class="fb-textarea" id="fbContent" maxlength="2000" placeholder="请描述你遇到的问题或期待的功能…"></textarea>' +
+      // 评价墙的素材只从这里来:默认不勾,公开展示必须是用户自己的动作
+      '  <div class="fb-praise" id="fbPraise" hidden>' +
+      '    <label class="fb-consent"><input type="checkbox" id="fbPublic">' +
+      '      <span>同意在网站上公开展示这条评价' +
+      '      <small>只展示正文和你填写的署名，不展示联系方式；经人工挑选后才会出现</small></span></label>' +
+      '    <div class="sp-field" id="fbNameWrap" hidden>' +
+      '      <input id="fbName" maxlength="20" placeholder="署名(选填，如：上海 · 量化新手；不填显示为匿名用户)">' +
+      '    </div>' +
+      '  </div>' +
       '  <div class="sp-field">' +
       '    <input id="fbContact" maxlength="100" placeholder="联系方式(选填，手机/微信/邮箱，方便回复你)">' +
       '  </div>' +
@@ -79,17 +90,19 @@
     }).join("");
     catEls = catWrap.querySelectorAll(".fb-cat");
     catEls.forEach(function (el) {
-      el.addEventListener("click", function () {
-        category = el.getAttribute("data-cat");
-        catEls.forEach(function (x) { x.classList.remove("active"); });
-        el.classList.add("active");
-      });
+      el.addEventListener("click", function () { setCategory(el.getAttribute("data-cat")); });
     });
 
     textarea = mask.querySelector("#fbContent");
     contactInput = mask.querySelector("#fbContact");
     submitBtn = mask.querySelector("#fbSubmit");
     msgEl = mask.querySelector("#fbMsg");
+    praiseBox = mask.querySelector("#fbPraise");
+    publicCb = mask.querySelector("#fbPublic");
+    nameWrap = mask.querySelector("#fbNameWrap");
+    nameInput = mask.querySelector("#fbName");
+    // 署名只在同意公开时才有意义,不勾就不让人白填
+    publicCb.addEventListener("change", function () { nameWrap.hidden = !publicCb.checked; });
 
     mask.querySelector("#fbCancel").addEventListener("click", close);
     mask.querySelector("#fbClose").addEventListener("click", close);
@@ -102,8 +115,22 @@
     msgEl.className = "sp-msg" + (ok ? " ok" : "");
   }
 
-  function open() {
+  function setCategory(code) {
+    var cat = null;
+    CATS.forEach(function (c) { if (c.code === code) cat = c; });
+    if (!cat) return;
+    category = code;
+    catEls.forEach(function (x) {
+      x.classList.toggle("active", x.getAttribute("data-cat") === code);
+    });
+    textarea.placeholder = cat.ph;
+    praiseBox.hidden = code !== "praise";
+  }
+
+  // cat 可选:评价墙的「写一句你的评价」、新手引导邮件里的链接会直接打开「使用评价」
+  function open(cat) {
     buildModal();
+    if (typeof cat === "string") setCategory(cat);
     setMsg("");
     submitBtn.disabled = false;
     submitBtn.textContent = "提交";
@@ -120,16 +147,22 @@
     if (!content) { setMsg("请先填写反馈内容"); return; }
     submitBtn.disabled = true;
     submitBtn.textContent = "提交中…";
+    var isPublic = category === "praise" && publicCb.checked;
     postJson("/api/feedback", {
       category: category,
       content: content,
       contact: (contactInput.value || "").trim() || null,
       page: currentPage(),
+      public_ok: isPublic,
+      display_name: isPublic ? ((nameInput.value || "").trim() || null) : null,
     })
       .then(function () {
-        setMsg("已收到，感谢你的反馈！", true);
+        setMsg(category === "praise" ? "收到了，谢谢你愿意花时间写下来！" : "已收到，感谢你的反馈！", true);
         textarea.value = "";
         contactInput.value = "";
+        publicCb.checked = false;
+        nameInput.value = "";
+        nameWrap.hidden = true;
         setTimeout(close, 1200);
       })
       .catch(function (e) {
@@ -151,10 +184,30 @@
     document.body.appendChild(fab);
   }
 
+  // 页面上任何带 data-feedback 的按钮都能打开弹窗并预选分类(评价墙用)
+  document.addEventListener("click", function (e) {
+    var t = e.target.closest ? e.target.closest("[data-feedback]") : null;
+    if (t) { e.preventDefault(); open(t.getAttribute("data-feedback")); }
+  });
+
+  // 从邮件链接 /?feedback=praise 过来:落地就打开对应分类的弹窗,
+  // 然后把参数从地址栏摘掉(留着的话刷新一次又弹一次)
+  function openFromUrl() {
+    var qs = new URLSearchParams(location.search);
+    var cat = qs.get("feedback");
+    if (!cat) return;
+    open(cat);
+    qs.delete("feedback");
+    var rest = qs.toString();
+    history.replaceState(null, "", location.pathname + (rest ? "?" + rest : "") + location.hash);
+  }
+
+  function boot() { mountFab(); openFromUrl(); }
+
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", mountFab);
+    document.addEventListener("DOMContentLoaded", boot);
   } else {
-    mountFab();
+    boot();
   }
 
   window.SPFeedback = { open: open };

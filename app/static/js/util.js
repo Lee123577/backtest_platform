@@ -68,6 +68,9 @@ var SPTrack = (function () {
       fetch("/api/event", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        // keepalive:点了链接马上跳页的事件(策略页「去回测」)也能发出去,
+        // 否则页面一卸载这个请求就被浏览器取消了
+        keepalive: true,
         // path 必须前端给:服务端拿到的 request.url.path 是 /api/event 本身,
         // 那一列标着"触发页面"却没有一行是页面
         body: JSON.stringify({

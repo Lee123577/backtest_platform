@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27><text y=%27.9em%27 font-size=%2790%27>%F0%9F%95%90</text></svg>">
+  <!-- title / description / canonical / OG / JSON-LD 由服务端按策略注入,
+       见 app/strategy_pages/render.py 的 head_html()。 -->
+  <!--ST_HEAD-->
+  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="stylesheet" href="/static/css/strategy.css">
+  <link rel="stylesheet" href="/static/css/stock_suggest.css">
+  <link rel="stylesheet" href="/static/css/auth.css">
+  <link rel="stylesheet" href="/static/css/feedback.css">
+  <link rel="stylesheet" href="/static/css/shell.css">
+</head>
+<body class="spx-shell">
+
+<header>
+  <h1>📈 A股量化回测平台</h1>
+  <nav class="header-nav">
+    <a class="nav-btn" href="/" style="text-decoration:none;display:inline-flex;align-items:center;">单股策略</a>
+    <a class="nav-btn" href="/strategy" style="text-decoration:none;display:inline-flex;align-items:center;">策略百科</a>
+  </nav>
+</header>
+
+<main class="st-page">
+  <!-- 身份 + 一句话结论 + 试跑入口 -->
+  <!--ST_HERO-->
+
+  <!-- 规则在前、实测在后:先让人知道它在做什么,再看它做得怎么样 -->
+  <!--ST_RULES-->
+  <!--ST_STATS-->
+
+  <!-- 参数表本身就是一个 GET 到首页的表单,没有 JS 也能用 -->
+  <!--ST_PARAMS-->
+
+  <!--ST_FAQ-->
+  <!--ST_OTHERS-->
+
+  <p class="st-disclaimer">
+    本页讲的是策略规则与历史回测结果，只是对历史数据的统计，
+    <strong>不构成任何投资建议</strong>。回测不代表未来收益，股市有风险，决策请独立判断。
+  </p>
+</main>
+
+<!--FOOTER-->
+
+<script src="/static/js/util.js"></script>
+<script src="/static/js/auth.js"></script>
+<script src="/static/js/feedback.js"></script>
+<script src="/static/js/stock_suggest.js"></script>
+<script src="/static/js/strategy.js"></script>
+<script src="/static/js/shell.js"></script>
+</body>
+</html>

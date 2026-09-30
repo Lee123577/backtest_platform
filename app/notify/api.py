@@ -44,6 +44,7 @@ class PrefsReq(BaseModel):
     watchlist_alert: Optional[bool] = None
     daily_review: Optional[bool] = None
     ai_hotsector: Optional[bool] = None
+    onboarding: Optional[bool] = None
 
 
 @router.get("/prefs")

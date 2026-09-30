@@ -22,6 +22,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from ..daily_review.render import md_to_html
+from ..strategies.registry import STRATEGY_REGISTRY
 
 logger = logging.getLogger(__name__)
 
@@ -276,9 +277,16 @@ def backtest_html(context: Dict[str, Any]) -> str:
         cls = _updown_class(ret)
         # 交易笔数太少时胜率没有统计意义,提示词里要求模型说明,页面上也标出来
         thin = ' <span class="sr-thin" title="交易笔数偏少，胜率的统计意义有限">样本少</span>' if trades < 5 else ""
+        # 策略名链到它的专题页:读者看到"布林带 +35%"最自然的下一个问题就是
+        # "布林带是什么规则",答案在 /strategy/bollinger。注册表里没有的(老快照
+        # 里已下线的策略)只出文字,不给一个 404 链接。
+        sid = str(s.get("strategy_id") or "")
+        sname = _esc(s.get("strategy_name") or sid)
+        name_html = (f'<a href="/strategy/{_esc(sid)}">{sname}</a>'
+                     if sid in STRATEGY_REGISTRY else sname)
         rows.append(
             '<tr>'
-            f'<td class="sr-bt-name">{_esc(s.get("strategy_name") or s.get("strategy_id"))}</td>'
+            f'<td class="sr-bt-name">{name_html}</td>'
             '<td class="sr-bt-bar">'
             f'<span class="sr-bt-fill {cls}" style="width:{width:.1f}%"></span>'
             "</td>"
