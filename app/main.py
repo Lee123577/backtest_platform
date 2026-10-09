@@ -206,6 +206,11 @@ def _rate_limit_backtest(request: Request) -> None:
         )
 
 
+# 爬虫拦截:挂在访问日志与 GZip 之外、安全响应头之内 —— 被拦的请求带着安全头
+# 回去,但不进访问日志(不再给库添一行)。规则与开关见 app/bot_guard.py。
+# Starlette 的 add_middleware 是"后加的在外层",顺序不能随手挪。
+from .bot_guard import BotGuardMiddleware, guard as _bot_guard  # noqa: E402
+app.add_middleware(BotGuardMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 
 # 今日数据入库状态 API
@@ -1147,6 +1152,13 @@ def _sitemap_strategy_urls() -> str:
     )
 
 
+_ROBOTS_DENY = (
+    "AhrefsBot", "SemrushBot", "MJ12bot", "DotBot", "BLEXBot", "DataForSeoBot",
+    "GPTBot", "CCBot", "ClaudeBot", "anthropic-ai", "PerplexityBot", "Amazonbot",
+    "Bytespider",
+)
+
+
 @app.get("/robots.txt", include_in_schema=False)
 async def robots_txt():
     body = (
@@ -1157,7 +1169,12 @@ async def robots_txt():
         # 页面模板的裸文件(/static/daily_review.html 等)与正式路由内容重复,
         # 且没有 canonical —— 挡掉避免重复收录。CSS/JS 仍允许抓取(渲染需要)。
         "Disallow: /static/*.html$\n"
-        f"Sitemap: {_SITE_ORIGIN}/sitemap.xml\n"
+        "\n"
+        # 守规矩的 SEO 外链 / AI 语料爬虫在这里就请走;不守规矩的由 bot_guard 按 UA 拦。
+        # 名单与 bot_guard.BAD_UA_PATTERNS 里那两组保持一致(Bytespider 例外:
+        # 它是头条搜索的爬虫,只在这里请走 + 按"声明的爬虫"限速,不硬拦)
+        + "".join(f"User-agent: {ua}\nDisallow: /\n\n" for ua in _ROBOTS_DENY)
+        + f"Sitemap: {_SITE_ORIGIN}/sitemap.xml\n"
     )
     return Response(body, media_type="text/plain")
 
@@ -1630,6 +1647,26 @@ def api_admin_me(request: Request):
     一个布尔值。想知道自己是不是管理员的人,登录一下就知道了。
     """
     return {"is_admin": get_admin(request) is not None}
+
+
+class UnbanReq(BaseModel):
+    ip: str = Field(..., min_length=2, max_length=64)
+
+
+@app.get("/api/admin/bot_guard")
+def api_admin_bot_guard(_admin: dict = Depends(require_admin)):
+    """爬虫拦截的运行状态:模式、按原因计数、当前封禁、最近拦截记录(进程内存)。"""
+    return _bot_guard.snapshot()
+
+
+@app.post("/api/admin/bot_guard/unban")
+def api_admin_bot_guard_unban(
+    req: UnbanReq,
+    _admin: dict = Depends(require_admin),
+    _csrf: None = Depends(reject_cross_site_write),
+):
+    """误封兜底:手动解封一个 IP(同时清掉它的页面计数,免得下一个请求又封回去)。"""
+    return {"ok": _bot_guard.unban(req.ip.strip())}
 
 
 # ── 旧分组：paper trading equity ──────────────────────────────────────────────

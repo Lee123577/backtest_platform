@@ -131,6 +131,17 @@
 - 管理员 = 登录邮箱在 `ADMIN_EMAILS` 里的账号,名单放 .env 不放库(拿到库口令 ≠ 拿到管理权)。曾用 IP 白名单,但家宽 IP 会变、IP 是位置不是身份,已废弃(`paper_admin_ip` 随之移除)
 - 写接口统一过同源检查(`app/csrf.py`),敏感端点各自叠滑动窗口限流(`app/ratelimit.py`)
 - 全局安全响应头(CSP/nosniff/X-Frame-Options 等);`TRUSTED_PROXIES` 配可信反代,防 `X-Forwarded-For` 伪造
+- **爬虫拦截(`app/bot_guard.py`)**:访问日志里大多数"访客"是伪装成 Chrome、不跑 JS 的无头抓取。
+  中间件挂在访问日志外层(被拦的请求不再写库),四层规则:
+  1. 脚本库 / 无头浏览器 / SEO 外链爬虫 / AI 语料爬虫 / 空 UA → 403
+  2. 自称 Googlebot / Bingbot / Baiduspider / YandexBot / Sogou / Applebot 的做反向 DNS + 正向确认,
+     对不上 → 403;**验证通过的搜索引擎永远放行**(结果缓存一天)
+  3. 同一 IP 10 分钟 ≥15 个页面、但 JS 信号(`/api/event` 埋点、`/api/auth/me`)不到页面数 10% → 封 1 小时
+  4. 同一 IP 5 分钟 >120 个页面且 JS 不到一半 → 封 15 分钟(JS 正常的共享出口要到 5 倍才封)
+
+  自称爬虫但无法验证的(链接预览、360、头条)只限速 30 页/分。本机/内网 IP、`/unsubscribe`、`/robots.txt` 豁免。
+  `BOT_GUARD=block|log|off` 切换;运维页「爬虫拦截」面板看计数、封禁名单、最近拦截,可手动解封。
+  状态在进程内存,重启清零。robots.txt 同时对守规矩的 SEO / AI 爬虫 `Disallow: /`
 
 ---
 
@@ -168,6 +179,7 @@ MYSQL_DATABASE=back_test
 | `DB_MAX_CONNECTIONS` | 50 | 连接池上限 |
 | `DB_BORROW_TIMEOUT` | 30 | 借连接超时(秒) |
 | `TRUSTED_PROXIES` | (空) | 可信反代 IP/CIDR,逗号分隔。空 = 一律忽略代理头 |
+| `BOT_GUARD` | `block` | 爬虫拦截:`block` 拦截 / `log` 只记录不拦(上线观察期用)/ `off` 关闭 |
 | `ADMIN_EMAILS` | (空) | 管理员登录邮箱,逗号分隔。**留空 = 全站没有管理员**(管理接口一律 403,有意为之的安全默认) |
 | `LLM_PROVIDER` | `deepseek` | AI 供应商档案名:`deepseek` / `zhipu` / `custom`。三个 AI 功能共用(见 `app/llm_client.py`) |
 | `DEEPSEEK_API_KEY` | (空) | DeepSeek 的 Key(`LLM_PROVIDER=deepseek` 时用) |
@@ -564,6 +576,8 @@ TRUSTED_PROXIES=127.0.0.1,10.0.0.0/8
 ```
 
 否则 `X-Forwarded-For` 头可被任意客户端伪造:客户端 IP 一律按直连地址算,限流、IP 配额和访问日志会把反代后面的所有访客记成同一个 IP(管理判定不受影响,那已经按登录账号走了)。
+
+爬虫拦截同样按客户端 IP 判定:没配的话所有人都显示成反代的 127.0.0.1,而本机地址是豁免的 —— 等于拦截整个失效(只是不拦,不会误封)。前面套了 CDN 的,要把 CDN 回源 IP 段也加进来,否则所有人会显示成少数几个 CDN 节点 IP,拦截会按"共享出口"处理、明显变松。
 
 ### 重启 + 查日志
 

@@ -290,6 +290,30 @@
 .af-btn[disabled] { opacity: .5; cursor: not-allowed; }
 .af-status { height: 30px; width: auto; padding: 0 6px; font-size: 12.5px; }
 
+/* ── 运维页 · 爬虫拦截面板(bot_guard_admin.js) ───────────────────────── */
+.bg-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.bg-chip {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #fdecec;
+  color: #b42318;
+  font-size: 12.5px;
+}
+.bg-chip b { margin-left: 2px; font-variant-numeric: tabular-nums; }
+.bg-chip--ok { background: #e8f5ec; color: #1a7f37; }
+.bg-sub { margin: 14px 0 6px; font-size: 13px; font-weight: 700; color: var(--txt2, #57606a); }
+.bg-empty { font-size: 12.5px; color: var(--txt2, #57606a); }
+.bg-scroll { max-height: 360px; overflow: auto; }
+.bg-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.bg-table th, .bg-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid rgba(128, 128, 128, .14);
+  text-align: left;
+  white-space: nowrap;
+}
+.bg-table th { color: var(--txt2, #57606a); font-weight: 600; }
+.bg-ua { max-width: 360px; overflow: hidden; text-overflow: ellipsis; color: var(--txt2, #57606a); }
+
 /* ── 响应式(≤480px 手机) ──────────────────────────────────────────────
    字号顶到 16px:iOS Safari 对 font-size < 16px 的输入框会在聚焦时自动
    放大整个页面,而且不会自己缩回去(同 auth.css 里的处理)。 */
