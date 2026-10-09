@@ -287,6 +287,18 @@
     <div id="afList"><div class="no-data">加载中…</div></div>
   </div>
 
+  <!-- ══════════════ 爬虫拦截 ══════════════
+       app/bot_guard.py 的运行状态(进程内存,重启清零)。误封了在这里解封。
+       逻辑在 bot_guard_admin.js,接口 /api/admin/bot_guard(仅管理员)。 -->
+  <div class="panel">
+    <div class="panel-title">
+      爬虫拦截
+      <span class="tip-badge" id="bgMode">—</span>
+      <button class="rerun-btn" id="bgRefresh" style="margin-left:auto">刷新</button>
+    </div>
+    <div id="bgBody"><div class="no-data">加载中…</div></div>
+  </div>
+
   <div class="panel">
     <div class="panel-title">
       定时任务总览
@@ -337,6 +349,7 @@
 <script src="/static/js/util.js"></script>
 <script src="/static/js/tasks.js"></script>
 <script src="/static/js/admin_feedback.js"></script>
+<script src="/static/js/bot_guard_admin.js"></script>
 <script src="/static/js/feedback.js"></script>
 <script src="/static/js/auth.js"></script>
 <script src="/static/js/shell.js"></script>
