@@ -271,6 +271,10 @@ app.include_router(analytics_router)
 from .share.api import router as share_router  # noqa: E402
 app.include_router(share_router)
 
+# 讨论区(发帖需登录;弹幕素材公开)
+from .discuss.api import router as discuss_router  # noqa: E402
+app.include_router(discuss_router)
+
 # 邮件通知：偏好开关(需登录)与退订页(公开)。退订必须独立于登录和同源闸,
 # 详见 app/notify/api.py 开头 —— 所以这里是两个 router，不是一个。
 from .notify.api import (  # noqa: E402
@@ -628,6 +632,11 @@ async def page_dashboard(request: Request):
 async def page_my_board(request: Request):
     # mb-footer 参与看板的卡片布局(页脚不能被浮动卡片顶掉)
     return _html(request, "my_board.html", footer=_footer(extra_class="mb-footer"))
+
+
+@app.get("/discuss", include_in_schema=False)
+async def page_discuss(request: Request):
+    return _html(request, "discuss.html")
 
 
 @app.get("/legal", include_in_schema=False)
@@ -1080,6 +1089,7 @@ _SITEMAP_PAGES = [
     ("/ai_hotsector", "daily", "0.7"),
     ("/daily_review", "daily", "0.7"),
     ("/strategy", "weekly", "0.7"),
+    ("/discuss", "daily", "0.5"),
     ("/watchlist", "daily", "0.6"),
     ("/my_board", "weekly", "0.5"),
     ("/subscribe", "weekly", "0.5"),

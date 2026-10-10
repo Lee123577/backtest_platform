@@ -13,6 +13,7 @@
     { title: "概览", items: [
       { label: "仪表盘", href: "/dashboard", ico: "🏠" },
       { label: "我的数据看板", href: "/my_board", ico: "📊" },
+      { label: "讨论区", href: "/discuss", ico: "💬" },
     ]},
     { title: "行情研究", items: [
       { label: "每日复盘", href: "/daily_review", ico: "📈" },

@@ -1,0 +1,269 @@
+/* 讨论区 /discuss
+   ===============
+   配色沿用 style.css 变量:钴蓝主色、琥珀 CTA。弹幕在首屏上方的舞台里横飞,
+   舞台和标题区上下分开,弹幕不压正文。 */
+
+.dc-page { gap: 16px; }
+
+.dc-card {
+  padding: 18px 22px;
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 12px;
+  background: var(--bg, #fff);
+  box-shadow: 0 1px 4px rgba(27, 31, 36, .05);
+}
+
+.dc-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 0 16px;
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 8px;
+  background: var(--bg, #fff);
+  color: var(--txt, #24292f);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 120ms ease-out, background-color 120ms ease-out;
+}
+.dc-btn:hover:not([disabled]) { border-color: var(--accent, #185FA5); color: var(--accent, #185FA5); }
+.dc-btn[disabled] { opacity: .55; cursor: default; }
+.dc-btn--primary { background: var(--brand-2, #EF9F27); border-color: var(--brand-2, #EF9F27); color: #1a1d23; }
+.dc-btn--primary:hover:not([disabled]) { background: #e0921c; border-color: #e0921c; color: #1a1d23; }
+.dc-btn:focus-visible, .dc-tab:focus-visible, .dc-act:focus-visible, .dc-input:focus-visible {
+  outline: 2px solid var(--accent, #185FA5);
+  outline-offset: 2px;
+}
+
+/* ── 首屏 + 弹幕舞台 ─────────────────────────────────────────────────── */
+
+.dc-hero {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 14px;
+  background:
+    radial-gradient(900px 260px at 0% 0%, rgba(var(--accent-rgb, 24, 95, 165), .10), transparent 60%),
+    radial-gradient(600px 220px at 100% 100%, rgba(var(--brand-2-rgb, 239, 159, 39), .12), transparent 60%),
+    var(--bg, #fff);
+  box-shadow: 0 1px 4px rgba(27, 31, 36, .06);
+}
+/* 4 条弹道 × 34px;播完后舞台收起,首屏回到普通高度 */
+.dc-stage {
+  position: relative;
+  height: 148px;
+  pointer-events: none;
+  transition: height 600ms ease, opacity 600ms ease;
+}
+.dc-stage.is-done, .dc-stage.is-off { height: 12px; opacity: 0; }
+.dc-dm {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(128, 128, 128, .18);
+  background: rgba(255, 255, 255, .92);
+  box-shadow: 0 2px 8px rgba(27, 31, 36, .06);
+  color: var(--txt, #24292f);
+  font-size: 13.5px;
+  line-height: 1.5;
+  white-space: nowrap;
+  will-change: transform;
+}
+.dc-dm--official {
+  border-color: rgba(var(--accent-rgb, 24, 95, 165), .25);
+  background: rgba(230, 241, 251, .95);
+  color: var(--accent-dark, #0C447C);
+}
+.dc-dm--official::before {
+  content: "官方";
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--accent, #185FA5);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 700;
+}
+.dc-dm--mine {
+  border-color: var(--brand-2, #EF9F27);
+  background: rgba(250, 238, 218, .97);
+  font-weight: 600;
+}
+
+.dc-hero-inner { position: relative; padding: 0 26px 20px; }
+.dc-title {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 800;
+  color: var(--txt, #24292f);
+}
+.dc-sub { margin: 6px 0 0; font-size: 14.5px; line-height: 1.75; color: var(--txt2, #57606a); }
+.dc-hero-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.dc-rules { font-size: 12.5px; color: var(--txt2, #57606a); }
+.dc-dm-toggle {
+  padding: 3px 10px;
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 999px;
+  background: var(--bg, #fff);
+  color: var(--txt2, #57606a);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.dc-dm-toggle:hover { color: var(--accent, #185FA5); border-color: var(--accent, #185FA5); }
+
+/* ── 发帖框 ───────────────────────────────────────────────────────────── */
+
+.dc-composer-login {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 14px;
+  color: var(--txt2, #57606a);
+}
+.dc-composer-login[hidden], .dc-form[hidden] { display: none; }
+.dc-form { display: flex; gap: 12px; align-items: flex-start; }
+.dc-me { flex: none; }
+.dc-form-main { flex: 1; min-width: 0; }
+.dc-input {
+  width: 100%;
+  min-height: 76px;
+  padding: 10px 12px;
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 10px;
+  background: var(--bg2, #f6f8fa);
+  color: var(--txt, #24292f);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.7;
+  resize: vertical;
+  transition: border-color 120ms ease-out, background-color 120ms ease-out;
+}
+.dc-input:focus { outline: none; background: var(--bg, #fff); border-color: var(--accent, #185FA5); }
+.dc-form-bar { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.dc-count { font-size: 12px; color: var(--txt2, #57606a); font-variant-numeric: tabular-nums; }
+.dc-msg { flex: 1; font-size: 12.5px; color: var(--red, #cf222e); }
+.dc-msg.ok { color: var(--green, #1a7f37); }
+
+/* ── 列表 ─────────────────────────────────────────────────────────────── */
+
+.dc-list-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.dc-tabs { display: inline-flex; padding: 3px; border-radius: 9px; background: var(--bg3, #f0f2f5); }
+.dc-tab {
+  padding: 5px 16px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--txt2, #57606a);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.dc-tab.active { background: var(--bg, #fff); color: var(--txt, #24292f); box-shadow: 0 1px 2px rgba(27, 31, 36, .1); }
+
+.dc-post { display: flex; gap: 12px; padding: 16px 0; border-bottom: 1px solid rgba(128, 128, 128, .14); }
+.dc-post:last-child { border-bottom: none; }
+.dc-post--hidden { opacity: .5; }
+.dc-body { flex: 1; min-width: 0; }
+.dc-head { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; font-size: 13px; }
+.dc-name { font-weight: 700; color: var(--txt, #24292f); }
+.dc-badge {
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.6;
+}
+.dc-badge--official { background: var(--accent, #185FA5); color: #fff; }
+.dc-badge--hidden { background: #fdecec; color: #b42318; }
+.dc-time { color: var(--txt2, #57606a); font-size: 12px; }
+.dc-content {
+  margin: 6px 0 0;
+  font-size: 14.5px;
+  line-height: 1.8;
+  color: var(--txt, #24292f);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.dc-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.dc-act {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--txt2, #57606a);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.dc-act:hover { background: var(--bg3, #f0f2f5); color: var(--txt, #24292f); }
+.dc-act.is-on { color: var(--up, #cf222e); font-weight: 600; }
+.dc-act--danger:hover { color: var(--red, #cf222e); }
+
+.dc-avatar {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--accent-light, #E6F1FB);
+  color: var(--accent, #185FA5);
+  font-size: 15px;
+  font-weight: 700;
+}
+.dc-avatar--sm { width: 28px; height: 28px; font-size: 12px; }
+.dc-avatar--official { background: var(--accent, #185FA5); color: #fff; }
+
+/* 回复:一层,缩进在主帖正文下面 */
+.dc-replies {
+  margin-top: 10px;
+  padding: 4px 12px;
+  border-radius: 10px;
+  background: var(--bg2, #f6f8fa);
+}
+.dc-replies:empty { display: none; }
+.dc-replies .dc-post { padding: 10px 0; gap: 10px; }
+.dc-replies .dc-content { font-size: 13.5px; margin-top: 2px; }
+.dc-reply-form { display: flex; gap: 8px; margin-top: 8px; }
+.dc-reply-form[hidden] { display: none; }
+.dc-reply-form .dc-input { min-height: 38px; height: 38px; padding: 7px 10px; resize: none; }
+
+.dc-empty { padding: 30px 0; text-align: center; font-size: 13.5px; color: var(--txt2, #57606a); }
+.dc-more-wrap { display: flex; justify-content: center; margin-top: 8px; }
+.dc-disclaimer { margin: 0; padding: 0 4px; font-size: 12px; line-height: 1.8; color: var(--txt2, #57606a); }
+
+@media (max-width: 600px) {
+  .dc-card { padding: 14px 14px; }
+  .dc-hero-inner { padding: 0 16px 16px; }
+  .dc-title { font-size: 22px; }
+  .dc-stage { height: 120px; }
+  .dc-dm { font-size: 12.5px; }
+  .dc-me { display: none; }
+  .dc-btn { min-height: 44px; }
+  .dc-input { font-size: 16px; }   /* iOS 小于 16px 聚焦时会放大页面 */
+}
+@media (prefers-reduced-motion: reduce) {
+  .dc-stage { display: none; }
+}

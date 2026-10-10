@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27><text y=%27.9em%27 font-size=%2790%27>%F0%9F%95%90</text></svg>">
+  <title>讨论区 - 收盘 shoupan</title>
+  <meta name="description" content="聊回测结果、策略参数和每日复盘，提功能建议。不荐股、不喊单，只聊规则和数据。">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="收盘 shoupan">
+  <meta property="og:title" content="讨论区 - 收盘 shoupan">
+  <meta property="og:description" content="聊回测结果、策略参数和每日复盘，提功能建议。">
+  <meta property="og:url" content="https://shoupan.asia/discuss">
+  <link rel="canonical" href="https://shoupan.asia/discuss">
+  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="stylesheet" href="/static/css/auth.css">
+  <link rel="stylesheet" href="/static/css/feedback.css">
+  <link rel="stylesheet" href="/static/css/discuss.css">
+  <link rel="stylesheet" href="/static/css/shell.css">
+</head>
+<body class="spx-shell">
+
+<header>
+  <h1>📈 A股量化回测平台</h1>
+  <nav class="header-nav">
+    <a class="nav-btn" href="/" style="text-decoration:none;display:inline-flex;align-items:center;">单股策略</a>
+    <a class="nav-btn active" href="/discuss" style="text-decoration:none;display:inline-flex;align-items:center;">讨论区</a>
+  </nav>
+</header>
+
+<main class="dc-page">
+  <!-- 首屏 + 弹幕舞台:弹幕每次打开页面从头到尾播一遍就停,不循环 -->
+  <section class="dc-hero">
+    <div class="dc-stage" id="dcStage" aria-hidden="true"></div>
+    <div class="dc-hero-inner">
+      <h1 class="dc-title">讨论区</h1>
+      <p class="dc-sub">聊回测结果、策略参数和每日复盘，也欢迎直接提功能建议和 bug。</p>
+      <div class="dc-hero-foot">
+        <span class="dc-rules">📌 不荐股 · 不喊单 · 不发链接和联系方式</span>
+        <button type="button" class="dc-dm-toggle" id="dcDmToggle" hidden>关闭弹幕</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 发帖框:未登录时换成登录引导 -->
+  <section class="dc-card dc-composer" id="dcComposer">
+    <div class="dc-composer-login" id="dcLoginGate">
+      <span>登录后就能发帖、回复和点赞</span>
+      <button type="button" class="dc-btn dc-btn--primary" id="dcLoginBtn">登录 / 注册</button>
+    </div>
+    <form class="dc-form" id="dcForm" hidden>
+      <span class="dc-me" id="dcMe"></span>
+      <div class="dc-form-main">
+        <textarea id="dcInput" class="dc-input" maxlength="500" rows="3"
+                  placeholder="说点什么…（40 字以内的短句会以弹幕飞过一次）"></textarea>
+        <div class="dc-form-bar">
+          <span class="dc-count" id="dcCount">0 / 500</span>
+          <span class="dc-msg" id="dcMsg" role="status"></span>
+          <button type="submit" class="dc-btn dc-btn--primary" id="dcSubmit">发布</button>
+        </div>
+      </div>
+    </form>
+  </section>
+
+  <section class="dc-card">
+    <div class="dc-list-head">
+      <div class="dc-tabs" role="tablist">
+        <button type="button" class="dc-tab active" data-sort="new" role="tab">最新</button>
+        <button type="button" class="dc-tab" data-sort="hot" role="tab">最热</button>
+      </div>
+    </div>
+    <div id="dcList" class="dc-list"><div class="dc-empty">加载中…</div></div>
+    <div class="dc-more-wrap"><button type="button" class="dc-btn" id="dcMore" hidden>加载更多</button></div>
+    <noscript><div class="dc-empty">讨论区需要开启 JavaScript。</div></noscript>
+  </section>
+
+  <p class="dc-disclaimer">
+    讨论区内容由用户发布，仅代表个人观点，<strong>不构成任何投资建议</strong>。
+    荐股、喊单、广告引流的内容会被隐藏。
+  </p>
+</main>
+
+<!--FOOTER-->
+
+<script src="/static/js/util.js"></script>
+<script src="/static/js/auth.js"></script>
+<script src="/static/js/feedback.js"></script>
+<script src="/static/js/discuss.js"></script>
+<script src="/static/js/shell.js"></script>
+</body>
+</html>
