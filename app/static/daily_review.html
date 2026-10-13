@@ -21,10 +21,10 @@
   <h1>📈 A股量化回测平台</h1>
   <nav class="header-nav">
     <a class="nav-btn" href="/" style="text-decoration:none;display:inline-flex;align-items:center;">单股策略</a>
-    <a class="nav-btn" href="/?mode=portfolio" style="text-decoration:none;display:inline-flex;align-items:center;">选股策略</a>
+    <a class="nav-btn" href="/?mode=portfolio" style="text-decoration:none;display:inline-flex;align-items:center;">组合策略</a>
     <a class="nav-btn" href="/cloudmap" style="text-decoration:none;display:inline-flex;align-items:center;">大盘云图</a>
-    <a class="nav-btn" href="/paper_trading" style="text-decoration:none;display:inline-flex;align-items:center;">实盘观察</a>
-    <a class="nav-btn" href="/ai_hotsector" style="text-decoration:none;display:inline-flex;align-items:center;">AI热门板块</a>
+    <a class="nav-btn" href="/paper_trading" style="text-decoration:none;display:inline-flex;align-items:center;">模拟盘观察</a>
+    <a class="nav-btn" href="/ai_hotsector" style="text-decoration:none;display:inline-flex;align-items:center;">AI板块观察</a>
     <button class="nav-btn active">每日复盘</button>
     <a class="nav-btn" href="/watchlist" style="text-decoration:none;display:inline-flex;align-items:center;">自选盯盘</a>    <span id="spAuthSlot" style="display:inline-flex;align-items:center;"></span>
   </nav>
@@ -38,7 +38,7 @@
       AI 每日复盘 <span id="drDate"><!--DR_DATE--></span>
       <span class="tip-badge">仅供研究，不构成投资建议</span>
     </div>
-    <div class="dr-rule-hint">每个交易日收盘数据入库后（约 17:45），AI 基于当日真实指数、涨跌家数、成交额与 AI 选股结算数据自动生成</div>
+    <div class="dr-rule-hint">每个交易日收盘数据入库后（约 17:45），AI 基于当日真实指数、涨跌家数、成交额与 AI 板块观察的模拟结算数据自动生成</div>
     <div class="summary-grid" id="drSummaryGrid">
       <div class="no-data">加载中…</div>
     </div>
@@ -53,9 +53,9 @@
     <div class="dr-next" id="drNext">
       <div class="dr-next-label">接着做点什么</div>
       <div class="dr-next-btns">
-        <a class="dr-next-btn dr-next-btn--primary" href="/ai_hotsector">🔥 看今天的 AI 热门板块</a>
+        <a class="dr-next-btn dr-next-btn--primary" href="/ai_hotsector">🔥 看今天的 AI 板块观察</a>
         <a class="dr-next-btn" href="/">📈 拿策略回测验证一下</a>
-        <a class="dr-next-btn" href="/watchlist">⭐ 建自选，收盘自动盯信号</a>
+        <a class="dr-next-btn" href="/watchlist">⭐ 建自选，收盘自动盯规则</a>
       </div>
     </div>
   </article>

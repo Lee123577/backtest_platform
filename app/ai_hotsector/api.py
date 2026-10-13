@@ -20,8 +20,23 @@ from fastapi import APIRouter
 from ..data.realtime import get_realtime_prices
 from ..json_safe import json_safe as _json_safe
 from . import db
+from .prompts import REASON_BANNED_WORDS
 
 router = APIRouter(prefix="/api/ai_hotsector", tags=["ai_hotsector"])
+
+
+# 只在内部用的字段:模型名属于实现细节;*_raw 是模型原始返回(审计用),里面是没有
+# 经过任何过滤的原文,不能原样公开。
+_PRIVATE_PICK_FIELDS = ("model", "sectors_raw", "stocks_raw")
+
+
+def public_reason(text) -> str:
+    """理由要公开展示。v4 提示词已禁止推荐 / 预测性措辞,但历史批次是旧提示词写的,
+    模型也不保证每次都守规矩 —— 含禁用词的理由整条不出,宁缺勿滥。"""
+    s = str(text or "").strip()
+    if not s or any(w in s for w in REASON_BANNED_WORDS):
+        return ""
+    return s
 
 
 @router.get("/today")
@@ -29,7 +44,11 @@ def today():
     row = db.get_today()
     if row is None:
         return {"pick": None}
-    row.pop("model", None)  # 用的哪家模型属于内部实现,不对外展示
+    for k in _PRIVATE_PICK_FIELDS:
+        row.pop(k, None)
+    for st in row.get("stocks") or []:
+        st["sector_reason"] = public_reason(st.get("sector_reason"))
+        st["stock_reason"] = public_reason(st.get("stock_reason"))
     return {"pick": _json_safe(row)}
 
 

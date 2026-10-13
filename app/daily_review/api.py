@@ -54,6 +54,9 @@ def _row_out(row: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     # 但正文里的股票名链接要查名字索引(5000 多条),没道理搬到浏览器里再做一遍;
     # 更重要的是两边各写一份必然会漂移 —— 首屏(服务端直出)和切换往期(JS 渲染)
     # 之间会出现一篇有链接、一篇没有。前端优先用这份,拿不到才退回自己渲染。
+    # 历史复盘的措辞替换(见 render.public_md),原文与 HTML 两份都要换
+    out["title"] = render.public_md(out.get("title"))
+    out["content_md"] = render.public_md(out.get("content_md"))
     out["content_html"] = render.md_to_html(out.get("content_md"))
     if out.get("status") == "failed":
         # 内部错误细节(DeepSeek 响应片段/DB 报错)不对匿名访客透出
@@ -65,7 +68,7 @@ def _locked_out(row: Dict[str, Any]) -> Dict[str, Any]:
     """付费墙：历史篇对未订阅用户只回标题/日期当钩子，不回正文与数据快照。"""
     return {
         "review_date": _json_safe(row.get("review_date")),
-        "title": row.get("title"),
+        "title": render.public_md(row.get("title")),
         "status": row.get("status"),
         "locked": True,
         "content_md": None,
@@ -108,6 +111,8 @@ def history(response: Response, limit: int = 30):
             raise
         logger.info("daily_review 表未建,按空历史返回: %s", e)
         rows = []
+    for r in rows:
+        r["title"] = render.public_md(r.get("title"))
     return {"history": _json_safe(rows)}
 
 

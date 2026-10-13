@@ -183,9 +183,9 @@ def _review_block(trade_date: _Date) -> Optional[Dict[str, Any]]:
     if not row or row.get("status") != "generated" or not row.get("content_md"):
         return None
     return {
-        "title": row.get("title"),
+        "title": dr_render.public_md(row.get("title")),
         # 只取摘要，全文回站里看：正文是会员内容，不能整篇塞进邮件
-        "summary": dr_render.plain_text(row.get("content_md"), 220),
+        "summary": dr_render.plain_text(dr_render.public_md(row.get("content_md")), 220),
     }
 
 

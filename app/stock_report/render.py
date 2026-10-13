@@ -27,6 +27,10 @@ from ..strategies.registry import STRATEGY_REGISTRY
 logger = logging.getLogger(__name__)
 
 TREND_CLASS = {"看多": "sr-trend-up", "震荡": "sr-trend-flat", "看空": "sr-trend-down"}
+# 页面上不直接显示"看多/看空":这两个词是对未来方向的判断,挂在一只股票的 AI 报告
+# 头部,读起来就是荐股评级。库里和提示词仍用原值(历史报告不用重刷),只在展示时
+# 换成描述**已发生**的技术面状态的说法。
+TREND_LABEL = {"看多": "技术面偏强", "震荡": "技术面中性", "看空": "技术面偏弱"}
 
 
 def _esc(s: Any) -> str:
@@ -137,7 +141,7 @@ def score_html(row: Optional[Dict[str, Any]]) -> str:
     badge = ""
     if trend:
         cls = TREND_CLASS.get(trend, "sr-trend-flat")
-        badge = f'<span class="sr-trend {cls}">{_esc(trend)}</span>'
+        badge = f'<span class="sr-trend {cls}">{_esc(TREND_LABEL.get(trend, trend))}</span>'
 
     reason_html = (
         f'<div class="sr-score-reason">{_esc(reason)}</div>' if reason else ""
@@ -371,7 +375,7 @@ def actions_html(code: str, name: str, has_report: bool) -> str:
         "</div>"
         '<div class="sr-cta-hint">'
         "回测用本站行情库跑真实历史数据，含防过拟合检验；"
-        "盯盘在每个交易日收盘后按你选的策略扫描，命中信号发到邮箱（需登录）。"
+        "盯盘在每个交易日收盘后按你选的策略扫描，策略规则被触发后发到邮箱（需登录）。"
         "</div>"
         "</div>"
     )

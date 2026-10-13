@@ -221,7 +221,7 @@ app.include_router(data_status_router)
 from .cloudmap.api import router as cloudmap_router  # noqa: E402
 app.include_router(cloudmap_router)
 
-# AI 热门板块(DeepSeek 每日选板块+选股，T 日收盘买入/T+1 收盘卖出模拟)
+# AI 板块观察(DeepSeek 每日选板块+选股，T 日收盘买入/T+1 收盘卖出模拟)
 from .ai_hotsector.api import router as ai_hotsector_router  # noqa: E402
 app.include_router(ai_hotsector_router)
 
@@ -396,7 +396,7 @@ def _footer(*, legal_links: bool = True, contact: bool = True,
     if contact:
         parts.append(
             '  <div class="site-footer-contact">\n'
-            '  💡 需要定制策略 / 接入实盘？只提供代码，服务器需自行购买 · '
+            '  💡 需要定制策略回测代码？只提供代码，服务器需自行购买 · '
             '第一单免费（目前限时全免）·\n'
             f'  <a href="mailto:{_CONTACT_EMAIL}">{_CONTACT_EMAIL}</a>\n'
             '  </div>'
@@ -417,7 +417,7 @@ def _footer(*, legal_links: bool = True, contact: bool = True,
 
 # ── 首页首屏证据条(单一事实来源)────────────────────────────────────────────
 # 品牌审核结论(2026-09-14,品析)第 4 节缺口1:首页只说"我很诚实 / 我做了防过拟合"
-# 仍属自述,必须把**可核验的实证**前置——实盘净值天数、个股实测页数、复盘篇数。
+# 仍属自述,必须把**可核验的实证**前置——模拟盘净值天数、个股实测页数、复盘篇数。
 # 数字全部取自本站自己的库,可点进对应页面自行核对;取不到就退回定性表述,
 # 从不编造。缓存 10 分钟:这三个数一天最多变一轮。
 _EVIDENCE_CACHE: Dict[str, Any] = {}
@@ -433,7 +433,7 @@ def _evidence_bar() -> str:
     try:
         equity_days = len(paper_db.get_equity_curve() or [])
     except Exception as e:
-        logger.info("首页证据条取实盘净值天数失败(本次略过): %s", e)
+        logger.info("首页证据条取模拟盘净值天数失败(本次略过): %s", e)
 
     stock_pages = 0
     try:
@@ -451,7 +451,7 @@ def _evidence_bar() -> str:
     if equity_days:
         items.append(
             '<a class="hero-ev-item hero-ev-item--link" href="/paper_trading">'
-            f'<strong>{equity_days}</strong> 个交易日实盘净值记录'
+            f'<strong>{equity_days}</strong> 个交易日模拟盘净值记录'
             '<span class="hero-ev-go">可查看 →</span></a>'
         )
     if stock_pages:
@@ -469,7 +469,7 @@ def _evidence_bar() -> str:
         # 三个数一个都没取到 —— 退回定性表述,不留数字空位也不编数
         html = ('<div class="hero-evidence">'
                 "每只个股都有可查的近两年 9 策略实测记录，"
-                "实盘观察账户每个交易日更新净值曲线。</div>")
+                "模拟盘观察账户每个交易日更新净值曲线。</div>")
     else:
         html = (
             '<div class="hero-evidence">'
@@ -813,7 +813,7 @@ def _dr_history(limit: int = 30) -> str:
     items = []
     for r in rows:
         d = str(r.get("review_date"))
-        t = (r.get("title") or "").strip()
+        t = (_dr_render.public_md(r.get("title")) or "").strip()
         items.append(
             f'<a class="dr-history-item" href="/daily_review/{d}" data-date="{d}">'
             f'<span class="dr-history-date">{d}</span>'
@@ -855,6 +855,11 @@ def _daily_review_page(request: Request, d: Optional[_date]) -> Response:
         and row.get("review_date") == latest.get("review_date")
     )
     locked = row is not None and not is_latest and row.get("status") != "failed"
+    if row is not None:
+        # 历史复盘可能写着"AI 策略表现 / 战绩 / 胜率",公开展示前统一换成合规说法
+        # (见 daily_review/render.public_md)。拷贝一份改,别动进程缓存里的原行。
+        row = {**row, "title": _dr_render.public_md(row.get("title")),
+               "content_md": _dr_render.public_md(row.get("content_md"))}
 
     date_txt = str(row.get("review_date")) if row else ""
     art_title = ""
@@ -1208,7 +1213,7 @@ def sitemap_xml():
     return Response(body, media_type="application/xml")
 
 
-# ── Paper trading (实盘信号观察) ──────────────────────────────────────────────
+# ── Paper trading (模拟盘观察) ──────────────────────────────────────────────
 
 from .json_safe import json_safe as _json_safe  # noqa: E402
 
@@ -1525,7 +1530,7 @@ def api_tasks_runs(
     _admin: dict = Depends(require_admin),
 ):
     """运行明细仅管理员可读:内含 stdout/stderr 尾巴与报错细节，不对外。
-    (/api/tasks/summary 保持公开 —— 实盘观察页要用它显示扫描状态徽章)"""
+    (/api/tasks/summary 保持公开 —— 模拟盘观察页要用它显示扫描状态徽章)"""
     try:
         scheduler_db.ensure_table()
     except Exception:
@@ -1640,7 +1645,7 @@ async def page_tasks_legacy_redirect():
 
 
 # ── 管理员身份 ────────────────────────────────────────────────────────────────
-# 实盘观察 / 定时任务页的所有"写"操作(改策略参数、手动触发任务)以及运维数据
+# 模拟盘观察 / 定时任务页的所有"写"操作(改策略参数、手动触发任务)以及运维数据
 # 的读取,都要求**管理员账号**登录(ADMIN_EMAILS,见 app/auth/admin.py)。
 # 普通读接口(GET)照常公开。
 #

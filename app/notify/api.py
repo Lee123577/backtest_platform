@@ -102,7 +102,7 @@ _P = 'style="margin:0 0 8px;font-size:14px;color:#4b5563;line-height:1.9;"'
 
 def _kind_label(kind: str) -> str:
     if kind in ("daily_review", "ai_hotsector"):
-        return "每日内容推送（复盘 + AI 热门板块）"
+        return "每日内容推送（复盘 + AI 板块观察）"
     return db.KINDS.get(kind, "全部邮件通知")
 
 
