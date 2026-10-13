@@ -33,9 +33,9 @@ logger = logging.getLogger(__name__)
 
 # 通知种类 → 给人看的中文名。新增种类时这里和 email_pref 的列要一起加。
 KINDS: Dict[str, str] = {
-    "watchlist_alert": "自选盯盘信号提醒",
+    "watchlist_alert": "自选盯盘规则提醒",
     "daily_review": "AI 每日复盘",
-    "ai_hotsector": "AI 热门板块",
+    "ai_hotsector": "AI 板块观察",
     "onboarding": "新手引导邮件",
 }
 

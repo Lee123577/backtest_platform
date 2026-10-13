@@ -1183,12 +1183,12 @@
   }
 
   /* ── 单例卡片(每种全站只有一张,没有可配置内容,数据直接来自各自模块的
-     现成接口):每日复盘摘要 / AI热门板块战绩 / 指数速览。跟排行卡片一样
+     现成接口):每日复盘摘要 / AI板块观察跟踪 / 指数速览。跟排行卡片一样
      id 是写死的,"添加卡片"菜单里已存在就不再出现,不会重复添加。      */
 
   var SINGLETON_DEFS = [
     { id: "dr_summary", kind: "review", label: "每日复盘摘要" },
-    { id: "hs_today", kind: "hotsector", label: "AI热门板块战绩" },
+    { id: "hs_today", kind: "hotsector", label: "AI板块观察跟踪" },
     { id: "idx_overview", kind: "indices", label: "指数速览" },
   ];
 
@@ -1233,7 +1233,7 @@
       '<div class="rk-row"><div class="rk-name">涨 / 跌家数</div>' +
       '<span class="rk-pct rk-up">' + (b.up != null ? b.up : "—") + "</span>&nbsp;/&nbsp;" +
       '<span class="rk-pct rk-down">' + (b.down != null ? b.down : "—") + "</span></div>" +
-      '<div class="rk-row"><div class="rk-name">AI 选股结算(昨买今卖)</div>' +
+      '<div class="rk-row"><div class="rk-name">AI 观察样本模拟结算(T买T+1卖)</div>' +
       (hs
         ? '<span class="rk-pct">' + hs.win_count + "/" + hs.total_count + " 涨</span>"
         : '<span class="rk-pct rk-flat">—</span>') + "</div>" +
@@ -1247,11 +1247,11 @@
       .catch(function () { renderReviewCard(card.id, null); refreshCanvas(); });
   }
 
-  // AI热门板块战绩
+  // AI板块观察跟踪
   function hotsectorCardHtml(card) {
     return '<div class="mb-card mb-hotsector-card" id="mbCard_' + card.id + '" data-card-id="' + card.id + '">' +
       '<div class="mb-card-head">' +
-      '<span class="mb-name">AI热门板块战绩</span>' +
+      '<span class="mb-name">AI板块观察跟踪</span>' +
       '<span class="mb-rank-date" id="mbHsDate_' + card.id + '"></span>' +
       '<span class="mb-drag-handle" title="拖动排列位置,便于横向/纵向比对">⠿</span>' +
       '<button type="button" class="mb-card-close" data-remove-card="' + esc(card.id) + '" title="删除这张卡片">✕</button>' +
@@ -1267,7 +1267,7 @@
     if (!body) return;   // 请求还没回来卡片就被删了
     if (dateEl) dateEl.textContent = pick ? String(pick.pick_date || "") : "";
     if (!pick || !pick.stocks || !pick.stocks.length) {
-      body.innerHTML = '<div class="no-data">今日暂无选股</div>';
+      body.innerHTML = '<div class="no-data">今日暂无观察样本</div>';
       return;
     }
 
@@ -1287,7 +1287,7 @@
       return '<div class="rk-group-label">' + esc(sector) + "</div>" + rows;
     }).join("");
     var statLine = stats && stats.total_count
-      ? '<div class="rk-note">累计胜率 ' + stats.win_count + "/" + stats.total_count +
+      ? '<div class="rk-note">累计上涨占比 ' + stats.win_count + "/" + stats.total_count +
         "(" + (stats.win_rate != null ? num(stats.win_rate * 100, 1) : "—") + "%) · 累计收益 " +
         (stats.cum_return != null ? num(stats.cum_return * 100) + "%" : "—") + "</div>"
       : "";

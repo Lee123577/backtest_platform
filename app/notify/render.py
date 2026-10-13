@@ -4,7 +4,7 @@
 
 三类信：
   watchlist_alert_mail — 收盘后你的自选触发了哪些信号
-  daily_digest_mail    — 每日复盘摘要 + AI 热门板块（按用户开关拼，两块都没开就不发）
+  daily_digest_mail    — 每日复盘摘要 + AI 板块观察（按用户开关拼，两块都没开就不发）
   onboarding_mail      — 新手引导：注册后第 0/1/3/7 天各一封，发完即止
 
 三条贯穿所有信的规矩：
@@ -30,7 +30,7 @@ DISCLAIMER = "本站内容仅供研究，不构成投资建议。"
 
 # 信号方向 → 中文 + 颜色。A 股口径：买入红、卖出绿（和站内涨红跌绿一致，
 # 不能照搬西方配色，否则老股民一眼看反）。
-_SIGNAL_TEXT = {"buy": "买入", "sell": "卖出"}
+_SIGNAL_TEXT = {"buy": "买入条件", "sell": "卖出条件"}
 _SIGNAL_COLOR = {"buy": "#d64545", "sell": "#2fa87d"}
 
 
@@ -104,12 +104,12 @@ def watchlist_alert_mail(
 ) -> Tuple[str, str, str]:
     """返回 (subject, text, html)。alerts 是该用户当日的提醒行。"""
     n = len(alerts)
-    subject = f"{trade_date} 你的自选触发 {n} 个信号 · {SITE_NAME}"
+    subject = f"{trade_date} 你的自选有 {n} 条策略规则被触发 · {SITE_NAME}"
     hello = greeting(user)
     link = site_url("/watchlist")
 
     lines = [f"{hello}，你好：", "",
-             f"{trade_date} 收盘后，你的自选股触发了 {n} 个盯盘信号：", ""]
+             f"{trade_date} 收盘后，你的自选股有 {n} 条盯盘规则被触发：", ""]
     rows = []
     for a in alerts:
         sig = str(a.get("signal") or "")
@@ -129,20 +129,20 @@ def watchlist_alert_mail(
             f'</tr>'
         )
     lines += ["", f"打开自选盯盘查看详情：{link}"]
-    text = "\n".join(lines) + _text_footer(token, "watchlist_alert", "自选盯盘信号提醒")
+    text = "\n".join(lines) + _text_footer(token, "watchlist_alert", "自选盯盘规则提醒")
 
     inner = (
         f'<p style="margin:0 0 6px;font-size:15px;color:#111827;">{_esc(hello)}，你好：</p>'
         f'<p style="margin:0 0 16px;font-size:14px;color:#6b7280;line-height:1.8;">'
         f'{_esc(trade_date)} 收盘后，你的自选股触发了 '
-        f'<strong style="color:#EF9F27;">{n}</strong> 个盯盘信号。</p>'
+        f'<strong style="color:#EF9F27;">{n}</strong> 条盯盘规则被触发。</p>'
         f'<table style="width:100%;border-collapse:collapse;">{"".join(rows)}</table>'
         + _btn(link, "打开自选盯盘")
         + '<p style="margin:16px 0 0;font-size:12px;color:#9ca3af;line-height:1.7;">'
-          '信号由所选策略在收盘数据上跑出，只说明"规则被触发了"，'
+          '结果由所选策略在收盘数据上跑出，只说明"规则被触发了"，'
           '不代表买卖建议，请结合自己的判断。</p>'
     )
-    return subject, text, _shell(inner, token, "watchlist_alert", "自选盯盘信号提醒")
+    return subject, text, _shell(inner, token, "watchlist_alert", "自选盯盘规则提醒")
 
 
 # ── 每日推送（复盘 + 热门板块） ───────────────────────────────────────────────
@@ -190,7 +190,7 @@ def daily_digest_mail(
         sectors = hotsector.get("sectors") or []
         stocks = hotsector.get("stocks") or []
         link = site_url("/ai_hotsector")
-        text_parts += ["【AI 热门板块】",
+        text_parts += ["【AI 板块观察】",
                        "关注板块：" + ("、".join(sectors) if sectors else "—"), ""]
         srows = []
         for st in stocks[:8]:
@@ -206,15 +206,15 @@ def daily_digest_mail(
                 f'{_esc(sector)}</td>'
                 f'</tr>'
             )
-        text_parts += ["", f"查看选股理由与历史战绩：{link}", ""]
+        text_parts += ["", f"查看挑选逻辑与跟踪记录：{link}", ""]
         html_parts.append(
             f'<div>'
             f'<div style="font-size:12px;color:#9ca3af;letter-spacing:1px;margin-bottom:6px;">'
-            f'AI 热门板块</div>'
+            f'AI 板块观察</div>'
             f'<p style="margin:0 0 10px;font-size:14px;color:#4b5563;line-height:1.8;">'
             f'今日关注：{_esc("、".join(sectors)) if sectors else "—"}</p>'
             f'<table style="width:100%;border-collapse:collapse;">{"".join(srows)}</table>'
-            + _btn(link, "查看选股理由与战绩")
+            + _btn(link, "查看挑选逻辑与跟踪记录")
             + '</div>'
         )
 
@@ -250,7 +250,7 @@ _ONBOARDING: Dict[str, Dict[str, Any]] = {
              "在首页输入名称或代码，拉出 K 线，再挑两三个策略放在一起对比。",
              "/"),
             ("加进自选盯盘",
-             "收盘后，如果你选的策略在自选股上出了信号，站内会标出来，会员还能收到邮件提醒。",
+             "收盘后，如果你选的策略规则在自选股上被触发，站内会标出来，会员还能收到邮件提醒。",
              "/watchlist"),
         ],
         "cta": ("开始第一次回测", "/?strategy=ma_cross&code=000001&run=1"),
@@ -298,7 +298,7 @@ _ONBOARDING: Dict[str, Dict[str, Any]] = {
              "指数、涨跌家数、成交额放缩量、涨停梯队。",
              "/daily_review"),
             ("自选盯盘提醒",
-             "你的自选股触发所选策略的信号时，当天汇总成一封信（会员功能）。",
+             "你的自选股触发所选策略的规则时，当天汇总成一封信（会员功能）。",
              "/watchlist"),
             ("在哪里打开",
              "自选盯盘页底部的「邮件通知」，勾上就生效，随时可关。",

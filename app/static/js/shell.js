@@ -17,14 +17,14 @@
     ]},
     { title: "行情研究", items: [
       { label: "每日复盘", href: "/daily_review", ico: "📈" },
-      { label: "AI热门板块", href: "/ai_hotsector", ico: "🔥" },
+      { label: "AI板块观察", href: "/ai_hotsector", ico: "🔥" },
       { label: "大盘云图", href: "/cloudmap", ico: "🗺️" },
     ]},
     { title: "策略工具", items: [
       { label: "单股策略", href: "/", ico: "📉" },
-      { label: "选股策略", href: "/?mode=portfolio", ico: "🧮" },
+      { label: "组合策略", href: "/?mode=portfolio", ico: "🧮" },
       { label: "策略百科", href: "/strategy", ico: "📚" },
-      { label: "实盘观察", href: "/paper_trading", ico: "💹" },
+      { label: "模拟盘观察", href: "/paper_trading", ico: "💹" },
       { label: "自选盯盘", href: "/watchlist", ico: "⭐" },
     ]},
     // 订阅页(/subscribe)不进侧边栏,但**不是**下线状态 —— 页面/接口都在正常

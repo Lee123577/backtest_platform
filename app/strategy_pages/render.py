@@ -40,7 +40,7 @@ FAMILIES: Dict[str, Dict[str, str]] = {
                  "适合区间震荡，怕单边行情。",
     },
     "factor": {
-        "label": "因子选股",
+        "label": "因子组合",
         "blurb": "不盯单只股票，每隔几个交易日按规则从全市场挑一篮子股票轮换持有。",
     },
 }
@@ -51,7 +51,7 @@ FAMILY_ORDER = ["trend", "reversal", "factor"]
 DEMO_CODE = "000001"
 DEMO_NAME = "平安银行"
 
-# 实盘观察账户跑的就是小市值 —— 这一页值得把实盘净值的入口露出来
+# 模拟盘观察账户跑的就是小市值 —— 这一页值得把模拟盘净值的入口露出来
 _LIVE_ACCOUNT = {"small_cap": "/paper_trading"}
 
 
@@ -227,7 +227,7 @@ def head_html(meta: Dict[str, Any], s: Optional[Dict[str, Any]],
 def index_head_html(stats: Dict[str, Any], canonical: str, origin: str) -> str:
     n_sig, n_port = len(STRATEGY_REGISTRY), len(PORTFOLIO_REGISTRY)
     title = f"量化策略百科：{n_sig + n_port} 种 A 股策略原理与实测对比 | shoupan"
-    desc = (f"{n_sig} 种单股技术指标策略与 {n_port} 种全市场选股策略的原理、买卖规则、"
+    desc = (f"{n_sig} 种单股技术指标策略与 {n_port} 种全市场因子组合策略的原理、买卖规则、"
             "参数说明")
     if stats.get("stock_count"):
         desc += f"，以及在 {stats['stock_count']} 只 A 股上的真实回测对比"
@@ -251,7 +251,7 @@ def index_head_html(stats: Dict[str, Any], canonical: str, origin: str) -> str:
 
 def hero_html(meta: Dict[str, Any], s: Optional[Dict[str, Any]]) -> str:
     fam = FAMILIES[meta["family"]]
-    kind_label = "单股择时" if meta["kind"] == "signal" else "全市场选股"
+    kind_label = "单股择时" if meta["kind"] == "signal" else "全市场组合"
     if meta["kind"] == "signal":
         primary = (
             f'<a class="st-btn st-btn--primary" '
@@ -261,7 +261,7 @@ def hero_html(meta: Dict[str, Any], s: Optional[Dict[str, Any]]) -> str:
     else:
         primary = (
             f'<a class="st-btn st-btn--primary" '
-            f'href="{_esc(backtest_url(meta), quote=True)}">🧮 去做选股回测</a>'
+            f'href="{_esc(backtest_url(meta), quote=True)}">🧮 去做组合回测</a>'
         )
     secondary = '<a class="st-btn" href="#params">调参数再回测 ↓</a>'
 
@@ -281,7 +281,7 @@ def hero_html(meta: Dict[str, Any], s: Optional[Dict[str, Any]]) -> str:
     live = ""
     if meta["id"] in _LIVE_ACCOUNT:
         live = (f'<a class="st-live" href="{_LIVE_ACCOUNT[meta["id"]]}">'
-                '<span class="st-live-dot"></span>本站实盘观察账户正在按这套规则运行 · '
+                '<span class="st-live-dot"></span>本站模拟盘观察账户正在按这套规则运行 · '
                 '看每日净值 →</a>')
 
     return (
@@ -330,8 +330,8 @@ def stats_html(meta: Dict[str, Any], s: Optional[Dict[str, Any]]) -> str:
         return (
             '<section class="st-section">'
             '<div class="st-sec-head"><h2>怎么验证它</h2></div>'
-            '<p class="st-p">选股策略的收益取决于市值区间、持仓数、调仓周期三者的组合，'
-            '没有一个「默认结果」可以代表它。本站的选股回测使用每个调仓日的真实历史市值'
+            '<p class="st-p">组合策略的收益取决于市值区间、持仓数、调仓周期三者的组合，'
+            '没有一个「默认结果」可以代表它。本站的组合回测使用每个调仓日的真实历史市值'
             '（无幸存者偏差）、前一交易日数据排序（无未来函数），并扣除真实交易费用 —— '
             '最好的验证方式是按你关心的参数亲自跑一遍。</p>'
             f'<a class="st-btn st-btn--primary" href="{_esc(backtest_url(meta), quote=True)}">'
@@ -403,7 +403,7 @@ def stats_html(meta: Dict[str, Any], s: Optional[Dict[str, Any]]) -> str:
 def rules_html(meta: Dict[str, Any]) -> str:
     d = meta["detail"]
     if meta["kind"] == "portfolio":
-        rows = [("选股逻辑", d.get("logic")), ("调仓规则", d.get("rebalance")),
+        rows = [("筛选逻辑", d.get("logic")), ("调仓规则", d.get("rebalance")),
                 ("回测口径", d.get("selection")), ("基准对标", d.get("benchmark"))]
         body = "".join(
             f'<div class="st-def"><dt>{_esc(k)}</dt><dd>{_esc(v)}</dd></div>'
@@ -486,7 +486,7 @@ def params_html(meta: Dict[str, Any]) -> str:
     if meta["kind"] == "portfolio":
         hidden.insert(0, '<input type="hidden" name="mode" value="portfolio">')
         code_field = ""
-        submit_label = "🧮 带这组参数去选股回测"
+        submit_label = "🧮 带这组参数去组合回测"
     else:
         hidden.append('<input type="hidden" name="run" value="1">')
         code_field = (
@@ -542,7 +542,7 @@ def faq_items(meta: Dict[str, Any], s: Optional[Dict[str, Any]]) -> List[Tuple[s
                         f"适合：{d['fits']} 局限：{d['risk']}"))
     else:
         if d.get("logic"):
-            out.append((f"{name}策略怎么选股？", d["logic"]))
+            out.append((f"{name}策略怎么挑选成分股？", d["logic"]))
         if d.get("rebalance"):
             out.append((f"{name}策略多久调一次仓？", d["rebalance"]))
         if d.get("risk"):

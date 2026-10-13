@@ -4,12 +4,12 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27><text y=%27.9em%27 font-size=%2790%27>%F0%9F%95%90</text></svg>">
-  <title>AI 热门板块 - 收盘 shoupan</title>
-  <meta name="description" content="AI 每日收盘后自动选出热门板块与强势股，T日收盘买入/T+1收盘卖出模拟资金曲线，对比中证1000基准，仅供研究不构成投资建议">
+  <title>AI 板块观察 - 收盘 shoupan</title>
+  <meta name="description" content="AI 每日收盘后挑出关注板块与样本股，按 T 日收盘买入、T+1 收盘卖出的规则做模拟跟踪，对比中证1000基准，仅供研究不构成投资建议">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="收盘 shoupan">
-  <meta property="og:title" content="AI 热门板块 - 收盘 shoupan">
-  <meta property="og:description" content="AI 每日收盘后自动选出热门板块与强势股，T日收盘买入/T+1收盘卖出模拟资金曲线，对比中证1000基准，仅供研究不构成投资建议">
+  <meta property="og:title" content="AI 板块观察 - 收盘 shoupan">
+  <meta property="og:description" content="AI 每日收盘后挑出关注板块与样本股，按 T 日收盘买入、T+1 收盘卖出的规则做模拟跟踪，对比中证1000基准，仅供研究不构成投资建议">
   <meta property="og:url" content="https://shoupan.asia/ai_hotsector">
   <meta name="twitter:card" content="summary">
   <link rel="canonical" href="https://shoupan.asia/ai_hotsector">
@@ -27,10 +27,10 @@
   <h1>📈 A股量化回测平台</h1>
   <nav class="header-nav">
     <a class="nav-btn" href="/" style="text-decoration:none;display:inline-flex;align-items:center;">单股策略</a>
-    <a class="nav-btn" href="/?mode=portfolio" style="text-decoration:none;display:inline-flex;align-items:center;">选股策略</a>
+    <a class="nav-btn" href="/?mode=portfolio" style="text-decoration:none;display:inline-flex;align-items:center;">组合策略</a>
     <a class="nav-btn" href="/cloudmap" style="text-decoration:none;display:inline-flex;align-items:center;">大盘云图</a>
-    <a class="nav-btn" href="/paper_trading" style="text-decoration:none;display:inline-flex;align-items:center;">实盘观察</a>
-    <button class="nav-btn active">AI热门板块</button>
+    <a class="nav-btn" href="/paper_trading" style="text-decoration:none;display:inline-flex;align-items:center;">模拟盘观察</a>
+    <button class="nav-btn active">AI板块观察</button>
     <a class="nav-btn" href="/daily_review" style="text-decoration:none;display:inline-flex;align-items:center;">每日复盘</a>
     <a class="nav-btn" href="/watchlist" style="text-decoration:none;display:inline-flex;align-items:center;">自选盯盘</a>  </nav>
 </header>
@@ -38,19 +38,19 @@
 <main>
 
   <!-- ══════════════════════════════════════════════════════
-       1. 战绩头条
+       1. 表现头条
        原先是 6 张等大的小卡片,把"累计收益""同期中证1000"并排一放,
        要用户自己做减法才知道这个 AI 到底行不行。改成:超额收益当主角,
        其余四项降级为支撑数据,胜率给一条能一眼看完的进度条。
   ══════════════════════════════════════════════════════ -->
   <section class="hs-hero">
     <div class="hs-hero-top">
-      <h1 class="hs-hero-title">AI 热门板块 · 模拟账户</h1>
+      <h1 class="hs-hero-title">AI 板块观察 · 模拟跟踪</h1>
       <span class="tip-badge">仅供研究，不构成投资建议</span>
     </div>
     <p class="hs-hero-rule">
-      每交易日收盘后 AI 选 3 个热门板块 × 3 只强势股，按 T 日收盘价买入、
-      T+1 收盘价卖出，10 万本金等权滚动复利
+      每交易日收盘后 AI 挑出 3 个关注板块、各取 3 只样本股，按 T 日收盘价模拟买入、
+      T+1 收盘价模拟卖出，10 万虚拟本金等权滚动复利。只用来检验这种挑选方式本身有没有效，不构成任何买卖建议
     </p>
 
     <div class="hs-hero-grid">
@@ -84,30 +84,30 @@
 
     <div class="hs-winrate" id="hsWinrateBlock">
       <div class="hs-winrate-head">
-        <span class="hs-winrate-label">累计胜率</span>
+        <span class="hs-winrate-label">累计上涨占比</span>
         <span class="hs-winrate-val" id="hsWinRate">—</span>
       </div>
-      <div class="hs-winrate-bar" id="hsWinBar" role="img" aria-label="胜率占比">
+      <div class="hs-winrate-bar" id="hsWinBar" role="img" aria-label="上涨占比">
         <span class="hs-winrate-fill"></span>
       </div>
     </div>
   </section>
 
-  <!-- 2. 20 日战绩条 —— 每根柱子 = 一个已结算交易日的当日收益。
+  <!-- 2. 20 日跟踪条 —— 每根柱子 = 一个已结算交易日的当日收益。
        历史批次表里本来就有这些数,但表格要逐行读;柱状条一眼看出波动与连败 -->
   <section class="panel hs-streak-panel">
     <div class="panel-title">
-      近期战绩 <span id="hsStreakHint">按已结算交易日，柱高为当日收益绝对值</span>
+      近期跟踪 <span id="hsStreakHint">按已结算交易日，柱高为当日收益绝对值</span>
     </div>
     <div class="hs-streak" id="hsStreak">
       <div class="no-data">加载中…</div>
     </div>
   </section>
 
-  <!-- 3. 今日 AI 荐股 —— 页面重心,给它区别于其他区块的视觉权重 -->
+  <!-- 3. 今日 AI 观察名单 —— 页面重心,给它区别于其他区块的视觉权重 -->
   <section class="panel hs-today-panel">
     <div class="panel-title">
-      今日 AI 荐股 <span id="hsTodayDate"></span>
+      今日 AI 观察名单 <span id="hsTodayDate"></span>
       <span class="hs-live" id="hsLive" hidden><i></i>盘中</span>
       <span class="hs-updated-hint" id="hsIntradayUpdated"></span>
     </div>
@@ -132,7 +132,7 @@
     <div class="hs-two-col hs-methodology-body">
       <div>
         <div class="panel-title">
-          板块表现 <span>出现天数越多，说明 AI 越倾向反复推荐同一板块(同质化信号)</span>
+          板块表现 <span>出现天数越多，说明 AI 越倾向反复挑中同一板块(同质化迹象)</span>
         </div>
         <div id="hsSectorStatsWrap">
           <div class="no-data">加载中…</div>
@@ -140,7 +140,7 @@
       </div>
 
       <div>
-        <div class="panel-title">提示词版本对比 <span>迭代提示词后，用胜率验证是否真的变好了</span></div>
+        <div class="panel-title">提示词版本对比 <span>迭代提示词后，用上涨占比验证是否真的变好了</span></div>
         <div id="hsPromptStatsWrap">
           <div class="no-data">加载中…</div>
         </div>

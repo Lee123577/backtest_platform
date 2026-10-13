@@ -22,7 +22,10 @@ from typing import Any, Dict, List
 #     就没成功过);字段口径 up/down → stock_count
 # v5: 品牌审核结论 P2-1 —— 末节"后市观察"明确写成"只列关注角度、不做方向预测"
 #     (原表述易被读成对次日方向的暗示)。
-REVIEW_PROMPT_VERSION = "v5"
+# v6: 合规措辞 —— "AI 选股策略 / 结算战绩"改称"AI 板块观察 / 模拟跟踪结果",
+#     并禁止正文出现荐股、选股、战绩、胜率、强势股这类字眼(复盘正文公开展示,
+#     这些词读起来就是在推销一个荐股服务)。
+REVIEW_PROMPT_VERSION = "v6"
 
 
 def review_messages(review_date: _Date, context: Dict[str, Any]) -> List[dict]:
@@ -62,9 +65,10 @@ def review_messages(review_date: _Date, context: Dict[str, Any]) -> List[dict]:
         "count=当日家数，two_plus=其中连续第2天及以上的家数，"
         "max_streak=最高连续天数，max_streak_stocks=对应个股。"
         "为 null 表示当日数据缺失；\n"
-        "- ai_hotsector：本平台的 AI 选股策略（每日选3板块×3股，T日收盘买入、"
-        "T+1收盘卖出），today_sectors=今日新选板块，settled=昨日买入批次"
-        "今日卖出的结算结果（win_count/total_count=上涨只数/总只数，"
+        "- ai_hotsector：本平台的『AI 板块观察』模拟跟踪实验（每日挑3个关注板块、"
+        "各取3只样本股，按 T日收盘买入、T+1收盘卖出的规则模拟，不是推荐），"
+        "today_sectors=今日新挑出的关注板块，settled=昨日样本"
+        "今日的模拟结算结果（win_count/total_count=上涨只数/总只数，"
         "day_return_pct=等权平均涨跌幅%）。字段为 null/空表示当日无数据。\n\n"
         f"{data_str}\n\n"
         "请基于以上数据写一篇当日 A 股市场复盘，markdown 格式，"
@@ -77,8 +81,10 @@ def review_messages(review_date: _Date, context: Dict[str, Any]) -> List[dict]:
         "## 市场情绪 —— 涨跌家数、大涨大跌家数反映的赚钱效应与亏钱效应；"
         "结合涨停梯队(count/two_plus/max_streak)评估情绪高度与持续性，"
         "注意按近似口径措辞\n"
-        "## AI 策略表现 —— 点评 ai_hotsector 的结算战绩和今日新选板块；"
-        "数据缺失就如实说明，不要硬编\n"
+        "## AI 板块观察 —— 客观陈述 ai_hotsector 昨日样本的模拟结算结果"
+        "和今日新挑出的关注板块，统一称其为『AI 板块观察』；"
+        "不得使用『荐股』『选股』『战绩』『胜率』『强势股』『推荐』这类字眼，"
+        "上涨只数就写『N 只中 M 只上涨』；数据缺失就如实说明，不要硬编\n"
         "## 后市观察 —— 只列值得继续跟踪的**关注角度**（如量能能否延续、"
         "某板块的持续性、某指数的关键位置），站在当日已发生的事实上做定性观察；"
         "**不得预测次日或未来的涨跌方向**，不给出具体买卖操作，不暗示操作时点。\n\n"

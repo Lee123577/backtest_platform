@@ -188,7 +188,7 @@ function quickRun(strategyId) {
 
 // 从策略专题页 /strategy/{id} 过来的深链:
 //   单股:/?strategy=ma_cross&code=000001&p_short_window=10&run=1
-//   选股:/?mode=portfolio&strategy=small_cap&p_stock_num=5
+//   组合:/?mode=portfolio&strategy=small_cap&p_stock_num=5
 // 带着一套具体参数落地,就把它原样摆好 —— 让人跳过来还要自己再挑一遍策略、
 // 再敲一遍参数,等于把专题页上建立的意图丢掉。参数只认该策略 schema 里有的键,
 // 越界就用边界值(后端同样会校验,这里只是不让人吃一个报错)。
@@ -292,7 +292,7 @@ function renderPortfolioStrategyDetail() {
     : '';
   el.innerHTML = `
     <div class="strategy-detail-box">
-      ${row('选股逻辑', d.logic)}
+      ${row('筛选逻辑', d.logic)}
       ${row('调仓规则', d.rebalance)}
       ${row('回测口径', d.selection)}
       ${row('基准对标', d.benchmark)}
@@ -566,7 +566,7 @@ async function runBacktest() {
 
 // ── Portfolio backtest (SSE streaming) ───────────────────────────────────────
 async function runPortfolioBacktest() {
-  if (!selectedPortfolio) return showPortfolioError('请先选择一个选股策略');
+  if (!selectedPortfolio) return showPortfolioError('请先选择一个组合策略');
 
   const start = document.getElementById('pStartDate').value;
   const end = document.getElementById('pEndDate').value;
@@ -622,7 +622,7 @@ async function runPortfolioBacktest() {
       const subtitle = `${selectedPortfolio.strategy.name}  市值${evt.cap_range}  ` +
         `共${evt.universe_count}只股票  ${start} → ${end}`;
       lastShareable = {
-        stock_name: `${selectedPortfolio.strategy.name}（选股回测）`,
+        stock_name: `${selectedPortfolio.strategy.name}（组合回测）`,
         start_date: start, end_date: end,
         initial_capital: parseFloat(document.getElementById('pCapital').value) || null,
         results: evt.results, benchmark: evt.benchmark,

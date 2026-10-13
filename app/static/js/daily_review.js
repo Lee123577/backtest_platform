@@ -131,7 +131,7 @@
     );
     var hs = (ctx.ai_hotsector || {}).settled;
     cards.push(
-      '<div class="sum-card"><div class="sum-label">AI 选股结算(昨买今卖)</div><div class="sum-val">' +
+      '<div class="sum-card"><div class="sum-label">AI 观察样本模拟结算(T买T+1卖)</div><div class="sum-val">' +
       (hs
         ? hs.win_count + "/" + hs.total_count + " 涨 <small>" +
           pctHtml(hs.day_return_pct) + "</small>"

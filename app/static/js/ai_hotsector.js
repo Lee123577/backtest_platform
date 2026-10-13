@@ -1,4 +1,4 @@
-// AI 热门板块页面逻辑：拉 /api/ai_hotsector/* 渲染统计条 / 资金曲线 / 今日荐股 / 历史批次
+// AI 板块观察页面逻辑：拉 /api/ai_hotsector/* 渲染统计条 / 资金曲线 / 今日观察名单 / 历史批次
 
 let hsEquityChart;
 
@@ -104,7 +104,7 @@ function renderWinRate(s) {
   el.textContent = `${pct.toFixed(1)}%（${s.win_count}/${s.total_count}）`;
   if (bar) bar.style.display = '';
   if (fill) fill.style.width = `${Math.max(0, Math.min(100, pct))}%`;
-  if (bar) bar.setAttribute('aria-label', `胜率 ${pct.toFixed(1)}%，${s.win_count} 胜 ${s.total_count - s.win_count} 负`);
+  if (bar) bar.setAttribute('aria-label', `上涨占比 ${pct.toFixed(1)}%，${s.win_count} 涨 ${s.total_count - s.win_count} 平或跌`);
 }
 
 // ── 2. 资金曲线 ──────────────────────────────────────────────────────────────
@@ -127,7 +127,7 @@ function renderEquityChart(data) {
   // 单点画不出曲线,空图很难看 —— 少于 2 个结算日时用文字占位
   if (data.length < 2) {
     const msg = data.length === 0
-      ? '暂无已结算数据，资金曲线将在首批预测结算后出现'
+      ? '暂无已结算数据，资金曲线将在首批样本结算后出现'
       : `已结算 1 个交易日（${data[0].pick_date}，${(Number(data[0].day_return) * 100).toFixed(2)}%），再结算 1 天即可画出曲线`;
     hsEquityChart.clear();
     hsEquityChart.setOption({
@@ -147,7 +147,7 @@ function renderEquityChart(data) {
   hsEquityChart.setOption({
     tooltip: { trigger: 'axis', axisPointer: { type: 'cross' },
                valueFormatter: (v) => v == null ? '—' : `${v.toFixed(2)}%` },
-    legend: { data: ['AI 热门板块', '扣费后', '中证1000(基准)'], top: 0,
+    legend: { data: ['AI 板块观察', '扣费后', '中证1000(基准)'], top: 0,
               textStyle: { fontSize: 11 } },
     grid: { left: 60, right: 30, top: 40, bottom: 50 },
     xAxis: { type: 'category', data: dates, boundaryGap: false,
@@ -157,7 +157,7 @@ function renderEquityChart(data) {
              axisLabel: { color: '#57606a', fontSize: 11,
                           formatter: (v) => `${v.toFixed(1)}%` } },
     series: [
-      { name: 'AI 热门板块', type: 'line', data: cum, smooth: true,
+      { name: 'AI 板块观察', type: 'line', data: cum, smooth: true,
         lineStyle: { width: 2, color: '#0969da' },
         itemStyle: { color: '#0969da' },
         areaStyle: { color: 'rgba(9,105,218,0.10)' },
@@ -174,7 +174,7 @@ function renderEquityChart(data) {
   });
 }
 
-// ── 3. 今日荐股 ──────────────────────────────────────────────────────────────
+// ── 3. 今日观察名单 ──────────────────────────────────────────────────────────────
 
 async function loadToday() {
   const wrap = document.getElementById('hsTodayWrap');
@@ -182,20 +182,20 @@ async function loadToday() {
     const res = await fetch('/api/ai_hotsector/today');
     const { pick } = await res.json();
     if (!pick) {
-      wrap.innerHTML = '<div class="no-data">尚未运行过预测，请等待 15:05 定时任务，或在 /tasks 页面手动触发 ai_hotsector_predict</div>';
+      wrap.innerHTML = '<div class="no-data">尚未生成观察名单，请等待 15:05 定时任务，或在 /tasks 页面手动触发 ai_hotsector_predict</div>';
       return;
     }
 
     document.getElementById('hsTodayDate').textContent = `（${pick.pick_date}）`;
 
     if (pick.status === 'failed') {
-      wrap.innerHTML = `<div class="no-data">最近一次预测失败：${esc(pick.error_msg)}</div>`;
+      wrap.innerHTML = `<div class="no-data">最近一次生成失败：${esc(pick.error_msg)}</div>`;
       return;
     }
 
     const stocks = pick.stocks || [];
     if (!stocks.length) {
-      wrap.innerHTML = '<div class="no-data">暂无选股明细</div>';
+      wrap.innerHTML = '<div class="no-data">暂无观察样本</div>';
       return;
     }
 
@@ -264,12 +264,12 @@ function renderStockRow(st) {
     priceLine = '';
   } else if (st.settle_status === 'suspended') {
     badge = '<span class="settle-badge na">停牌排除</span>';
-    priceLine = '长期无行情，已排除不计入胜率';
+    priceLine = '长期无行情，已排除不计入统计';
   } else if (st.settle_status === 'settled') {
     const isWin = st.is_win === 1;
     badge = isWin
-      ? '<span class="settle-badge win">胜</span>'
-      : '<span class="settle-badge lose">负</span>';
+      ? '<span class="settle-badge win">涨</span>'
+      : '<span class="settle-badge lose">平/跌</span>';
     pctHtml = `<span class="stock-pct ${isWin ? 'pos' : 'neg'}">${fmtPct(st.pct_change)}</span>`;
     priceLine = `买 ${fmtPrice(st.buy_price)} → 卖 ${fmtPrice(st.sell_price)}`;
   } else if (st.settle_status === 'priced') {
@@ -341,7 +341,7 @@ function applyIntraday(rows) {
 
 // ── 4. 历史批次 ──────────────────────────────────────────────────────────────
 
-// ── 近期战绩条 ───────────────────────────────────────────────────────────────
+// ── 近期跟踪条 ───────────────────────────────────────────────────────────────
 // 数据与"历史批次"表同源,只是换个读法:20 根柱子把连亏/连赢压成一眼可见的形状。
 // 柱高按当日收益的绝对值归一化,颜色按正负 —— 不引入任何表里没有的数字。
 const STREAK_DAYS = 20;
@@ -365,7 +365,7 @@ function renderStreak(rows) {
     const v = Number(r.day_return);
     const h = Math.max(4, Math.round(Math.abs(v) / maxAbs * 100));
     const cls = v > 0 ? 'pos' : v < 0 ? 'neg' : '';
-    const win = r.total_count ? `　${r.win_count}/${r.total_count} 胜` : '';
+    const win = r.total_count ? `　${r.win_count}/${r.total_count} 涨` : '';
     return `<span class="hs-bar ${cls}" title="${esc(r.pick_date)}　${fmtPct(v)}${win}">` +
            `<i style="height:${h}%"></i></span>`;
   }).join('');
@@ -388,8 +388,8 @@ async function loadHistory() {
       return;
     }
     const trs = rows.map(r => {
-      const statusText = { predicted: '已预测(待回填)', priced: '已回填买入价',
-                            settled: '已结算', failed: '预测失败' }[r.status] || r.status;
+      const statusText = { predicted: '已生成(待回填)', priced: '已回填买入价',
+                            settled: '已结算', failed: '生成失败' }[r.status] || r.status;
       const excludedNote = r.excluded_count ? `（排除${r.excluded_count}只）` : '';
       const winRate = r.total_count
         ? `${r.win_count}/${r.total_count}${excludedNote}`
@@ -408,7 +408,7 @@ async function loadHistory() {
     wrap.innerHTML = `
       <div class="holdings-table-wrap">
         <table class="hs-tbl">
-          <thead><tr><th>日期</th><th>状态</th><th>当批胜率</th><th>当批收益</th><th>累计收益</th></tr></thead>
+          <thead><tr><th>日期</th><th>状态</th><th>当批上涨占比</th><th>当批收益</th><th>累计收益</th></tr></thead>
           <tbody>${trs}</tbody>
         </table>
       </div>
@@ -453,7 +453,7 @@ async function loadSectorStats() {
     wrap.innerHTML = `
       <div class="holdings-table-wrap">
         <table class="hs-tbl">
-          <thead><tr><th>板块</th><th>出现天数</th><th>已结算/累计出现</th><th>胜率</th><th>平均涨跌幅</th></tr></thead>
+          <thead><tr><th>板块</th><th>出现天数</th><th>已结算/累计出现</th><th>上涨占比</th><th>平均涨跌幅</th></tr></thead>
           <tbody>${trs}</tbody>
         </table>
       </div>
@@ -494,7 +494,7 @@ async function loadPromptStats() {
     wrap.innerHTML = `
       <div class="holdings-table-wrap">
         <table class="hs-tbl">
-          <thead><tr><th>提示词版本</th><th>使用天数</th><th>已结算/累计出现</th><th>胜率</th><th>平均涨跌幅</th></tr></thead>
+          <thead><tr><th>提示词版本</th><th>使用天数</th><th>已结算/累计出现</th><th>上涨占比</th><th>平均涨跌幅</th></tr></thead>
           <tbody>${trs}</tbody>
         </table>
       </div>

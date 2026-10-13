@@ -1,7 +1,7 @@
 /**
  * 自选盯盘页
  * ==========
- * 登录后管理自选股 + 盯盘策略；信号提醒是会员权益(未订阅显示订阅引导)。
+ * 登录后管理自选股 + 盯盘策略；规则提醒是会员权益(未订阅显示订阅引导)。
  * 后端：/api/watchlist/{config,add,remove,rules,alerts,alerts/read}
  *
  * 页面底部还有一块「邮件通知」开关，走的是另一套后端 /api/notify/prefs ——
@@ -224,7 +224,7 @@
       // 等于在把人往外推
       var left = (ltOffer && ltOffer.remaining) || 0;
       wrap.innerHTML =
-        '<div class="wl-paywall"><p>信号提醒是会员权益。开通后，每个交易日收盘系统会按你选的策略扫描自选股并在此提醒' +
+        '<div class="wl-paywall"><p>规则提醒是会员权益。开通后，每个交易日收盘系统会按你选的策略扫描自选股并在此提醒' +
         (left > 0 ? "，也可以发到你的邮箱" : "") + "。</p>" +
         '<button class="wl-paywall-btn" id="wlSubBtn">' +
         (left > 0 ? "🎁 免费领终生会员（还剩 " + left + " 个）" : "开通会员 · 查看套餐") +
@@ -236,7 +236,7 @@
     var alerts = (data && data.alerts) || [];
     $("wlReadBtn").style.display = alerts.some(function (a) { return !a.is_read; }) ? "" : "none";
     if (!alerts.length) {
-      wrap.innerHTML = '<div class="no-data">暂无信号提醒。配置好自选股与盯盘策略后，收盘扫描命中会出现在这里。</div>';
+      wrap.innerHTML = '<div class="no-data">暂无规则提醒。配置好自选股与盯盘策略后，收盘扫描命中会出现在这里。</div>';
       return;
     }
     wrap.innerHTML = alerts.map(function (a) {
@@ -245,7 +245,7 @@
         '<span class="wl-alert-sig ' + (buy ? "wl-buy" : "wl-sell") + '">' + (buy ? "买入" : "卖出") + "</span>" +
         '<div class="wl-alert-main"><div class="wl-alert-name">' + esc(a.name || "") +
         ' <span style="color:var(--txt2)">' + esc(a.code) + '</span></div>' +
-        '<div class="wl-alert-meta">' + esc(a.strategy_name || a.strategy_id) + " 信号</div></div>" +
+        '<div class="wl-alert-meta">' + esc(a.strategy_name || a.strategy_id) + " 规则触发</div></div>" +
         '<span class="wl-alert-date">' + esc(String(a.trade_date)) + "</span></div>";
     }).join("");
   }
@@ -281,12 +281,12 @@
   // 三项的文案要说清楚"什么时候会收到信"和"会不会打扰"——邮件通知最怕的是
   // 用户不知道自己开了什么，收到信第一反应是点垃圾邮件而不是退订。
   var NOTIFY_ITEMS = [
-    ["watchlist_alert", "自选盯盘信号提醒",
+    ["watchlist_alert", "自选盯盘规则提醒",
      "收盘扫描命中你勾选的策略时，当天把命中的股票汇总成一封发给你（会员功能，一天最多一封）"],
     ["daily_review", "AI 每日复盘",
      "每个交易日收盘后，把当天复盘的标题和摘要发给你，全文回站内看"],
-    ["ai_hotsector", "AI 热门板块",
-     "当天的关注板块与选股名单；和上面的复盘合并在同一封信里，不会多发一封"],
+    ["ai_hotsector", "AI 板块观察",
+     "当天的关注板块与观察样本；和上面的复盘合并在同一封信里，不会多发一封"],
     ["onboarding", "新手引导",
      "注册后第一周的 4 封上手指南（第 0/1/3/7 天各一封），发完即止"],
   ];
@@ -383,7 +383,7 @@
         var o = s && s.lifetime_offer;
         if (!o || !o.remaining) return;      // 名额发完就不提,免得像画饼
         box.innerHTML = "🎁 前 " + o.total + " 名注册用户免费领<b>终生会员</b>，" +
-          "还剩 <b>" + o.remaining + "</b> 个 —— 信号提醒是会员权益，登录后可直接领取。";
+          "还剩 <b>" + o.remaining + "</b> 个 —— 规则提醒是会员权益，登录后可直接领取。";
         box.style.display = "";
       })
       .catch(function () { /* 拿不到就不显示,不影响登录 */ });

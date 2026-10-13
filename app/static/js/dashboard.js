@@ -23,12 +23,12 @@
 
   var SHORTCUTS = [
     { href: "/daily_review", ico: "📈", label: "每日复盘", desc: "AI 收盘复盘" },
-    { href: "/ai_hotsector", ico: "🔥", label: "AI热门板块", desc: "每日选股战绩" },
-    { href: "/watchlist", ico: "⭐", label: "自选盯盘", desc: "信号提醒" },
+    { href: "/ai_hotsector", ico: "🔥", label: "AI板块观察", desc: "每日模拟跟踪" },
+    { href: "/watchlist", ico: "⭐", label: "自选盯盘", desc: "规则提醒" },
     { href: "/cloudmap", ico: "🗺️", label: "大盘云图", desc: "市场全景" },
     { href: "/", ico: "📉", label: "单股策略", desc: "指标回测" },
-    { href: "/?mode=portfolio", ico: "🧮", label: "选股策略", desc: "组合回测" },
-    { href: "/paper_trading", ico: "💹", label: "实盘观察", desc: "模拟盘" },
+    { href: "/?mode=portfolio", ico: "🧮", label: "组合策略", desc: "组合回测" },
+    { href: "/paper_trading", ico: "💹", label: "模拟盘观察", desc: "模拟盘" },
   ];
 
   function renderShortcuts() {
@@ -39,13 +39,13 @@
     }).join("");
   }
 
-  // hero 里的 AI 战绩数据条：拿 AI 热门板块的累计战绩当信任背书。
+  // hero 里的 AI 板块观察数据条：累计模拟跟踪结果公开可查。
   // 样本太少(结算<30只)或接口失败就保持隐藏，不给空壳。
   function renderHeroStats(st) {
     var el = $("dashHeroStats");
     if (!st || !st.total_count || st.total_count < 30 || st.win_rate == null) return;
     var pills = [];
-    pills.push('<span class="dash-hero-stat">AI 选股累计胜率 <b>' +
+    pills.push('<span class="dash-hero-stat">AI 板块观察累计上涨占比 <b>' +
       (st.win_rate * 100).toFixed(1) + "%</b>（" + st.win_count + "/" + st.total_count + "）</span>");
     if (st.cum_return_after_fee != null && st.benchmark_cum_return != null) {
       var diff = (st.cum_return_after_fee - st.benchmark_cum_return) * 100;
@@ -53,7 +53,7 @@
       pills.push('<span class="dash-hero-stat">扣费后 ' + word + "中证1000 <b>" +
         Math.abs(diff).toFixed(1) + "</b> 个百分点</span>");
     }
-    pills.push('<a class="dash-hero-stat" href="/ai_hotsector">完整战绩公开可查 →</a>');
+    pills.push('<a class="dash-hero-stat" href="/ai_hotsector">完整跟踪记录公开可查 →</a>');
     el.innerHTML = pills.join("");
     el.hidden = false;
   }
@@ -71,7 +71,7 @@
       });
     } else {
       $("dashHello").textContent = "欢迎使用 A 股量化平台";
-      $("dashHeroSub").textContent = "登录后解锁历史复盘、自选盯盘信号提醒等会员内容";
+      $("dashHeroSub").textContent = "登录后解锁历史复盘、自选盯盘规则提醒等会员内容";
       $("dashHeroAction").innerHTML = '<button class="dash-hero-btn" id="dashLoginBtn">登录 / 注册</button>';
       $("dashLoginBtn").addEventListener("click", function () {
         // 登录成功不再 location.reload():整页重刷要重新拉四个接口、白屏一下,
@@ -111,7 +111,7 @@
         '<div class="dash-note">' +
         (left > 0
           ? "前 " + sub.lifetime_offer.total + " 名可免费领终生会员，还剩 " + left + " 个"
-          : "开通后解锁历史复盘与信号提醒") + "</div>" +
+          : "开通后解锁历史复盘与规则提醒") + "</div>" +
         '<a class="dash-cta" href="/subscribe">' +
         (left > 0 ? "🎁 免费领取" : "立即开通") + "</a>";
     }
@@ -139,7 +139,7 @@
     }
     if (!cfg || !cfg.subscribed) {
       el.innerHTML = '<div class="dash-big muted">会员功能</div>' +
-        '<div class="dash-note">开通后收盘自动提醒买卖信号</div>' +
+        '<div class="dash-note">开通后收盘自动提醒策略规则触发</div>' +
         '<a class="dash-cta ghost" href="/watchlist">去看看</a>';
       return;
     }

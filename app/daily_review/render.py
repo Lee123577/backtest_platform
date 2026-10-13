@@ -87,6 +87,29 @@ def _inline(s: str) -> str:
     return _CODE_RE.sub(r"<code>\1</code>", s)
 
 
+# 复盘正文公开展示时的措辞替换。v6 提示词起模型已经不写这些词,这里兜的是**历史复盘**
+# (v5 及更早写着"AI 策略表现 / 结算战绩 / 胜率")和模型偶尔不守规矩的情况。
+# 只换说法,不改数字和事实。只用于复盘 —— 个股报告里的"胜率"是回测指标,不能换。
+_PUBLIC_TERMS = (
+    ("AI 策略表现", "AI 板块观察"),
+    ("AI选股", "AI 板块观察"),
+    ("AI 选股", "AI 板块观察"),
+    ("AI 热门板块", "AI 板块观察"),
+    ("强势股", "样本股"),
+    ("战绩", "跟踪结果"),
+    ("胜率", "上涨占比"),
+)
+
+
+def public_md(md: Optional[str]) -> Optional[str]:
+    """复盘正文 / 标题对外展示前统一过一遍措辞替换。"""
+    if not md:
+        return md
+    for old, new in _PUBLIC_TERMS:
+        md = md.replace(old, new)
+    return md
+
+
 def md_to_html(md: Optional[str]) -> str:
     """受限 markdown → HTML（标题/加粗/行内码/列表/段落）。"""
     if not md:
