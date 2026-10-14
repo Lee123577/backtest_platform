@@ -507,6 +507,42 @@ def get_today() -> Optional[Dict[str, Any]]:
     return pick
 
 
+def get_latest_with_stocks(before: Optional[_Date] = None) -> Optional[Dict[str, Any]]:
+    """最近一批**有选股明细**的预测（status IN ('predicted','settled')）。
+
+    与 get_today 的区别：get_today 只按 pick_date 最新取，最新的那批
+    可能 status='failed'（欠费当天就是这样），前端会渲染成"有板块无数据"。
+    这里要求该 pick_date 下确实存在 ai_hotsector_stock 明细行，且状态是
+    正常预测/已结算 —— 保证回退到的那批是有内容可渲染的。
+
+    before 给了就取严格早于它的那批（用于"最新一批失败 → 回退上一批"）。
+    """
+    conn = _get_pool()
+    if conn is None:
+        return None
+    where = (
+        "p.status IN ('predicted','settled') "
+        "AND EXISTS (SELECT 1 FROM ai_hotsector_stock s "
+        "WHERE s.pick_date = p.pick_date)"
+    )
+    params: list = []
+    if before is not None:
+        where += " AND p.pick_date < %s"
+        params.append(before)
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""SELECT p.* FROM ai_hotsector_pick p
+                WHERE {where}
+                ORDER BY p.pick_date DESC LIMIT 1""",
+            tuple(params),
+        )
+        pick = cur.fetchone()
+    if pick is None:
+        return None
+    pick["stocks"] = get_stocks_by_pick_date(pick["pick_date"])
+    return pick
+
+
 def get_history(limit: int = 30) -> List[Dict[str, Any]]:
     """按天列出批次：pick 状态 + (若已结算) equity 汇总。"""
     conn = _get_pool()

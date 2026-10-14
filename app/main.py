@@ -611,11 +611,84 @@ def page_daily_review_dated(review_date: str, request: Request):
     return _daily_review_page(request, d)
 
 
+def _sub_status_ssr(offer: Optional[Dict[str, Any]]) -> str:
+    """订阅页"会员状态"区的服务端**公开兜底**文案。
+
+    🔴 只放与登录态无关、对所有人都一样的内容（免费名额进度）——"你是不是会员"
+    这种按人变化的东西**绝不能**进这段 HTML：响应带 ETag 会被共享缓存复用，
+    一旦混入用户态就可能串给其他人。真·订阅态仍由 subscribe.js 拉
+    /api/subscription/status 覆盖。
+    """
+    if not offer or not offer.get("total"):
+        return '<span class="sub-inactive">登录后可查看会员状态并领取免费名额。</span>'
+    remaining = int(offer.get("remaining") or 0)
+    if remaining > 0:
+        return (f'<span class="sub-inactive">免费终生会员名额还剩 {remaining} 个</span>，'
+                "登录后即可领取；名额发完后可按下述套餐开通。")
+    return '<span class="sub-inactive">免费名额已领完</span>，可按下述套餐开通会员。'
+
+
+def _sub_plans_ssr(plans) -> str:
+    """套餐卡片（公开价格，与登录态无关）。结构对齐 subscribe.js 的 renderPlans，
+    便于 JS 加载后无痕覆盖；取不到套餐时返回空串（JS 兜底）。"""
+    if not plans:
+        return ""
+    cards = []
+    for p in plans:
+        cards.append(
+            '<div class="plan-card" data-plan="'
+            + _htmlmod.escape(str(p.get("code", ""))) + '">'
+            '<div class="plan-label">' + _htmlmod.escape(str(p.get("label", ""))) + "</div>"
+            '<div class="plan-price">¥' + _htmlmod.escape(str(p.get("price_yuan", ""))) + "</div>"
+            '<div class="plan-days">' + _htmlmod.escape(str(p.get("days", ""))) + " 天</div>"
+            "</div>"
+        )
+    return "".join(cards)
+
+
+def _sub_contact_ssr() -> str:
+    """人工开通方式（公开）。复用 service.contact_info()，取不到则整块不出。"""
+    try:
+        from .subscription import service as sub_service
+        c = sub_service.contact_info()
+    except Exception as e:
+        logger.info("订阅页取联系方式失败(整块不出): %s", e)
+        c = None
+    qq = (c or {}).get("qq")
+    if not qq:
+        return ""
+    return (
+        '<div class="sub-contact-title">如何开通</div>'
+        "<p>目前暂未开放在线支付，采用人工开通：选择套餐生成订单号后，"
+        '加 QQ <strong class="sub-contact-qq">' + _htmlmod.escape(str(qq)) + "</strong> "
+        "并发送订单号，核对后即为你开通对应时长。</p>"
+    )
+
+
 @app.get("/subscribe", include_in_schema=False)
 def page_subscribe(request: Request):
-    # 订阅页是最需要社会证明的地方:掏钱之前想知道别人用得怎么样
+    """订阅页。服务端直出**公开内容**：名额进度、套餐价格、开通方式。
+
+    只直出与登录态无关的部分——订阅状态("你是否已是会员")按人变化，绝不进 HTML
+    （响应带 ETag 会被共享缓存复用），仍由 subscribe.js 拉
+    /api/subscription/status 覆盖。取数失败退化成空壳，同样由 JS 兜底。
+    订阅页也是最需要社会证明的地方:掏钱之前想知道别人用得怎么样。
+    """
+    from .subscription import service as sub_service
+    try:
+        plans = sub_service.plans_public()
+        # uid=None：只拿公开名额概览（total/claimed/remaining），不含"我领没领"
+        offer = sub_service.lifetime_stats(None)
+    except Exception as e:
+        logger.info("订阅页取套餐/名额失败(退化出空壳，JS 兜底): %s", e)
+        plans, offer = [], None
     return _html(request, "subscribe.html",
-                 replacements={"<!--TESTIMONIALS-->": _testimonials_block()})
+                 replacements={
+                     "<!--SUB_STATUS-->": _sub_status_ssr(offer),
+                     "<!--SUB_PLANS-->": _sub_plans_ssr(plans),
+                     "<!--SUB_CONTACT-->": _sub_contact_ssr(),
+                     "<!--TESTIMONIALS-->": _testimonials_block(),
+                 })
 
 
 @app.get("/watchlist", include_in_schema=False)
@@ -695,8 +768,17 @@ def _json_ld(obj: Dict[str, Any]) -> str:
 
 
 def _dr_head(row: Optional[Dict[str, Any]], canonical: str,
-             locked: bool) -> str:
-    """复盘页 <head> 的 title / description / canonical / OG / 结构化数据。"""
+             locked: bool, *, stale: bool = False,
+             page_date: Optional[str] = None) -> str:
+    """复盘页 <head> 的 title / description / canonical / OG / 结构化数据。
+
+    stale=True（正文回退到了快照）时追加 noindex：欠费 12 天会生成 12 个
+    "正文相同、URL 不同"的页面，属重复内容，反而拖累整站评分。恢复后
+    stale=False 自动撤销 noindex。
+
+    page_date 给了就把它当作标题里的"日期锚"（=请求的日期 URL 语义），
+    正文里的真实数据日期由 _dr_body 的横幅交代；canonical 恒为请求的 URL。
+    """
     if row is None:
         title = "AI 每日复盘 · A股每日行情复盘 | shoupan"
         desc = ("每个交易日收盘后自动生成的 A 股市场复盘：主要指数、涨跌家数、"
@@ -704,10 +786,11 @@ def _dr_head(row: Optional[Dict[str, Any]], canonical: str,
         head = [f"<title>{_htmlmod.escape(title)}</title>"]
     else:
         d = str(row.get("review_date"))
-        art_title = (row.get("title") or f"{d} A股复盘").strip()
-        title = f"{art_title}（{d}） | shoupan"
+        tdate = page_date or d
+        art_title = (row.get("title") or f"{tdate} A股复盘").strip()
+        title = f"{art_title}（{tdate}） | shoupan"
         desc = _dr_render.plain_text(row.get("content_md"), limit=140) or (
-            f"{d} A 股市场复盘：主要指数、涨跌家数、成交额与涨停梯队，"
+            f"{tdate} A 股市场复盘：主要指数、涨跌家数、成交额与涨停梯队，"
             "基于当日真实行情数据自动生成。")
         head = [f"<title>{_htmlmod.escape(title)}</title>"]
 
@@ -723,6 +806,11 @@ def _dr_head(row: Optional[Dict[str, Any]], canonical: str,
         f'<meta property="og:url" content="{canonical}">',
         '<meta name="twitter:card" content="summary">',
     ]
+
+    # 快照回退(正文用的是旧日期)时不出索引：多个 URL 正文相同 = 重复内容。
+    # 恢复当天成功后 _daily_review_page 传 stale=False，这里自然撤销。
+    if stale:
+        head.append('<meta name="robots" content="noindex,follow">')
 
     if row is not None:
         d = str(row.get("review_date"))
@@ -762,21 +850,33 @@ def _dr_head(row: Optional[Dict[str, Any]], canonical: str,
     return "\n  ".join(head)
 
 
-def _dr_body(row: Optional[Dict[str, Any]], locked: bool) -> str:
-    """复盘正文区。locked=True 时只出免费预览，完整正文由 JS 按登录态补。"""
+def _dr_body(row: Optional[Dict[str, Any]], locked: bool, *,
+             stale: bool = False, snapshot_date: str = "") -> str:
+    """复盘正文区。locked=True 时只出免费预览，完整正文由 JS 按登录态补。
+
+    stale=True 表示这一行是**回退来的快照**（请求日期当天缺失/失败），此时在
+    正文最前面加一条"数据更新于 X"的横幅 —— 不让访客把旧日期内容误当成当天。
+    """
+    banner = ""
+    if stale:
+        banner = (
+            '<div class="data-stale">'
+            f'数据更新于 {_htmlmod.escape(snapshot_date or "")}'
+            "（当日内容正在生成，先为你展示最近一次成功结果）</div>"
+        )
     if row is None:
-        return ('<div class="no-data">还没有生成过复盘 —— 每个交易日 17:45 '
-                "数据入库后自动生成。</div>")
+        return banner + ('<div class="no-data">还没有生成过复盘 —— 每个交易日 17:45 '
+                         "数据入库后自动生成。</div>")
     if row.get("status") == "failed":
         # 品牌审核结论 2.8.4:公开页**绝不暴露"生成失败"**这类生产事故字样 ——
         # 对访客是信任损伤,对爬虫是低质信号(诊断实测:连续 10 天公开挂着失败占位)。
         # 改为不含事故信息的友好态,并把访客导向最近一个有效交易日。
-        return ('<div class="no-data">该交易日复盘正在补录，'
-                "可先查看最近一个交易日的复盘内容。</div>")
+        return banner + ('<div class="no-data">该交易日复盘正在补录，'
+                         "可先查看最近一个交易日的复盘内容。</div>")
     if locked:
         # 免费预览 + 付费墙。付费墙整段包在 .dr-paid 里 —— 与 _dr_head() 里
         # hasPart.cssSelector 对应,是向搜索引擎声明"这里确实是会员内容"的锚点。
-        return (
+        return banner + (
             _dr_render.preview_html(row.get("content_md")) +
             '<div class="dr-paid">'
             '<div class="dr-paywall">'
@@ -789,7 +889,7 @@ def _dr_body(row: Optional[Dict[str, Any]], locked: bool) -> str:
             "开通会员 · 查看套餐</button>"
             "</div></div>"
         )
-    return _dr_render.md_to_html(row.get("content_md"))
+    return banner + _dr_render.md_to_html(row.get("content_md"))
 
 
 def _dr_history(limit: int = 30) -> str:
@@ -848,6 +948,22 @@ def _daily_review_page(request: Request, d: Optional[_date]) -> Response:
             raise HTTPException(404, f"{d} 无复盘记录")
         canonical = f"{_SITE_ORIGIN}/daily_review/{d}"
 
+    # ── 当天行缺失 / 失败 → 回退最近一次成功快照（访客永不见空白）───────────
+    # 复盘 runner 失败时会把当天行覆盖成空(failed)，这里补上"最近成功快照"这层，
+    # 让页面照常有正文。canonical 与 <title> 仍指向**请求的日期**（URL 语义不变，
+    # 避免同内容被收录成两个 URL），只是正文用快照 + 顶部标注真实数据日期 +
+    # noindex（见 _dr_head）。
+    stale = False
+    snapshot_date = ""
+    if row is None or row.get("status") != "generated" or not row.get("content_md"):
+        try:
+            snap = _dr_db.get_latest_generated(before=d)
+        except Exception as e:
+            logger.info("复盘页取最近成功快照失败(按无回退处理): %s", e)
+            snap = None
+        if snap is not None:
+            row, stale, snapshot_date = snap, True, str(snap.get("review_date"))
+
     # 最新一篇对所有人免费;往期是会员内容 —— 服务端一律按"未订阅"直出,
     # 订阅用户的完整正文由前端拿 API 覆盖(HTML 带 ETag,不能塞按人变化的内容)
     is_latest = (
@@ -869,10 +985,15 @@ def _daily_review_page(request: Request, d: Optional[_date]) -> Response:
     return _html(
         request, "daily_review.html",
         replacements={
-            "<!--DR_HEAD-->": _dr_head(row, canonical, locked),
+            # page_date：标题里的日期锚用**请求的日期**(与 canonical 一致);
+            # 快照的真实数据日期写在正文横幅里(_dr_body)。
+            "<!--DR_HEAD-->": _dr_head(
+                row, canonical, locked, stale=stale,
+                page_date=str(d) if d is not None else None),
             "<!--DR_TITLE-->": _htmlmod.escape(art_title) or "加载中…",
             "<!--DR_DATE-->": _htmlmod.escape(date_txt),
-            "<!--DR_BODY-->": _dr_body(row, locked),
+            "<!--DR_BODY-->": _dr_body(
+                row, locked, stale=stale, snapshot_date=snapshot_date),
             "<!--DR_HISTORY-->": _dr_history(),
             # 前端据此判断服务端已经直出了哪一篇,避免二次渲染时白闪一下
             "<!--DR_INIT-->": (

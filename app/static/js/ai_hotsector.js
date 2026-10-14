@@ -180,13 +180,21 @@ async function loadToday() {
   const wrap = document.getElementById('hsTodayWrap');
   try {
     const res = await fetch('/api/ai_hotsector/today');
-    const { pick } = await res.json();
+    const { pick, stale, data_date } = await res.json();
     if (!pick) {
       wrap.innerHTML = '<div class="no-data">尚未生成观察名单，请等待 15:05 定时任务，或在 /tasks 页面手动触发 ai_hotsector_predict</div>';
       return;
     }
 
-    document.getElementById('hsTodayDate').textContent = `（${pick.pick_date}）`;
+    // 最新一批失败/无明细时后端会回退到上一批有内容的批次,并带 stale=true。
+    // 此时必须在标题处标注**真实数据日期**,否则用户会以为这是今天的新名单
+    // (欠费当天就出现过"有板块无数据"的观感)。
+    const dateEl = document.getElementById('hsTodayDate');
+    if (stale) {
+      dateEl.innerHTML = `（数据日期：${esc(data_date || pick.pick_date)}，当日名单生成中）`;
+    } else {
+      dateEl.textContent = `（${pick.pick_date}）`;
+    }
 
     if (pick.status === 'failed') {
       wrap.innerHTML = `<div class="no-data">最近一次生成失败：${esc(pick.error_msg)}</div>`;

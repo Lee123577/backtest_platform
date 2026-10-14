@@ -42,6 +42,16 @@ def public_reason(text) -> str:
 @router.get("/today")
 def today():
     row = db.get_today()
+    stale = False
+    # 最新一批没内容(不存在 / 生成失败 / 没有明细) → 回退到最近一批**有选股明细**
+    # 的正常批次,避免欠费当天把页面渲染成"有板块无数据"。
+    # 这是只读回退,不触发生成(符合"页面渲染绝不触发生成"这条铁律)。
+    if row is None or row.get("status") == "failed" or not row.get("stocks"):
+        alt = db.get_latest_with_stocks(
+            before=row.get("pick_date") if row else None
+        )
+        if alt is not None:
+            row, stale = alt, True
     if row is None:
         return {"pick": None}
     for k in _PRIVATE_PICK_FIELDS:
@@ -49,7 +59,12 @@ def today():
     for st in row.get("stocks") or []:
         st["sector_reason"] = public_reason(st.get("sector_reason"))
         st["stock_reason"] = public_reason(st.get("stock_reason"))
-    return {"pick": _json_safe(row)}
+    out: dict = {"pick": _json_safe(row)}
+    if stale:
+        # 向后兼容的追加字段:老前端视而不见也不会坏,新前端在标题处标注数据日期。
+        out["stale"] = True
+        out["data_date"] = str(row.get("pick_date"))
+    return out
 
 
 @router.get("/history")

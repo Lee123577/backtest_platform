@@ -116,6 +116,30 @@ def get_latest_review() -> Optional[Dict[str, Any]]:
         return cur.fetchone()
 
 
+def get_latest_generated(before: Optional[_Date] = None) -> Optional[Dict[str, Any]]:
+    """最近一次**成功**的复盘（status='generated' 且正文非空）。
+
+    before 给了就取严格早于它的那篇——用于"目标日期当天失败时回退到上一版"。
+    只收 content_md 非空的行：历史上有过 status='generated' 但正文为空的脏数据
+    （见 2026-08 事故），不加这个条件会回退到一个空正文。
+    """
+    conn = _get_pool()
+    if conn is None:
+        return None
+    where = "status='generated' AND content_md IS NOT NULL AND content_md <> ''"
+    params: list = []
+    if before is not None:
+        where += " AND review_date < %s"
+        params.append(before)
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""SELECT * FROM daily_review WHERE {where}
+                ORDER BY review_date DESC LIMIT 1""",
+            tuple(params),
+        )
+        return cur.fetchone()
+
+
 def list_review_dates(limit: int = 365) -> List[_Date]:
     """sitemap 用：生成成功的复盘日期，倒序。
 

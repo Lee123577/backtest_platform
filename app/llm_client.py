@@ -42,16 +42,29 @@ class LLMError(RuntimeError):
     """
 
 
+class LLMBalanceError(LLMError):
+    """账号欠费/余额不足。
+
+    与限流**必须区分**：限流退避重试有机会恢复，欠费重试一百次也一样失败，
+    还会把一个本该立刻惊动人的事故拖成"连续 12 个交易日静默失败"。
+    继承 LLMError 是为了不破坏三个 runner 现有的 except LLMError ——
+    它们照旧判 failed，不用改。
+    """
+
+
 # provider 档案。key_attr 指向 Settings 上存该家 API Key 的字段名。
 # json_object：这家的 /chat/completions 认不认 response_format={"type":"json_object"}。
 # 认就带上（模型不会跑偏成自然语言）；不认的家带了会直接 400，只能靠提示词约束
 # 加下面的围栏剥离兜底。
+# balance_path：能查账户余额的家给出接口路径（用于余额探针，零 token 成本）；
+# 没有公开余额接口的家给 None —— 探针不会偷偷发计费请求（见 app/llm_balance.py）。
 PROVIDERS: Dict[str, Dict[str, Any]] = {
     "deepseek": {
         "base_url": "https://api.deepseek.com",
         "model": "deepseek-chat",
         "key_attr": "DEEPSEEK_API_KEY",
         "json_object": True,
+        "balance_path": "/user/balance",   # GET，返回 balance_infos[].total_balance
     },
     "zhipu": {
         # 智谱开放平台 v4 接口直接用 API Key 做 Bearer，不需要签 JWT
@@ -59,6 +72,7 @@ PROVIDERS: Dict[str, Dict[str, Any]] = {
         "model": "glm-4-flash",   # 长期免费档；想换 glm-4.5-flash 配 LLM_MODEL
         "key_attr": "ZHIPU_API_KEY",
         "json_object": True,
+        "balance_path": None,     # 无公开余额接口
     },
     "custom": {
         # 兜底档：base_url / model / key 全部由环境变量给
@@ -66,6 +80,7 @@ PROVIDERS: Dict[str, Dict[str, Any]] = {
         "model": "",
         "key_attr": "LLM_API_KEY",
         "json_object": True,
+        "balance_path": None,
     },
 }
 
@@ -85,6 +100,20 @@ RATE_LIMIT_RETRIES = 2
 RATE_LIMIT_BACKOFF_SEC = 10.0
 # 智谱用 1302 表示速率限制,多数家用 HTTP 429;两个都认
 _RATE_LIMIT_MARKS = ("429", "1302", "速率限制", "rate limit", "too many requests")
+
+# 欠费标记。注意 "quota" 一词在部分家表示"限流"而非"欠费"，
+# 故不纳入；只认确定表示余额/额度的措辞，宁缺毋滥。
+_BALANCE_MARKS = (
+    "insufficient balance", "insufficient_quota", "insufficient funds",
+    "account balance", "余额不足", "欠费", "请充值", "recharge",
+)
+
+
+def _is_balance_error(msg: str) -> bool:
+    """正文里是否含"欠费/余额不足"特征词。只用于**上游 LLM 响应**的判别 ——
+    绝不能拿去判本站自己的业务错误(本站的 402 是订阅墙，与欠费无关)。"""
+    low = (msg or "").lower()
+    return any(m in low for m in _BALANCE_MARKS)
 
 
 def _profile() -> Dict[str, Any]:
@@ -171,8 +200,13 @@ async def chat_json(
         try:
             return await _chat_once(messages, use, timeout, temperature)
         except LLMError as e:
+            # 欠费优先：绝不能因为消息文本里恰好含 "429" 之类的限流标记就去重试
+            # （"429 状态 + 正文写 Insufficient Balance" 的畸形上游响应正踩这个坑）。
+            # 先按类型拦一道，让"欠费立即 raise、不重试"不再依赖脆弱的文本匹配。
+            if isinstance(e, LLMBalanceError):
+                raise
             # 只对限流退避：401/超时/返回非法 JSON 重试多少次都是同样的结果，
-            # 白等还拖长整个批量任务
+            # 白等还拖长整个批量任务。
             if attempt >= RATE_LIMIT_RETRIES or not _is_rate_limited(str(e)):
                 raise
             wait = RATE_LIMIT_BACKOFF_SEC * (2 ** attempt)
@@ -211,10 +245,19 @@ async def _chat_once(
             resp = await client.post(url, json=payload, headers=headers)
             resp.raise_for_status()
     except httpx.HTTPStatusError as e:
+        status = e.response.status_code
+        body = e.response.text[:300]
+        # 402 = Payment Required；部分家欠费也可能回 400/403，故再按正文兜一次。
+        # 这里的 402 是**上游 LLM** 的响应，与本站 require_subscription 对外抛的
+        # 402（订阅墙）完全无关 —— 那个不会进到 httpx 异常里，不会互相污染。
+        if status == 402 or _is_balance_error(body):
+            raise LLMBalanceError(
+                f"{describe(model)} 余额不足/欠费 HTTP {status}: {body}"
+            ) from e
         # 带上 provider 和 model：同一个 401 在两家的含义完全不同
         # （欠费 / Key 写错 / 模型名不存在），不写清楚要查半天
         raise LLMError(
-            f"{describe(model)} HTTP {e.response.status_code}: {e.response.text[:300]}"
+            f"{describe(model)} HTTP {status}: {body}"
         ) from e
     except httpx.HTTPError as e:  # TimeoutException 也是 HTTPError 子类
         # 必须带上异常类名：httpx 的超时异常 str() 是空串，只写 {e} 的话

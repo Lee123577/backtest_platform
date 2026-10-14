@@ -208,6 +208,16 @@ TASKS: Dict[str, TaskDef] = {
         "depends_on": None,
         "description": "新手引导邮件(注册后第 0/1/3/7 天各一封,每天 10:00)",
     },
+    # LLM 余额探针:开盘前唤醒一次即可,不占盘中资源。每交易日 1 次
+    # (内容管线本来就只交易日跑),故用 weekday。欠费/低余额时脚本 exit 3,
+    # 调度器据此记 failed → 次日再探;并落 ops_alert + 发运维邮件。
+    "llm_balance_probe": {
+        "cmd": ["python", "scripts/llm_balance_probe.py"],
+        "schedule": "weekday:09:00",
+        "timeout_sec": 2 * 60,
+        "depends_on": None,
+        "description": "LLM 账号余额探针(每交易日 09:00，低于阈值告警)",
+    },
 }
 
 

@@ -67,5 +67,24 @@ class Settings:
     # 漏配的后果是"我进不去"，而不是"谁都能进"。
     ADMIN_EMAILS: frozenset = parse_admin_emails(os.getenv("ADMIN_EMAILS", ""))
 
+    # ── LLM 余额告警与降级(2026-08 欠费事故后加) ──────────────────────────
+    # LLM_BALANCE_PROBE_ENABLED 总开关；关掉则探针任务直接 exit 0
+    LLM_BALANCE_PROBE_ENABLED: bool = os.getenv(
+        "LLM_BALANCE_PROBE_ENABLED", "1").strip().lower() in ("1", "true", "yes", "on")
+    # 低于这个余额(元)就告警。默认 10 元：按 DeepSeek 平价档约够几千次调用，
+    # 留出足够人工充值的时间窗。
+    LLM_BALANCE_MIN_CNY: float = float(os.getenv("LLM_BALANCE_MIN_CNY", "10"))
+    # 无余额接口的家是否发"最小 chat 探活"(每次会产生一条计费调用)。默认关。
+    LLM_BALANCE_CHAT_PROBE: bool = os.getenv(
+        "LLM_BALANCE_CHAT_PROBE", "0").strip().lower() in ("1", "true", "yes", "on")
+    # 告警收件人。复用 ADMIN_EMAILS 的解析函数。
+    # 留空 → 回落到 ADMIN_EMAILS；再空 → 只打日志+webhook，不发邮件。
+    ALERT_EMAILS: frozenset = parse_admin_emails(os.getenv("ALERT_EMAILS", ""))
+    # 备选通道：企业微信/钉钉机器人 webhook，或 Server酱 SendKey。
+    ALERT_WEBHOOK_KIND: str = os.getenv("ALERT_WEBHOOK_KIND", "").strip().lower()
+    ALERT_WEBHOOK_URL: str = os.getenv("ALERT_WEBHOOK_URL", "").strip()
+    # 同类告警多少小时内不重复发，避免探针每小时唤醒都惊动一次
+    ALERT_REPEAT_HOURS: int = int(os.getenv("ALERT_REPEAT_HOURS", "6"))
+
 
 settings = Settings()

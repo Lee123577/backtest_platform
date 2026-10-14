@@ -39,11 +39,28 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
+def _exit_code(result: dict) -> int:
+    """0=真发了 或 今天没有提醒；1=有失败(触发重试)。
+
+    与 notify_daily_digest.py 同一套语义：把"users==0"(没人可发) 与"发了全成功"
+    分开，避免空转被伪装成 success（见技术方案 §五）。
+    """
+    if int(result.get("failed") or 0) > 0:
+        return 1
+    return 0
+
+
 def main() -> int:
     from app.notify.service import send_watchlist_alerts
     result = send_watchlist_alerts()
     log.info("盯盘提醒邮件: %s", result)
-    return 1 if int(result.get("failed") or 0) > 0 else 0
+
+    # "0 收件人 = success" 会把空转伪装成健康。补一条醒目 WARNING，仍 exit 0。
+    if int(result.get("users") or 0) == 0:
+        log.warning("本次无收件人（users=0）：不是故障，但说明尚无用户命中盯盘提醒 —— "
+                    "请核对 signal_alert 与 email_pref 的情况。结果=%s", result)
+
+    return _exit_code(result)
 
 
 if __name__ == "__main__":

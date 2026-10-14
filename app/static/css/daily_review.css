@@ -148,3 +148,17 @@ h1.panel-title {
   color: #1a1d23;
 }
 .dr-next-btn--primary:hover { background: #e0921c; border-color: #e0921c; }
+
+/* ── 快照回退横幅 ────────────────────────────────────────────────────────
+   当天复盘失败/缺失时，正文回退到最近一次成功快照，并在顶部标注真实数据
+   日期（见 app/main.py 的 _dr_body）。配色复用全局 --warn（style.css:22）。 */
+.data-stale {
+  margin: 0 0 14px;
+  padding: 9px 12px;
+  border-left: 3px solid var(--warn, #9a6700);
+  border-radius: 6px;
+  background: rgba(154, 103, 0, .10);
+  color: var(--warn, #9a6700);
+  font-size: 12.5px;
+  line-height: 1.6;
+}

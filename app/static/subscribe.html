@@ -42,14 +42,16 @@
 
   <div class="panel">
     <div class="panel-title">会员状态 <span class="tip-badge">仅供研究，不构成投资建议</span></div>
-    <div class="sub-status" id="subStatus">加载中…</div>
+    <!-- 服务端直出**公开**兜底内容(名额进度);"你是不是会员"这种按人变化的
+         东西绝不进这里(响应带 ETag 会被共享缓存复用),仍由 subscribe.js 覆盖。 -->
+    <div class="sub-status" id="subStatus"><!--SUB_STATUS--></div>
   </div>
 
   <div class="panel" id="planPanel">
     <div class="panel-title">选择套餐</div>
-    <div class="plan-grid" id="planGrid"></div>
+    <div class="plan-grid" id="planGrid"><!--SUB_PLANS--></div>
     <div class="sub-msg" id="subMsg"></div>
-    <div class="sub-contact" id="subContact"></div>
+    <div class="sub-contact" id="subContact"><!--SUB_CONTACT--></div>
     <div class="sub-hint">
       会员解锁：历史每日复盘完整正文与数据快照、AI 板块观察的历史跟踪记录与挑选逻辑。
       最新一篇复盘 / 当日板块观察始终免费。
