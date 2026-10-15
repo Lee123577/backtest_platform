@@ -1183,12 +1183,12 @@
   }
 
   /* ── 单例卡片(每种全站只有一张,没有可配置内容,数据直接来自各自模块的
-     现成接口):每日复盘摘要 / AI板块观察跟踪 / 指数速览。跟排行卡片一样
+     现成接口):每日复盘摘要 / 板块热度观察 / 指数速览。跟排行卡片一样
      id 是写死的,"添加卡片"菜单里已存在就不再出现,不会重复添加。      */
 
   var SINGLETON_DEFS = [
     { id: "dr_summary", kind: "review", label: "每日复盘摘要" },
-    { id: "hs_today", kind: "hotsector", label: "AI板块观察跟踪" },
+    { id: "hs_today", kind: "hotsector", label: "板块热度观察" },
     { id: "idx_overview", kind: "indices", label: "指数速览" },
   ];
 
@@ -1247,11 +1247,11 @@
       .catch(function () { renderReviewCard(card.id, null); refreshCanvas(); });
   }
 
-  // AI板块观察跟踪
+  // 今日板块热度(板块热度观察:客观 Top 板块 + AI 客观观察记录,不含任何个股)
   function hotsectorCardHtml(card) {
     return '<div class="mb-card mb-hotsector-card" id="mbCard_' + card.id + '" data-card-id="' + card.id + '">' +
       '<div class="mb-card-head">' +
-      '<span class="mb-name">AI板块观察跟踪</span>' +
+      '<span class="mb-name">今日板块热度</span>' +
       '<span class="mb-rank-date" id="mbHsDate_' + card.id + '"></span>' +
       '<span class="mb-drag-handle" title="拖动排列位置,便于横向/纵向比对">⠿</span>' +
       '<button type="button" class="mb-card-close" data-remove-card="' + esc(card.id) + '" title="删除这张卡片">✕</button>' +
@@ -1261,49 +1261,47 @@
       "</div>";
   }
 
-  function renderHotsectorCard(cardId, pick, stats) {
+  function renderHotsectorCard(cardId, today) {
     var dateEl = $("mbHsDate_" + cardId);
     var body = $("mbHsBody_" + cardId);
     if (!body) return;   // 请求还没回来卡片就被删了
-    if (dateEl) dateEl.textContent = pick ? String(pick.pick_date || "") : "";
-    if (!pick || !pick.stocks || !pick.stocks.length) {
-      body.innerHTML = '<div class="no-data">今日暂无观察样本</div>';
+
+    // /today 契约:{ boards: [...], pick_date, stale, data_date }。stale 时
+    // 如实标出真实数据日期(data_date),不拿旧数据冒充今天。
+    var boards = (today && today.boards) || [];
+    var stamp = today ? (today.data_date || today.pick_date) : "";
+    if (dateEl) dateEl.textContent = stamp ? String(stamp) : "";
+
+    if (!boards.length) {
+      body.innerHTML = '<div class="no-data">今日板块热度生成中</div>';
       return;
     }
 
-    var bySector = {};
-    var order = [];
-    pick.stocks.forEach(function (s) {
-      if (!bySector[s.sector_name]) { bySector[s.sector_name] = []; order.push(s.sector_name); }
-      bySector[s.sector_name].push(s);
-    });
-    var html = order.map(function (sector) {
-      var rows = bySector[sector].map(function (s, i) {
-        var extra = s.is_win == null ? "" :
-          (s.is_win ? '<span class="mb-hs-tag mb-hs-tag--win">已结算·涨</span>' : '<span class="mb-hs-tag mb-hs-tag--lose">已结算·跌</span>');
-        var pct = s.pct_change != null ? Number(s.pct_change) * 100 : null;
-        return row(i, (s.name || s.code) + "(" + s.code + ")", pct, s.stock_reason, extra);
-      }).join("");
-      return '<div class="rk-group-label">' + esc(sector) + "</div>" + rows;
+    // 每行:板块名 · 涨跌幅(带涨跌色) · 领涨股+涨幅(可选) · 成分股数；
+    // 不再有任何个股层面的渲染路径。
+    var html = boards.map(function (b, i) {
+      var meta = [];
+      if (b.leader) {
+        var lp = b.leader_pct;
+        meta.push("领涨 " + b.leader +
+          (lp != null ? " " + (lp > 0 ? "+" : "") + Number(lp).toFixed(2) + "%" : ""));
+      }
+      if (b.stock_count != null) meta.push("成分股 " + b.stock_count + " 只");
+      var note = b.note ? '<span class="mb-hs-note">' + esc(b.note) + "</span>" : "";
+      return row(b.rank != null ? b.rank - 1 : i, b.name, b.pct_change, meta.join(" · "), note);
     }).join("");
-    var statLine = stats && stats.total_count
-      ? '<div class="rk-note">累计上涨占比 ' + stats.win_count + "/" + stats.total_count +
-        "(" + (stats.win_rate != null ? num(stats.win_rate * 100, 1) : "—") + "%) · 累计收益 " +
-        (stats.cum_return != null ? num(stats.cum_return * 100) + "%" : "—") + "</div>"
-      : "";
-    body.innerHTML = html + statLine;
+
+    body.innerHTML = html +
+      '<div class="rk-note">按当日真实涨跌幅客观排序,只陈述板块层面的热度,不涉及任何个股。</div>';
   }
 
   function loadHotsectorCard(card) {
-    Promise.all([
-      fetch("/api/ai_hotsector/today").then(function (r) { return r.ok ? r.json() : { pick: null }; })
-        .catch(function () { return { pick: null }; }),
-      fetch("/api/ai_hotsector/stats").then(function (r) { return r.ok ? r.json() : null; })
-        .catch(function () { return null; }),
-    ]).then(function (res) {
-      renderHotsectorCard(card.id, res[0].pick, res[1]);
-      refreshCanvas();
-    });
+    // 只读 /today(新契约返回 boards);不再拉 stats —— 旧口径的"观察样本"统计
+    // 属于已停止更新的历史模拟跟踪,不进这张卡。
+    fetch("/api/ai_hotsector/today")
+      .then(function (r) { return r.ok ? r.json() : { boards: [] }; })
+      .then(function (j) { renderHotsectorCard(card.id, j); refreshCanvas(); })
+      .catch(function () { renderHotsectorCard(card.id, { boards: [] }); refreshCanvas(); });
   }
 
   // 指数速览

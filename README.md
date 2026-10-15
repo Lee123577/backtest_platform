@@ -1,6 +1,6 @@
 # A 股量化回测平台
 
-基于 FastAPI + ECharts 的 A 股量化策略回测与模拟交易平台。核心场景:**单股信号**、**组合选股**(已并入首页)、**模拟盘**、**AI 热门板块**、**AI 每日复盘**、**大盘云图**、**个股 AI 报告**;账号周边还有**自选盯盘**、**个人数据看板**、**回测分享**与**订阅会员**。
+基于 FastAPI + ECharts 的 A 股量化策略回测与模拟交易平台。核心场景:**单股信号**、**组合选股**(已并入首页)、**模拟盘**、**AI 板块热度观察**、**AI 每日复盘**、**大盘云图**、**个股 AI 报告**;账号周边还有**自选盯盘**、**个人数据看板**、**回测分享**与**订阅会员**。
 
 ![单股策略](docs/images/01-single-stock.png)
 
@@ -50,10 +50,10 @@
 > 可以挑慢而写得好的。撞上限流(HTTP 429 / 智谱 1302)会退避重试两次
 > (10s → 20s)——一次批量 50 篇,撞限流就判 failed 的话能废掉半批。
 
-**AI 热门板块**
-- 每交易日 15:05 两段式提示词:DeepSeek 选 3 个热门板块,每板块再选 3 只强势股
+**AI 板块热度观察**
+- 每交易日 15:05 抓当日真实板块涨跌幅快照,客观取涨幅前 3 的板块,调一次 DeepSeek 对这几个板块各写一段客观观察记录(不选板块、不选个股)
 - T 日收盘价买入 → T+1 收盘价卖出,等权滚动复利;资金曲线对比中证1000基准 + 扣费后收益(佣金双边+印花税,最低佣金 5 元如实计入)
-- 胜率多维统计:按天 / 按板块 / 按选股提示词版本聚合;盘中实时浮动盈亏
+- 只陈列板块层面的客观数据(板块名/当日涨跌幅/领涨股/成分股数/AI 客观观察记录);此前个股模拟跟踪的胜率/资金曲线保留在页面折叠区(2026-10-15 起停止更新)
 - 停牌/退市/AI 编造代码等异常个股自动排除(settle_status 状态机),不阻塞整批结算
 
 **AI 每日复盘(DeepSeek)**
@@ -123,12 +123,12 @@
   (`COUNT(*)<30` 再插一行的写法必然发出第 31 份)
 
 **邮件通知(`app/notify/`)**
-- 两封信:收盘后的**自选信号提醒**(17:25)、**每日复盘 + AI 热门板块**推送(18:00)
+- 两封信:收盘后的**自选信号提醒**(17:25)、**每日复盘 + 板块热度观察**推送(18:00)
 - **新手引导**:注册后第 0/1/3/7 天各一封(跑通第一次回测 → 认识策略 → 学会怀疑回测结果 →
   打开收盘后邮件推送),每天 10:00 发。只发给注册 9 天内的账号,第 7 天那封之后永不再发;
   某封到期后宽限 2 天,任务停更久就作废不补发,同一天最多一封。默认开(有终点的注册流程延续,
   不是持续的内容推送),每封带一键退订
-- 一天最多一封:复盘和热门板块合成同一封,分两封就成了每天两条广告
+- 一天最多一封:复盘和板块热度观察合成同一封,分两封就成了每天两条广告
 - 正文只放摘要 + 回站链接 —— 复盘全文是会员内容,不能从邮件漏出去
 - 幂等靠 `email_send_log` 的 `(user_id, kind, 交易日)` 唯一键:**先占位再发信**,
   失败就释放占位;任务重跑时已收到的人跳过、失败的人重试,不会有人收到两封
@@ -203,7 +203,7 @@ MYSQL_DATABASE=back_test
 | `LLM_MODEL` | 按档案 | 全局模型名,留空用档案默认 |
 | `LLM_MODEL_REPORT` | 同 `LLM_MODEL` | 个股报告专用模型。这个任务每天 50 次连续调用,**要快、要扛限流** |
 | `LLM_MODEL_REVIEW` | 同 `LLM_MODEL` | 每日复盘专用模型。一天一次,可以挑慢而好的 |
-| `LLM_MODEL_HOTSECTOR` | 同 `LLM_MODEL` | AI 热门板块专用模型(其中"选股"是全站最重的一次调用) |
+| `LLM_MODEL_HOTSECTOR` | 同 `LLM_MODEL` | AI 板块热度观察专用模型(单次调用) |
 | `LLM_BASE_URL` | 按档案 | 覆盖接口地址;接档案里没有的家时配 `LLM_PROVIDER=custom` + 这个 |
 | `LLM_API_KEY` | (空) | 显式指定 Key,优先级高于上面按家分开的那两个 |
 | `SUBSCRIBE_CONTACT_QQ` | 1415854304 | 订阅页展示的人工开通联系 QQ |
@@ -279,7 +279,7 @@ python run.py
 | `/discuss` | 讨论区:发帖 / 回复 / 点赞,首屏弹幕(每次打开播一遍,不循环) |
 | `/strategy/{id}` | 策略专题页:规则拆解 / 全市场实测 / 参数表(可改参数直接带去回测) / FAQ |
 | `/paper_trading` | 模拟盘:持仓/收益曲线/成交流水/参数编辑 |
-| `/ai_hotsector` | AI 热门板块:每日预测/胜率统计/资金曲线/盘中浮盈 |
+| `/ai_hotsector` | AI 板块热度观察:当日客观板块热度 + 历史模拟跟踪(已停止更新) |
 | `/daily_review` | AI 每日复盘:最新一篇(当日数据概览 + DeepSeek 复盘正文 + 历史列表) |
 | `/daily_review/2026-07-08` | 指定日期的复盘,每篇独立可索引 URL |
 | `/cloudmap` | 大盘云图 treemap |
@@ -432,12 +432,12 @@ PORTFOLIO_REGISTRY["my_portfolio"] = MyPortfolioStrategy
 scripts/run_scheduled_tasks.py
    ↓
 scheduler.runner.run_due()  →  subprocess 跑各任务(全表见下方"调度任务")
-   ├─ ai_hotsector_predict  weekday 15:05  DeepSeek 选板块+选股
+   ├─ ai_hotsector_predict  weekday 15:05  DeepSeek 板块热度观察(客观排序)
    ├─ sector_snapshot       weekday 15:10  新浪行业/概念板块涨跌快照
    ├─ daily_update          weekday 17:00  增量 K 线/财务/指数/北向/因子
    ├─ watchlist_alert_scan  weekday 17:20  自选盯盘信号扫描(依赖 daily_update)
    ├─ daily_signal          weekday 17:30  模拟盘选股(依赖 daily_update)
-   ├─ ai_hotsector_settle   weekday 17:35  AI 板块结算(依赖 daily_update)
+   ├─ ai_hotsector_settle   weekday 17:35  AI 板块模拟跟踪历史结算(依赖 daily_update)
    ├─ daily_review_generate weekday 17:45  AI 复盘生成(依赖 daily_update)
    ├─ stock_report_batch    weekday 18:10  个股 AI 报告预生成成交额前 50(依赖 daily_update)
    ├─ backfill_geo          daily 00:00    回填访问日志 IP 地理位置
@@ -519,7 +519,7 @@ scheduler.runner.run_due()  →  subprocess 跑各任务(全表见下方"调度�
 | `paper_account` / `paper_holdings` | paper_trading | 模拟账户单行状态 / 当前持仓(带 `last_dividend_check_date`) |
 | `paper_signal_run` / `paper_signal_position` | paper_trading | 每日运行记录 / 每次运行的持仓快照 |
 | `paper_equity_daily` | paper_trading | 每日净值 + 基准 |
-| `ai_hotsector_pick` / `ai_hotsector_stock` / `ai_hotsector_equity` | ai_hotsector | 每日板块预测 / 板块内选股 / 资金曲线(settle_status 状态机) |
+| `ai_hotsector_pick` / `ai_hotsector_stock` / `ai_hotsector_equity` | ai_hotsector | 板块热度观察批次(pick 含 board_obs) / [历史]板块内选股明细 / [历史]资金曲线(settle_status 状态机) |
 | `daily_review` | daily_review | 复盘标题/正文 + 数据快照(context_json),可审计模型看到了什么 |
 | `stock_ai_report` | stock_report | 个股 AI 分析报告(生成时间/提示词版本,按 code 去重) |
 | `app_user` / `email_code` / `user_session` | auth | 用户 / 登录验证码 / 会话(token 库内只存 sha256) |
@@ -543,15 +543,15 @@ scheduler.runner.run_due()  →  subprocess 跑各任务(全表见下方"调度�
 
 | 任务名 | 调度 | 依赖 | 说明 |
 |---|---|---|---|
-| `ai_hotsector_predict` | weekday 15:05 | — | DeepSeek 选 3 板块 × 3 强势股 |
+| `ai_hotsector_predict` | weekday 15:05 | — | 板块热度观察生成(客观涨跌幅前 3 + AI 客观观察) |
 | `sector_snapshot` | weekday 15:10 | — | 新浪行业/概念板块涨跌快照(失败隔 40 分钟重试,当天最多 5 次) |
 | `daily_update` | weekday 17:00 | — | 增量更新 K 线/财务/指数/北向资金/因子 |
 | `watchlist_alert_scan` | weekday 17:20 | `daily_update` | 自选股 × 盯盘策略收盘信号扫描,命中落站内提醒 |
 | `watchlist_alert_mail` | weekday 17:25 | `watchlist_alert_scan` | 把当天命中的信号汇总成一封邮件发给开了通知的用户 |
 | `daily_signal` | weekday 17:30 | `daily_update` | 模拟盘选股(参数由 `/paper_trading` 页 UI 配置,不硬编码在脚本里) |
-| `ai_hotsector_settle` | weekday 17:35 | `daily_update` | AI 热门板块回填收盘价 + 结算胜率/资金曲线 |
+| `ai_hotsector_settle` | weekday 17:35 | `daily_update` | AI 板块模拟跟踪历史收尾(产品已停新批次,仅结算遗留) |
 | `daily_review_generate` | weekday 17:45 | `daily_update` | AI 每日市场复盘生成(DeepSeek) |
-| `daily_digest_mail` | weekday 18:00 | `daily_review_generate` | 复盘摘要 + AI 热门板块合成一封推送邮件(顺带清理 90 天前的发信账本) |
+| `daily_digest_mail` | weekday 18:00 | `daily_review_generate` | 复盘摘要 + 板块热度观察合成一封推送邮件(顺带清理 90 天前的发信账本) |
 | `stock_report_batch` | weekday 18:10 | `daily_update` | 个股 AI 报告批量预生成(成交额前 50,长尾访客按需触发) |
 | `backfill_geo` | daily 00:00 | — | 访问日志 IP 地理回填(离线 xdb) |
 | `onboarding_mail` | daily 10:00 | — | 新手引导邮件(注册后第 0/1/3/7 天各一封,幂等键是"第几封") |
@@ -661,10 +661,10 @@ app/
   my_board/                  个人数据看板(登录后各自保存布局,未登录只读)
   cloudmap/                  大盘云图(ECharts treemap)
   sectors/                   板块排行榜(sector_snapshot 快照的读取端,60s 缓存)
-  ai_hotsector/              AI 热门板块(每日选板块+选股)
+  ai_hotsector/              板块热度观察(客观板块排序 + AI 客观观察;个股模拟跟踪已停更)
     runner.py                  predict_once / settle_once 每日运行器
     db.py                      ai_hotsector_* 表 DDL + CRUD + settle_status 状态机
-    prompts.py                 板块/选股两段式提示词(带版本号)
+    prompts.py                 板块热度观察提示词(带版本号,单段式)
   daily_review/              AI 每日复盘(DeepSeek 基于当日真实数据生成)
     runner.py                  build_context 数据快照 + generate_once 生成落库
     db.py / render.py / prompts.py
@@ -686,8 +686,8 @@ scripts/
   import_history.py          全量历史导入(2010 ~ 今,一次性)
   daily_update.py            每日增量(17:00,经 scheduler 拉起)
   daily_signal.py            每日信号生成(17:30)
-  ai_hotsector_predict.py    AI 热门板块每日预测(15:05)
-  ai_hotsector_settle.py     AI 热门板块结算(17:35)
+  ai_hotsector_predict.py    AI 板块热度观察生成(15:05)
+  ai_hotsector_settle.py     AI 板块模拟跟踪历史结算(17:35)
   daily_review_generate.py   AI 每日市场复盘生成(17:45)
   stock_report_batch.py      个股 AI 报告批量预生成(18:10,成交额前 50)
   sector_snapshot.py         板块涨跌快照(15:10)

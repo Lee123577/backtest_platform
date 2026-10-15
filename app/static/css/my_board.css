@@ -526,7 +526,8 @@ body.spx-shell .site-footer.mb-footer { max-width: none; margin-top: 24px; }
 }
 .mb-review-link:hover { text-decoration: underline; }
 
-/* ── AI热门板块战绩卡(复用排行榜的 rk-row/rk-group-label 列表样式) ──── */
+/* ── 今日板块热度卡(复用排行榜的 rk-row/rk-group-label 列表样式;
+   板块热度观察只展示板块层面,不含个股) ──────────────────────────────── */
 
 .mb-hs-tag {
   font-size: 10px;
@@ -536,6 +537,16 @@ body.spx-shell .site-footer.mb-footer { max-width: none; margin-top: 24px; }
 }
 .mb-hs-tag--win { background: rgba(207, 34, 46, .1); color: #cf222e; }
 .mb-hs-tag--lose { background: rgba(26, 127, 55, .1); color: #1a7f37; }
+
+/* AI 客观观察记录:紧贴板块名下方的一行小字 */
+.mb-hs-note {
+  display: block;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--txt2, #8a929c);
+  line-height: 1.6;
+  margin-top: 2px;
+}
 
 /* ── 指数速览卡 ────────────────────────────────────────────────────── */
 

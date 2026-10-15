@@ -55,28 +55,40 @@ def test_public_reason_drops_recommendation_wording():
     assert public_reason(None) == ""
 
 
-def test_today_strips_raw_model_output_and_filters_reasons(monkeypatch):
+def test_today_returns_boards_only_and_filters_note(monkeypatch):
+    """方案 B：/today 只返回板块热度观察，**不含任何个股**；含推荐/预测措辞的
+    观察记录整条过滤为空。"""
     from app.ai_hotsector import api, db
-    monkeypatch.setattr(db, "get_today", lambda: {
-        "pick_date": "2026-10-12", "model": "deepseek-chat",
-        "sectors_raw": "{原始返回}", "stocks_raw": "{原始返回}",
-        "stocks": [
-            {"code": "600000", "sector_reason": "政策催化，板块龙头集中", "stock_reason": "主营 X 设备"},
-        ],
-    })
-    pick = api.today()["pick"]
-    for k in ("model", "sectors_raw", "stocks_raw"):
-        assert k not in pick
-    st = pick["stocks"][0]
-    assert st["sector_reason"] == "" and st["stock_reason"] == "主营 X 设备"
+    monkeypatch.setattr(db, "get_latest_pick_date", lambda: "2026-10-12")
+    monkeypatch.setattr(db, "get_board_obs", lambda d: [
+        {"rank": 1, "name": "光伏", "pct_change": 3.2, "leader": "某某", "leader_pct": 9.9,
+         "stock_count": 55, "note": "政策催化，板块龙头集中"},   # 含禁用词 → 过滤为空
+        {"rank": 2, "name": "半导体", "pct_change": 1.1, "leader": None, "leader_pct": None,
+         "stock_count": 40, "note": "当日缩量整理"},
+    ])
+    out = api.today()
+    assert "stocks" not in out and "pick" not in out
+    assert len(out["boards"]) == 2
+    assert out["boards"][0]["note"] == ""
+    assert out["boards"][1]["note"] == "当日缩量整理"
+    # 板块层面字段照传
+    assert out["boards"][0]["name"] == "光伏" and out["boards"][0]["pct_change"] == 3.2
 
 
-def test_stock_prompt_v4_bans_recommendation_words():
+def test_sector_prompt_v4_is_objective_observation():
+    """方案 B：AI 不再"选板块/选个股"，只对给定的客观 Top 板块写客观观察记录。"""
     from datetime import date
     from app.ai_hotsector import prompts
-    assert prompts.STOCK_PROMPT_VERSION == "v4"
-    text = "".join(m["content"] for m in prompts.stock_messages(date(2026, 10, 12), ["光伏"]))
-    assert "选股研究员" not in text and "投资逻辑" not in text
+    assert prompts.SECTOR_PROMPT_VERSION == "v4"
+    # 个股两段式提示词已随方案 B 删除
+    assert not hasattr(prompts, "STOCK_PROMPT_VERSION")
+    assert not hasattr(prompts, "stock_messages")
+    boards = [{"name": "光伏", "pct_change": 3.2, "leader": "某某", "leader_pct": 9.9,
+               "stock_count": 55}]
+    text = "".join(m["content"] for m in prompts.sector_messages(date(2026, 10, 12), boards))
+    for banned in ("选出", "最值得关注", "强势股", "选股", "个股代码"):
+        assert banned not in text
+    assert "note" in text
     for w in ("建议", "龙头", "目标价"):
         assert f"『{w}』" in text
 

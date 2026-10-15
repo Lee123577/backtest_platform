@@ -195,24 +195,59 @@ def daily_digest_mail(
         )
 
     if hotsector:
-        sectors = hotsector.get("sectors") or []
+        boards = hotsector.get("boards") or []
         link = site_url("/ai_hotsector")
-        # 邮件里**只报板块、不报个股**：主动、定向、持续地把"具体选哪些股、什么代码"
-        # 推到用户面前，是"证券投资咨询"最典型的形态(合规审查 R2)。名单与挑选依据
-        # 只留在站内，邮件只做"今天关注了哪些板块"的摘要 + 回站入口。
-        text_parts += ["【AI 板块观察】",
-                       "关注板块：" + ("、".join(sectors) if sectors else "—"), "",
-                       "个股名单与挑选依据请回站查看，邮件不承载个股清单。", ""]
-        text_parts += [f"查看挑选逻辑与跟踪记录：{link}", ""]
+        # 邮件里**只报板块层面的客观热度、不承载任何个股清单**：主动、定向、持续地
+        # 把"具体选哪些股、什么代码"推到用户面前，是"证券投资咨询"最典型的形态
+        # (合规审查 R2)。连"领涨股 X"这种点名到具体个股的成分都不进邮件，邮件只做
+        # 板块名 + 涨跌幅(+ 成分股数) 的摘要 + 回站入口；观察记录与明细只留站内。
+        board_lines = []
+        for b in boards:
+            name = str(b.get("name") or "").strip()
+            if not name:
+                continue
+            pct = b.get("pct_change")
+            pct_num = pct if isinstance(pct, (int, float)) else None
+            pct_txt = f"{pct:+.2f}%" if pct_num is not None else "—"
+            cnt = b.get("stock_count")
+            cnt_txt = f"（成分股 {int(cnt)} 只）" if isinstance(cnt, (int, float)) else ""
+            board_lines.append((f"{name} {pct_txt}{cnt_txt}", name, pct_txt, pct_num, cnt_txt))
+
+        text_parts += ["【AI 板块热度观察】"]
+        if board_lines:
+            text_parts += ["今日板块热度（客观涨跌幅居前）："]
+            text_parts += [f"  · {ln[0]}" for ln in board_lines]
+        else:
+            text_parts += ["今日板块热度：—"]
+        text_parts += ["", "只陈述板块层面的客观热度，不涉及任何个股，不构成择股建议。", ""]
+        text_parts += [f"查看板块热度观察：{link}", ""]
+
+        rows_html = "".join(
+            f'<tr>'
+            f'<td style="padding:6px 10px;border-bottom:1px solid #f0f1f3;font-size:14px;'
+            f'color:#111827;font-weight:600;">{_esc(name)}</td>'
+            f'<td style="padding:6px 10px;border-bottom:1px solid #f0f1f3;font-size:14px;'
+            f'text-align:right;font-weight:700;font-variant-numeric:tabular-nums;'
+            f'color:{"#d64545" if (pct_num is not None and pct_num > 0) else ("#2fa87d" if (pct_num is not None and pct_num < 0) else "#57606a")};">'
+            f'{_esc(pct_txt)}</td>'
+            f'<td style="padding:6px 10px;border-bottom:1px solid #f0f1f3;font-size:13px;'
+            f'color:#6b7280;">{_esc(cnt_txt.lstrip("（").rstrip("）")) if cnt_txt else "—"}</td>'
+            f'</tr>'
+            for _ln, name, pct_txt, pct_num, cnt_txt in board_lines
+        )
+        body_html = (
+            f'<table style="width:100%;border-collapse:collapse;">{rows_html}</table>'
+            if rows_html else
+            '<p style="margin:0;font-size:14px;color:#4b5563;">今日暂无板块热度数据。</p>'
+        )
         html_parts.append(
             f'<div>'
             f'<div style="font-size:12px;color:#9ca3af;letter-spacing:1px;margin-bottom:6px;">'
-            f'AI 板块观察</div>'
-            f'<p style="margin:0 0 10px;font-size:14px;color:#4b5563;line-height:1.8;">'
-            f'今日关注：{_esc("、".join(sectors)) if sectors else "—"}</p>'
-            + _btn(link, "查看挑选逻辑与跟踪记录")
+            f'AI 板块热度观察</div>'
+            + body_html
+            + _btn(link, "查看板块热度观察")
             + '<p style="margin:12px 0 0;font-size:12px;color:#9ca3af;line-height:1.7;">'
-              '个股名单与挑选依据请回站查看，邮件不承载个股清单。</p>'
+              '只陈述板块层面的客观热度，不涉及任何个股，不构成择股建议。</p>'
             + '</div>'
         )
 

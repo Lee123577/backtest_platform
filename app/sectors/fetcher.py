@@ -81,10 +81,26 @@ def _parse(text: str) -> List[Dict[str, Any]]:
 _RETRY_SLEEPS = (3, 8)
 
 
-def _fetch(url: str, params: Dict[str, Any] | None, label: str) -> List[Dict[str, Any]]:
-    for attempt in range(len(_RETRY_SLEEPS) + 1):
+def _fetch(
+    url: str,
+    params: Dict[str, Any] | None,
+    label: str,
+    *,
+    timeout: float = 15,
+    retries: int = len(_RETRY_SLEEPS),
+) -> List[Dict[str, Any]]:
+    """抓一个新浪板块接口。
+
+    timeout: 单次 HTTP 请求超时(秒)。
+    retries: 本进程内重试次数,每次失败按 _RETRY_SLEEPS 递增退避后再试;
+             retries=0 表示只尝试一次、绝不 sleep —— /today 的实时兜底要求
+             严格控制请求线程的阻塞时长,用得到这个入口。
+    仍是"抓到非空行就返回、全失败返回 []"的语义,默认参数与旧行为一致。
+    """
+    retries = max(0, int(retries))
+    for attempt in range(retries + 1):
         try:
-            r = _session().get(url, params=params, timeout=15)
+            r = _session().get(url, params=params, timeout=timeout)
             r.encoding = "gbk"   # 新浪这两个接口是 GBK,不设会乱码
             rows = _parse(r.text)
         except Exception as e:
@@ -93,16 +109,25 @@ def _fetch(url: str, params: Dict[str, Any] | None, label: str) -> List[Dict[str
         if rows:
             logger.info("%s板块抓取 ok: %d 个", label, len(rows))
             return rows
-        if attempt < len(_RETRY_SLEEPS):
-            time.sleep(_RETRY_SLEEPS[attempt])
-    logger.warning("%s板块重试 %d 次仍失败(排行榜将显示数据缺失)",
-                   label, len(_RETRY_SLEEPS) + 1)
+        if attempt < retries:
+            # 退避间隔固定取 _RETRY_SLEEPS 的对应档;retries 超过档数时复用最后一档,
+            # 避免索引越界(调用方目前只用到 0 或默认值)。
+            time.sleep(_RETRY_SLEEPS[min(attempt, len(_RETRY_SLEEPS) - 1)])
+    logger.warning("%s板块重试 %d 次仍失败(排行榜将显示数据缺失)", label, retries + 1)
     return []
 
 
-def fetch_industry() -> List[Dict[str, Any]]:
-    return _fetch(URL_INDUSTRY, None, "行业")
+def fetch_industry(
+    *,
+    timeout: float = 15,
+    retries: int = len(_RETRY_SLEEPS),
+) -> List[Dict[str, Any]]:
+    return _fetch(URL_INDUSTRY, None, "行业", timeout=timeout, retries=retries)
 
 
-def fetch_concept() -> List[Dict[str, Any]]:
-    return _fetch(URL_CONCEPT, {"param": "class"}, "概念")
+def fetch_concept(
+    *,
+    timeout: float = 15,
+    retries: int = len(_RETRY_SLEEPS),
+) -> List[Dict[str, Any]]:
+    return _fetch(URL_CONCEPT, {"param": "class"}, "概念", timeout=timeout, retries=retries)

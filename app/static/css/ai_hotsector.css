@@ -4,7 +4,7 @@
  * pre-emit critique: P5 H5 E4 S5 R5 V4
  *
  * 改版起因:原先五个一模一样的白 panel + 六张一模一样的小卡片,
- * 所有信息等权 = 没有信息。现在:超额收益当主角,今日荐股是重心,
+ * 所有信息等权 = 没有信息。现在:超额收益当主角,今日板块热度是重心,
  * 其余降级为支撑,并用战绩条给页面一个能一眼读完的节奏。
  *
  * 涨跌配色沿用 A 股习惯(--up 红 / --down 绿),不改。
@@ -175,7 +175,7 @@
   margin-top: -1px;
 }
 
-/* ── 3. 今日荐股:页面重心 ────────────────────────────────────────────────
+/* ── 3. 今日板块热度:页面重心 ────────────────────────────────────────────────
    用一条顶部强调边把它和其余白卡片区分开 —— 这是用户来这页要看的东西 */
 .hs-today-panel {
   border-top: 3px solid var(--accent);
@@ -394,4 +394,42 @@ table.hs-tbl {
   .hs-streak { height: 62px; }
   /* 窄屏柱子太细点不中,允许整条横向滚动 */
   .hs-bar { min-width: 10px; flex-basis: 10px; }
+}
+
+
+/* ── 板块热度卡补充(方案 B:去个股,只陈列板块层面数据) ───────────────── */
+.hs-board-meta {
+  font-size: 12px;
+  color: var(--txt2);
+  margin-bottom: 8px;
+  line-height: 1.6;
+}
+.hs-board-meta .hs-leader-pct { font-weight: 700; }
+.hs-board-meta .hs-leader-pct.pos { color: var(--up); }
+.hs-board-meta .hs-leader-pct.neg { color: var(--down); }
+
+/* ── 历史记录折叠区(2026-10-15 起不再更新) ────────────────────────────── */
+.hs-history-fold { padding: 14px 24px; }
+.hs-history-summary {
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--txt);
+  list-style: none;
+}
+.hs-history-summary::-webkit-details-marker { display: none; }
+.hs-history-note {
+  margin: 10px 0 16px;
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--txt2);
+  line-height: 1.7;
+  background: rgba(87, 96, 106, 0.05);
+  border-radius: 6px;
+}
+.hs-today-disclaimer {
+  margin: 12px 0 0;
+  font-size: 12px;
+  color: var(--txt2);
+  line-height: 1.7;
 }

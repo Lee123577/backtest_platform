@@ -272,3 +272,21 @@ def test_前后端画法清单一致():
     assert m, "前端 CHART_MODES 定义没找到(改过写法就同步改这条断言)"
     front = tuple(re.findall(r'"([a-z]+)"', m.group(1)))
     assert front == service._CHART_MODES
+
+
+def test_hotsector_card_renders_board_heat_not_stocks():
+    """方案 B 收口 F1:my_board 的 hotsector 卡片渲染「板块热度」(读 /today 的
+    boards),不再有 pick.stocks / 个股代码 / 个股理由 的渲染路径;标题与空态
+    文案也统一到「板块热度」口径。"""
+    js = open("app/static/js/my_board.js", encoding="utf-8").read()
+    # 旧契约(个股)渲染路径必须彻底消失
+    assert "res[0].pick" not in js
+    assert "pick.stocks" not in js
+    assert "stock_reason" not in js
+    # 新契约:loadHotsectorCard 把整包响应交给 renderHotsectorCard 读 boards
+    assert "renderHotsectorCard(card.id, j)" in js
+    # 卡片标题/空态/菜单文案统一到板块热度
+    assert "今日板块热度" in js
+    assert "今日板块热度生成中" in js
+    assert "今日暂无观察样本" not in js
+    assert "AI板块观察跟踪" not in js

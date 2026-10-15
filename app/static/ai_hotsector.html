@@ -4,12 +4,12 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27><text y=%27.9em%27 font-size=%2790%27>%F0%9F%95%90</text></svg>">
-  <title>AI 板块观察 - 收盘 shoupan</title>
-  <meta name="description" content="AI 每日收盘后挑出关注板块与样本股，按 T 日收盘买入、T+1 收盘卖出的规则做模拟跟踪，对比中证1000基准，仅供研究不构成投资建议">
+  <title>板块热度观察 - 收盘 shoupan</title>
+  <meta name="description" content="按当日真实板块涨跌幅快照，客观观察板块热度居前情况，只陈列板块层面的数据，不涉及任何个股，不构成任何择股建议，仅供研究。">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="收盘 shoupan">
-  <meta property="og:title" content="AI 板块观察 - 收盘 shoupan">
-  <meta property="og:description" content="AI 每日收盘后挑出关注板块与样本股，按 T 日收盘买入、T+1 收盘卖出的规则做模拟跟踪，对比中证1000基准，仅供研究不构成投资建议">
+  <meta property="og:title" content="板块热度观察 - 收盘 shoupan">
+  <meta property="og:description" content="按当日真实板块涨跌幅快照，客观观察板块热度居前情况，只陈列板块层面的数据，不涉及任何个股，不构成任何择股建议，仅供研究。">
   <meta property="og:url" content="https://shoupan.asia/ai_hotsector">
   <meta name="twitter:card" content="summary">
   <link rel="canonical" href="https://shoupan.asia/ai_hotsector">
@@ -38,21 +38,43 @@
 <main>
 
   <!-- ══════════════════════════════════════════════════════
-       1. 表现头条
-       原先是 6 张等大的小卡片,把"累计收益""同期中证1000"并排一放,
-       要用户自己做减法才知道这个 AI 到底行不行。改成:超额收益当主角,
-       其余四项降级为支撑数据,胜率给一条能一眼看完的进度条。
+       标题区：产品口径已由「AI 挑选板块与个股」改为【板块热度观察】。
+       只陈列板块层面的客观数据，不再出现任何个股。
   ══════════════════════════════════════════════════════ -->
   <section class="hs-hero">
     <div class="hs-hero-top">
-      <h1 class="hs-hero-title">AI 板块观察 · 模拟跟踪</h1>
+      <h1 class="hs-hero-title">板块热度观察</h1>
       <span class="tip-badge">仅供研究，不构成投资建议</span>
       <span class="tip-badge">本内容由 AI 生成：AI 内容可能存在错误、滞后或偏差，仅供参考，不构成任何投资建议。</span>
     </div>
     <p class="hs-hero-rule">
-      每交易日收盘后 AI 挑出 3 个关注板块、各取 3 只样本股，按 T 日收盘价模拟买入、
-      T+1 收盘价模拟卖出，10 万虚拟本金等权滚动复利。只用来检验这种挑选方式本身有没有效，不构成任何买卖建议
+      每个交易日收盘后，取当日真实板块涨跌幅快照中热度居前的板块做客观观察记录，只陈列板块层面的数据，不涉及任何个股，不构成任何择股建议。
     </p>
+  </section>
+
+  <!-- 主区块：今日板块热度观察 —— 页面重心，给它区别于其他区块的视觉权重 -->
+  <section class="panel hs-today-panel">
+    <div class="panel-title">
+      今日板块热度观察 <span id="hsTodayDate"></span>
+    </div>
+    <div id="hsTodayWrap">
+      <div class="no-data">加载中…</div>
+    </div>
+    <p class="hs-today-disclaimer">
+      以上为板块层面的客观热度观察，不涉及任何个股，不构成任何择股建议，仅供研究。
+    </p>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════
+       历史记录折叠区：原个股模拟跟踪的全部历史表现/资金曲线/方法论明细。
+       产品已改为不含个股选择性的板块热度观察，此部分仅作历史留存、不再更新。
+       所有原 DOM id 一律保留不动（JS 仍在用）。
+  ══════════════════════════════════════════════════════ -->
+  <details class="panel hs-history-fold">
+    <summary class="hs-history-summary">📎 历史记录 · AI 个股模拟跟踪（已停止更新）</summary>
+    <div class="hs-history-note">
+      该模拟跟踪基于 2026-10-15 之前 AI 挑选的个股。产品已改为不含个股选择性的板块热度观察，此部分仅作历史留存，<strong>不再更新</strong>。
+    </div>
 
     <div class="hs-hero-grid">
       <div class="hs-headline">
@@ -92,70 +114,59 @@
         <span class="hs-winrate-fill"></span>
       </div>
     </div>
-  </section>
 
-  <!-- 2. 20 日跟踪条 —— 每根柱子 = 一个已结算交易日的当日收益。
-       历史批次表里本来就有这些数,但表格要逐行读;柱状条一眼看出波动与连败 -->
-  <section class="panel hs-streak-panel">
-    <div class="panel-title">
-      近期跟踪 <span id="hsStreakHint">按已结算交易日，柱高为当日收益绝对值</span>
-    </div>
-    <div class="hs-streak" id="hsStreak">
-      <div class="no-data">加载中…</div>
-    </div>
-  </section>
+    <!-- 盘中浮动标记：仅历史遗留持仓会用，故一并收进历史区 -->
+    <div class="hs-live" id="hsLive" hidden><i></i>盘中</div>
+    <span class="hs-updated-hint" id="hsIntradayUpdated"></span>
 
-  <!-- 3. 今日 AI 观察名单 —— 页面重心,给它区别于其他区块的视觉权重 -->
-  <section class="panel hs-today-panel">
-    <div class="panel-title">
-      今日 AI 观察名单 <span id="hsTodayDate"></span>
-      <span class="hs-live" id="hsLive" hidden><i></i>盘中</span>
-      <span class="hs-updated-hint" id="hsIntradayUpdated"></span>
-    </div>
-    <div id="hsTodayWrap">
-      <div class="no-data">加载中…</div>
-    </div>
-  </section>
+    <!-- 近期跟踪条 —— 每根柱子 = 一个已结算交易日的当日收益 -->
+    <section class="panel hs-streak-panel">
+      <div class="panel-title">
+        近期跟踪 <span id="hsStreakHint">按已结算交易日，柱高为当日收益绝对值</span>
+      </div>
+      <div class="hs-streak" id="hsStreak">
+        <div class="no-data">加载中…</div>
+      </div>
+    </section>
 
-  <!-- 4. 资金曲线 -->
-  <section class="panel">
-    <div class="panel-title">模拟资金曲线 <span>10 万本金 · 每日滚动复利 · 对比中证1000 · 扣费后</span></div>
-    <div class="chart-wrap-sm" id="hsEquityChart"></div>
-  </section>
+    <!-- 资金曲线 -->
+    <section class="panel">
+      <div class="panel-title">模拟资金曲线 <span>10 万本金 · 每日滚动复利 · 对比中证1000 · 扣费后</span></div>
+      <div class="chart-wrap-sm" id="hsEquityChart"></div>
+    </section>
 
-  <!-- 4. 板块表现 + 提示词版本对比 —— 收进折叠区:这两张是给想验证"AI
-       是不是在同质化推荐/提示词迭代到底有没有用"的人看的方法论细节,
-       对大多数只想看"跑得怎么样"的用户是认知负担,默认收起、想看自己展开 -->
-  <details class="panel hs-methodology">
-    <summary class="hs-methodology-summary">
-      📎 数据方法论：板块同质化 & 提示词版本对比（点击展开）
-    </summary>
-    <div class="hs-two-col hs-methodology-body">
-      <div>
-        <div class="panel-title">
-          板块表现 <span>出现天数越多，说明 AI 越倾向反复挑中同一板块(同质化迹象)</span>
+    <!-- 板块表现 + 提示词版本对比 —— 方法论明细，默认收起 -->
+    <details class="panel hs-methodology">
+      <summary class="hs-methodology-summary">
+        📎 数据方法论：板块同质化 & 提示词版本对比（点击展开）
+      </summary>
+      <div class="hs-two-col hs-methodology-body">
+        <div>
+          <div class="panel-title">
+            板块表现 <span>出现天数越多，说明当年越倾向反复挑中同一板块(同质化迹象)</span>
+          </div>
+          <div id="hsSectorStatsWrap">
+            <div class="no-data">加载中…</div>
+          </div>
         </div>
-        <div id="hsSectorStatsWrap">
-          <div class="no-data">加载中…</div>
+
+        <div>
+          <div class="panel-title">提示词版本对比 <span>迭代提示词后，用上涨占比验证是否真的变好了</span></div>
+          <div id="hsPromptStatsWrap">
+            <div class="no-data">加载中…</div>
+          </div>
         </div>
       </div>
+    </details>
 
-      <div>
-        <div class="panel-title">提示词版本对比 <span>迭代提示词后，用上涨占比验证是否真的变好了</span></div>
-        <div id="hsPromptStatsWrap">
-          <div class="no-data">加载中…</div>
-        </div>
+    <!-- 历史批次 -->
+    <section class="panel">
+      <div class="panel-title">历史批次 <span>每日一批，含未结算</span></div>
+      <div id="hsHistoryWrap">
+        <div class="no-data">加载中…</div>
       </div>
-    </div>
+    </section>
   </details>
-
-  <!-- 6. 历史批次 -->
-  <section class="panel">
-    <div class="panel-title">历史批次 <span>每日一批，含未结算</span></div>
-    <div id="hsHistoryWrap">
-      <div class="no-data">加载中…</div>
-    </div>
-  </section>
 
 </main>
 

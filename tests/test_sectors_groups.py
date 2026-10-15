@@ -6,6 +6,8 @@
   电力设备→科技(不能被"电力"抢到公用)、电子化学品→科技(不能被"化工"抢到周期)、
   房产租赁经纪→公用(不能被"租赁"抢到金融)、品牌消费电子→科技(不能被"电器"抢到消费)
 """
+import types
+
 import pytest
 
 from app.sectors.groups import (
@@ -117,3 +119,69 @@ def test_theme_keywords_are_only_a_highlight_not_a_filter():
 ])
 def test_is_dividend(name, want):
     assert is_dividend(name) is want
+
+
+# ── 抓取器限时参数(方案 B 收口 F2)──────────────────────────────────────────
+# /today 的实时兜底不能继承 fetcher 默认的"15s × 多次重试",否则行情源一卡
+# 请求线程就被挂住上百秒。下面锁住 retries=0(只试一次、零退避)与默认行为不变。
+
+class _EmptyResp:
+    """解析出空板块(视为失败),让 _fetch 走完重试路径。"""
+    encoding = "gbk"
+    text = "var x = {};"
+
+
+def _patch_session(monkeypatch, fetcher, calls):
+    def fake_get(url, params=None, timeout=None):
+        calls["n"] += 1
+        calls["timeouts"].append(timeout)
+        return _EmptyResp()
+    monkeypatch.setattr(fetcher, "_session",
+                        lambda: types.SimpleNamespace(get=fake_get))
+    monkeypatch.setattr(fetcher.time, "sleep",
+                        lambda s: calls["sleeps"].append(s))
+
+
+def test_fetch_retries_zero_tries_once_without_sleep(monkeypatch):
+    from app.sectors import fetcher
+
+    calls = {"n": 0, "timeouts": [], "sleeps": []}
+    _patch_session(monkeypatch, fetcher, calls)
+
+    out = fetcher._fetch("http://x", None, "测试", timeout=2.0, retries=0)
+
+    assert out == []
+    assert calls["n"] == 1                 # 只尝试一次
+    assert calls["timeouts"] == [2.0]      # 超时透传
+    assert calls["sleeps"] == []           # 零退避,绝不 sleep
+
+
+def test_fetch_default_matches_old_behavior(monkeypatch):
+    from app.sectors import fetcher
+
+    calls = {"n": 0, "timeouts": [], "sleeps": []}
+    _patch_session(monkeypatch, fetcher, calls)
+
+    out = fetcher._fetch("http://x", None, "测试")
+
+    assert out == []
+    assert calls["n"] == len(fetcher._RETRY_SLEEPS) + 1        # 1 次 + 默认重试
+    assert calls["timeouts"] == [15] * (len(fetcher._RETRY_SLEEPS) + 1)
+    assert calls["sleeps"] == list(fetcher._RETRY_SLEEPS)      # 退避序列不变
+
+
+def test_fetch_industry_concept_pass_through_kwargs(monkeypatch):
+    from app.sectors import fetcher
+
+    seen = {}
+
+    def fake_fetch(url, params, label, *, timeout, retries):
+        seen[label] = (url, params, timeout, retries)
+        return []
+
+    monkeypatch.setattr(fetcher, "_fetch", fake_fetch)
+    fetcher.fetch_industry(timeout=1.5, retries=0)
+    fetcher.fetch_concept(timeout=2.5, retries=3)
+
+    assert seen["行业"][2:] == (1.5, 0)
+    assert seen["概念"][2:] == (2.5, 3)

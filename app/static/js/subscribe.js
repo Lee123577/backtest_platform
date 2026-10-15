@@ -178,10 +178,10 @@
       '<div class="lt-perks"><div class="lt-perks-title">领到手能解锁什么</div>' +
       "<ul>" +
       "<li>历史每日复盘的完整正文与当日数据快照</li>" +
-      "<li>AI 板块观察的历史跟踪记录与挑选逻辑</li>" +
+      "<li>AI 板块热度观察的历史记录与判断依据</li>" +
       "<li>自选盯盘的收盘规则提醒（可发到邮箱）</li>" +
       "</ul>" +
-      '<div class="lt-perks-foot">最新一篇复盘 / 当日板块观察始终免费，不领也能看。</div>' +
+      '<div class="lt-perks-foot">最新一篇复盘 / 当日板块热度观察始终免费，不领也能看。</div>' +
       "</div>" +
       '<div class="lt-err" id="ltErr"></div>';
 

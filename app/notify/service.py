@@ -190,26 +190,26 @@ def _review_block(trade_date: _Date) -> Optional[Dict[str, Any]]:
 
 
 def _hotsector_block(trade_date: _Date) -> Optional[Dict[str, Any]]:
-    """当天的 AI 热门板块选股。不是当天的那批就不带（宁可少一块，
-    也不能把昨天的选股当成今天的发出去）。"""
+    """当天的 AI 板块热度观察。不是当天的那批就不带（宁可少一块，
+    也不能把昨天的观察当成今天的发出去）。邮件只承载板块层面的客观数据，
+    **不含任何个股**（合规审查 R2）。"""
     from ..ai_hotsector import db as hs_db
 
     try:
-        pick = hs_db.get_today()
+        pick_date = hs_db.get_latest_pick_date()
     except Exception as e:
-        logger.info("取热门板块失败(跳过这一块): %s", e)
+        logger.info("取板块热度观察失败(跳过这一块): %s", e)
         return None
-    if not pick or str(pick.get("pick_date")) != str(trade_date):
+    if pick_date is None or str(pick_date) != str(trade_date):
         return None
-    stocks = pick.get("stocks") or []
-    if not stocks:
+    try:
+        boards = hs_db.get_board_obs(pick_date)
+    except Exception as e:
+        logger.info("取板块热度观察失败(跳过这一块): %s", e)
         return None
-    sectors: List[str] = []
-    for s in stocks:
-        name = (s.get("sector_name") or "").strip()
-        if name and name not in sectors:
-            sectors.append(name)
-    return {"sectors": sectors, "stocks": stocks}
+    if not boards:
+        return None
+    return {"boards": boards}
 
 
 def send_daily_digest(trade_date: Optional[_Date] = None) -> Dict[str, Any]:

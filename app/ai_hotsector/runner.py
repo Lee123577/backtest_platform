@@ -1,39 +1,37 @@
 """
-AI 热门板块每日运行器
-======================
+AI 板块热度观察每日运行器
+==========================
 
 两个独立入口，分别由 scheduler 的两个任务调用：
 
-  predict_once(pick_date)  —— T 日 15:05：调 DeepSeek 两段式提示词，
-                               产出 3 板块 × 3 股票，写"预测"字段(buy_price 留空)。
-  settle_once(as_of_date)  —— T 日之后、daily_update 已跑完：
-                               1) 回填当天新预测那批的 buy_price(用 T 日收盘价)
-                               2) 回填"已有 buy_price 但还没卖出"那批的 sell_price
-                                  (用其下一交易日收盘价)，结算 pct_change/is_win，
-                                  全部结算完的一批写一行资金曲线(等权、滚动复利)。
+  predict_once(pick_date)  —— T 日 15:05：抓当日真实板块涨跌幅快照，**客观**取
+                               涨幅前 3 的板块，调一次 DeepSeek 让模型对这几个
+                               板块各写一段客观观察记录，落库为"When 板块热度
+                               观察"（不再产出 / 落库任何个股）。
+  settle_once(as_of_date)  —— T 日之后、daily_update 已跑完：收尾 2026-10-15 之前
+                               遗留的历史在途批次
+                               1) 回填买入价(用 T 日收盘价)
+                               2) 回填卖出价(用其下一交易日收盘价)，结算
+                                  pct_change/is_win，全部结算完的一批写一行资金曲线。
+                               产品已停止产生新批次，本入口只做历史收尾。
 
 停牌/退市/AI 给出不存在代码等异常个股不会阻塞其他股票或后续交易日 —— 详见
 app/ai_hotsector/db.py 的 settle_status 状态机注释。
 """
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
 from datetime import date as _Date
 from typing import Any, Dict, List, Optional
 
 from ..data import calendar
-from ..data.data_loader import normalize_code
 from ..engine.fees import COMMISSION_RATE, MIN_COMMISSION, STAMP_TAX_RATE
 from ..sectors.fetcher import fetch_concept, fetch_industry
 from . import db
 from ..llm_client import LLMError, chat_json, model_for
-from .prompts import (
-    SECTOR_PROMPT_VERSION,
-    STOCK_PROMPT_VERSION,
-    sector_messages,
-    stock_messages,
-)
+from .prompts import SECTOR_PROMPT_VERSION, sector_messages
 
 logger = logging.getLogger(__name__)
 
@@ -72,12 +70,24 @@ def _round_trip_cost_rate(position_value: float) -> float:
 BOARD_SNAPSHOT_TOP_N = 20
 
 
-def _fetch_board_snapshot(top_n: int = BOARD_SNAPSHOT_TOP_N) -> List[Dict[str, Any]]:
-    """今日概念+行业板块真实涨跌幅快照，按涨幅降序取前 top_n，喂给选板块的
-    prompt 打真实底数据(见 prompts.py v3 说明)。两个接口都是新浪实时行情，
-    收盘后立即可取，不依赖 daily_update 的当日 K 线入库(那个要等晚些)。
+def _fetch_board_snapshot(
+    top_n: int = BOARD_SNAPSHOT_TOP_N,
+    *,
+    timeout: float = 15,
+    retries: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """今日概念+行业板块真实涨跌幅快照，按涨幅降序取前 top_n。两个接口都是
+    新浪实时行情，收盘后立即可取，不依赖 daily_update 的当日 K 线入库(那个要等晚些)。
+    predict 直接取前 3 作为"客观 Top 板块"，api 的实时兜底也复用它。
+
+    timeout/retries 透传给两个底层抓取，用于给 api 实时兜底"限时"：
+    retries=None 表示沿用 fetcher 的默认重试(收盘后正式生成用得到)，
+    retries=0 表示不重试(单次请求,配短 timeout 用)，保持既有调用方行为不变。
     """
-    rows = fetch_concept() + fetch_industry()
+    kwargs: Dict[str, Any] = {"timeout": timeout}
+    if retries is not None:
+        kwargs["retries"] = retries
+    rows = fetch_concept(**kwargs) + fetch_industry(**kwargs)
     ranked = sorted(
         (r for r in rows if r.get("pct_change") is not None),
         key=lambda r: r["pct_change"], reverse=True,
@@ -111,124 +121,83 @@ class SettleResult:
     settled_pick_dates: List[_Date] = field(default_factory=list)  # 本次新生成资金曲线的批次
 
 
-# ── 预测 ─────────────────────────────────────────────────────────────────────
+# ── 板块热度观察生成 ──────────────────────────────────────────────────────────
 
 async def predict_once(pick_date: Optional[_Date] = None) -> PredictResult:
     db.ensure_tables()
     pick_date = pick_date or _Date.today()
 
     if not calendar.is_trading_day(pick_date):
-        logger.info("[%s] 非交易日,跳过 AI 热门板块预测", pick_date)
+        logger.info("[%s] 非交易日,跳过 AI 板块热度观察", pick_date)
         return PredictResult(pick_date=pick_date, status="skipped")
 
-    # 已结算的日期拒绝重跑:replace_stocks 会先删后插,把已结算的 9 行清空重置，
-    # 而资金曲线的 capital_before 链条是按 pick_date 顺序滚动复利的，历史批次
-    # 一旦被清空重插，后面的资金曲线不会重新计算，整条链条就对不上了。
-    # 只在手动补跑历史日期(--date)时才可能踩到——正常 cron 只跑当天，不会触发。
+    # 已结算的日期拒绝重跑：历史模拟跟踪的资金曲线复利链按 pick_date 顺序滚动，
+    # 重跑会覆盖当批、把链条打乱。只在手动补跑历史日期(--date)时才可能踩到，
+    # 正常 cron 只跑当天，不会触发。
     existing = db.get_pick(pick_date)
     if existing is not None and existing.get("status") == "settled":
-        msg = f"{pick_date} 已结算，拒绝重新预测(会打乱资金曲线复利链)"
+        msg = f"{pick_date} 已结算，拒绝重新生成(会打乱历史模拟跟踪记录)"
         logger.warning(msg)
         return PredictResult(pick_date=pick_date, status="skipped", error_msg=msg)
 
     board_snapshot = _fetch_board_snapshot()
     if not board_snapshot:
-        msg = "板块涨跌幅快照获取失败(新浪接口无数据)，无法基于真实行情选板块"
+        msg = "板块涨跌幅快照获取失败(新浪接口无数据)，无法基于真实行情做板块热度观察"
         logger.error("[%s] %s", pick_date, msg)
         db.upsert_pick(
-            pick_date, model_for("hotsector"), SECTOR_PROMPT_VERSION, STOCK_PROMPT_VERSION,
+            pick_date, model_for("hotsector"), SECTOR_PROMPT_VERSION, "",
             None, None, "failed", msg,
         )
         return PredictResult(pick_date=pick_date, status="failed", error_msg=msg)
-    board_lookup = {b["name"]: b for b in board_snapshot}
+
+    # 今日 Top 3 板块由**客观涨跌幅排序**决定(快照已按涨幅降序)，不由 AI 挑选
+    top3 = board_snapshot[:3]
 
     try:
+        # 全程只调用 1 次 LLM：对给定的这 3 个板块各写一段客观观察记录。
+        # 120s 而不是默认 60s：换到 glm-4.5-flash 后单次调用实测 60~87s，
+        # 用默认值会稳定超时，而超时会让整批直接判 failed。
         sectors_json, sectors_raw = await chat_json(
-            # 90s 而不是默认的 60s:换到 glm-4.5-flash 后单次调用实测 60~87s,
-            # 用默认值会稳定超时,而超时会让整批预测直接判 failed
-            sector_messages(pick_date, board_snapshot), task="hotsector",
-            timeout=120.0
+            sector_messages(pick_date, top3), task="hotsector", timeout=120.0,
         )
-        sectors_resp = (sectors_json.get("sectors") or [])[:3]
-        if len(sectors_resp) < 3:
-            raise LLMError(f"板块返回数量不足(需要3个): {sectors_json}")
-        sector_names = [str(s.get("name") or "").strip() for s in sectors_resp]
-
-        # 180s:这一段是全站最重的一次调用 —— 提示词带 3 个板块的成分股清单,
-        # 输出要 9 只股票各配一段理由。实测 glm-4.5-flash 在 90s 会稳定超时。
-        stocks_json, stocks_raw = await chat_json(
-            stock_messages(pick_date, sector_names, board_lookup),
-            task="hotsector", timeout=180.0
-        )
-        stocks_resp = stocks_json.get("sectors") or []
-
-        # 按位置对齐 sectors_resp[i] ↔ stocks_resp[i](防止模型选股调用时板块措辞对不上)
-        stock_rows: List[Dict[str, Any]] = []
-        for idx, sec in enumerate(sectors_resp):
-            sector_rank = idx + 1
-            sector_name = str(sec.get("name") or "").strip()[:40]  # 列 VARCHAR(40)
-            sector_reason = str(sec.get("reason") or "")[:255]
-            if idx >= len(stocks_resp):
-                continue
-            stock_list = (stocks_resp[idx].get("stocks") or [])[:3]
-            for j, st in enumerate(stock_list):
-                raw_code = str(st.get("code") or "").strip()
-                if not raw_code:
-                    continue
-                try:
-                    code = normalize_code(raw_code)
-                except ValueError:
-                    # 畸形代码塞不进 CHAR(6)(严格模式直接报错),丢弃该行;
-                    # 原始内容在 stocks_raw 里仍可审计
-                    logger.warning("[%s] 丢弃畸形股票代码 %r (板块 %s)",
-                                   pick_date, raw_code, sector_name)
-                    continue
-                ai_name = str(st.get("name") or "").strip()[:20]  # name 列 VARCHAR(20)
-                reason = str(st.get("reason") or "")[:255]
-                # DbUnavailableError 会向上抛到下面的 except，整批标记 failed 重试，
-                # 不会把"数据库暂时连不上"误判成"代码不存在"(code_not_found 没有
-                # 重试机会，误判会永久丢一只本来有效的股票)
-                lookup = db.lookup_stock(code, pick_date)
-                stock_rows.append({
-                    "sector_name": sector_name,
-                    "sector_rank": sector_rank,
-                    "sector_reason": sector_reason,
-                    "code": code,
-                    "name": lookup["name"] if lookup else ai_name,
-                    "stock_rank": j + 1,
-                    "stock_reason": reason,
-                    "settle_status": "pending_price" if lookup else "code_not_found",
-                })
+        note_by_name: Dict[str, str] = {}
+        for s in (sectors_json.get("sectors") or []):
+            nm = str(s.get("name") or "").strip()
+            if nm and nm not in note_by_name:
+                note_by_name[nm] = str(s.get("note") or "").strip()
     except (LLMError, db.DbUnavailableError) as e:
-        logger.error("[%s] AI 热门板块预测失败: %s", pick_date, e)
+        logger.error("[%s] AI 板块热度观察生成失败: %s", pick_date, e)
         db.upsert_pick(
-            pick_date, model_for("hotsector"), SECTOR_PROMPT_VERSION, STOCK_PROMPT_VERSION,
+            pick_date, model_for("hotsector"), SECTOR_PROMPT_VERSION, "",
             None, None, "failed", str(e),
         )
         return PredictResult(pick_date=pick_date, status="failed", error_msg=str(e))
 
-    # 去重(同一代码在不同板块重复出现)—— (pick_date, code) 是唯一键，保留先出现的
-    seen: set = set()
-    deduped: List[Dict[str, Any]] = []
-    for row in stock_rows:
-        if row["code"] in seen:
-            continue
-        seen.add(row["code"])
-        deduped.append(row)
+    # 按板块名把 note 对齐回客观 Top 3 —— 模型措辞对不上就拿不到，note 留空，
+    # 但**不因为个别板块没对齐就让整批失败**。字段全部取自快照真实值。
+    board_obs: List[Dict[str, Any]] = []
+    for i, b in enumerate(top3):
+        board_obs.append({
+            "rank": i + 1,
+            "name": b.get("name"),
+            "pct_change": b.get("pct_change"),
+            "leader": b.get("leader"),
+            "leader_pct": b.get("leader_pct"),
+            "stock_count": b.get("stock_count"),
+            "note": note_by_name.get(b.get("name"), ""),
+        })
+    board_obs_json = json.dumps(board_obs, ensure_ascii=False)
+    sector_names = [str(b.get("name") or "") for b in top3]
 
     db.upsert_pick(
-        pick_date, model_for("hotsector"), SECTOR_PROMPT_VERSION, STOCK_PROMPT_VERSION,
-        sectors_raw, stocks_raw, "predicted", None,
+        pick_date, model_for("hotsector"), SECTOR_PROMPT_VERSION, "",
+        sectors_raw, None, "predicted", None, board_obs_json,
     )
-    db.replace_stocks(pick_date, deduped)
 
-    logger.info(
-        "[%s] AI 热门板块预测完成: 板块=%s, 股票数=%d",
-        pick_date, sector_names, len(deduped),
-    )
+    logger.info("[%s] AI 板块热度观察生成完成: 板块=%s", pick_date, sector_names)
     return PredictResult(
         pick_date=pick_date, status="predicted",
-        sector_names=sector_names, stock_count=len(deduped),
+        sector_names=sector_names, stock_count=0,
     )
 
 
@@ -313,7 +282,7 @@ def rebuild_equity_chain() -> int:
     return updated
 
 
-# ── 结算 ─────────────────────────────────────────────────────────────────────
+# ── 结算（仅收尾历史在途批次） ────────────────────────────────────────────────
 
 def settle_once(as_of_date: Optional[_Date] = None) -> SettleResult:
     db.ensure_tables()
@@ -457,7 +426,7 @@ def settle_once(as_of_date: Optional[_Date] = None) -> SettleResult:
         db.update_pick_status(pick_date, "settled")
         result.settled_pick_dates.append(pick_date)
         logger.info(
-            "[%s] AI 热门板块结算完成: 胜率=%d/%d, 当批收益=%.2f%%(扣费后%.2f%%), 资金=%.2f%s",
+            "[%s] AI 板块模拟跟踪结算完成: 胜率=%d/%d, 当批收益=%.2f%%(扣费后%.2f%%), 资金=%.2f%s",
             pick_date, win_count, total_count, day_return * 100,
             day_return_after_fee * 100, capital_after,
             f", 排除{excluded_count}只" if excluded_count else "",

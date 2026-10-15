@@ -1,4 +1,6 @@
-// AI 板块观察页面逻辑：拉 /api/ai_hotsector/* 渲染统计条 / 资金曲线 / 今日观察名单 / 历史批次
+// 板块热度观察页面逻辑：拉 /api/ai_hotsector/* 渲染板块热度卡 / 历史资金曲线 / 历史批次。
+// 主区只陈列板块层面的客观数据（板块名 / 当日涨跌幅 / 领涨股 / 成分股数 / AI 观察记录），
+// 不产生任何个股 DOM（不再有 .stock-row）。历史记录（原模拟跟踪）收在折叠区里，仅作留存。
 
 let hsEquityChart;
 
@@ -17,15 +19,23 @@ function fmtPrice(v) {
   return Number(v).toFixed(3);
 }
 
+// 板块涨跌幅/领涨股涨幅来自快照，本身就是百分数(如 1.23 表示 +1.23%)，
+// 不能再乘 100 —— 与个股涨跌幅(小数口径)区分开。
+function fmtSnapshotPct(v) {
+  if (v === null || v === undefined) return '—';
+  const n = Number(v);
+  return `${n > 0 ? '+' : ''}${n.toFixed(2)}%`;
+}
+
 // esc() 现在是 util.js 里的全站共用实现(必须比本文件先加载)。
-// DeepSeek 返回的板块名/股票名/理由是模型生成的自由文本，插入 innerHTML 前必须转义，
+// DeepSeek 返回的板块名/观察记录是模型生成的自由文本，插入 innerHTML 前必须转义，
 // 否则模型输出里一旦带 HTML 就是存储型 XSS
 
 document.addEventListener('DOMContentLoaded', () => {
   loadStats();
   loadEquity();
-  // loadIntraday 依赖 loadToday 先把 .stock-row 渲染到 DOM 里，
-  // 并发跑的话会因为元素还不存在而"更新"了个寂寞
+  // loadIntraday 依赖 loadToday 先把 DOM 渲染好；并发跑的话会因为元素还不存在而"更新"了个寂寞。
+  // 主区已无 .stock-row，applyIntraday 对空集合安全返回即可。
   loadToday().then(loadIntraday);
   loadHistory();
   loadSectorStats();
@@ -34,7 +44,7 @@ document.addEventListener('DOMContentLoaded', () => {
   setInterval(loadIntraday, 30_000);
 });
 
-// ── 1. 统计条 ────────────────────────────────────────────────────────────────
+// ── 1. 统计条（历史区）──────────────────────────────────────────────────────
 
 // 涨跌着色(A 股习惯:涨红跌绿)。base 是元素原有的类名前缀
 function signClass(base, v) {
@@ -70,7 +80,6 @@ async function loadStats() {
 }
 
 // 超额收益 = 策略累计 − 基准累计,单位 pp(百分点)。
-// 这才是"这个 AI 到底行不行"的答案:原先把两个数并排摆着,要用户自己做减法。
 // 用未扣费口径与基准对齐(基准也没扣费),扣费后单独列在支撑数据里,不藏。
 function renderExcess(s) {
   const el = document.getElementById('hsExcess');
@@ -107,7 +116,7 @@ function renderWinRate(s) {
   if (bar) bar.setAttribute('aria-label', `上涨占比 ${pct.toFixed(1)}%，${s.win_count} 涨 ${s.total_count - s.win_count} 平或跌`);
 }
 
-// ── 2. 资金曲线 ──────────────────────────────────────────────────────────────
+// ── 2. 资金曲线（历史区）────────────────────────────────────────────────────
 
 async function loadEquity() {
   try {
@@ -147,7 +156,7 @@ function renderEquityChart(data) {
   hsEquityChart.setOption({
     tooltip: { trigger: 'axis', axisPointer: { type: 'cross' },
                valueFormatter: (v) => v == null ? '—' : `${v.toFixed(2)}%` },
-    legend: { data: ['AI 板块观察', '扣费后', '中证1000(基准)'], top: 0,
+    legend: { data: ['历史模拟跟踪', '扣费后', '中证1000(基准)'], top: 0,
               textStyle: { fontSize: 11 } },
     grid: { left: 60, right: 30, top: 40, bottom: 50 },
     xAxis: { type: 'category', data: dates, boundaryGap: false,
@@ -157,7 +166,7 @@ function renderEquityChart(data) {
              axisLabel: { color: '#57606a', fontSize: 11,
                           formatter: (v) => `${v.toFixed(1)}%` } },
     series: [
-      { name: 'AI 板块观察', type: 'line', data: cum, smooth: true,
+      { name: '历史模拟跟踪', type: 'line', data: cum, smooth: true,
         lineStyle: { width: 2, color: '#0969da' },
         itemStyle: { color: '#0969da' },
         areaStyle: { color: 'rgba(9,105,218,0.10)' },
@@ -174,54 +183,32 @@ function renderEquityChart(data) {
   });
 }
 
-// ── 3. 今日观察名单 ──────────────────────────────────────────────────────────────
+// ── 3. 今日板块热度观察 ──────────────────────────────────────────────────────
 
 async function loadToday() {
   const wrap = document.getElementById('hsTodayWrap');
+  const dateEl = document.getElementById('hsTodayDate');
   try {
     const res = await fetch('/api/ai_hotsector/today');
-    const { pick, stale, data_date } = await res.json();
-    if (!pick) {
-      wrap.innerHTML = '<div class="no-data">尚未生成观察名单，请等待 15:05 定时任务，或在 /tasks 页面手动触发 ai_hotsector_predict</div>';
+    const { boards, stale, data_date } = await res.json();
+    const list = boards || [];
+    if (!list.length) {
+      if (dateEl) dateEl.textContent = '';
+      wrap.innerHTML = '<div class="no-data">尚未生成板块热度观察，请等待 15:05 定时任务，或在 /tasks 页面手动触发 ai_hotsector_predict</div>';
       return;
     }
 
-    // 最新一批失败/无明细时后端会回退到上一批有内容的批次,并带 stale=true。
-    // 此时必须在标题处标注**真实数据日期**,否则用户会以为这是今天的新名单
-    // (欠费当天就出现过"有板块无数据"的观感)。
-    const dateEl = document.getElementById('hsTodayDate');
-    if (stale) {
-      dateEl.innerHTML = `（数据日期：${esc(data_date || pick.pick_date)}，当日名单生成中）`;
-    } else {
-      dateEl.textContent = `（${pick.pick_date}）`;
-    }
-
-    if (pick.status === 'failed') {
-      wrap.innerHTML = `<div class="no-data">最近一次生成失败：${esc(pick.error_msg)}</div>`;
-      return;
-    }
-
-    const stocks = pick.stocks || [];
-    if (!stocks.length) {
-      wrap.innerHTML = '<div class="no-data">暂无观察样本</div>';
-      return;
-    }
-
-    // 按 sector_rank 分组
-    const sectors = new Map();
-    for (const st of stocks) {
-      if (!sectors.has(st.sector_rank)) {
-        sectors.set(st.sector_rank, {
-          name: st.sector_name, reason: st.sector_reason, stocks: [],
-        });
+    // 回退到更早一批时后端带 stale=true，必须在标题处标注**真实数据日期**，
+    // 否则用户会以为这是今天的观察记录。
+    if (dateEl) {
+      if (stale) {
+        dateEl.innerHTML = `（数据日期：${esc(data_date)}，当日观察生成中）`;
+      } else {
+        dateEl.textContent = `（${data_date}）`;
       }
-      sectors.get(st.sector_rank).stocks.push(st);
     }
 
-    const cards = [...sectors.entries()]
-      .sort((a, b) => a[0] - b[0])
-      .map(([rank, sec]) => renderSectorCard(rank, sec))
-      .join('');
+    const cards = list.map(b => renderBoardCard(b)).join('');
     wrap.innerHTML = `<div class="sector-grid">${cards}</div>`;
   } catch (e) {
     console.error(e);
@@ -229,76 +216,32 @@ async function loadToday() {
   }
 }
 
-// 板块级聚合:该板块已结算个股的平均涨跌。
-// 原先三张卡片除了名字完全一样,得逐只读完才知道哪个板块拖了后腿。
-function sectorAgg(stocks) {
-  const done = stocks.filter(
-    st => st.settle_status === 'settled' &&
-          st.pct_change !== null && st.pct_change !== undefined
-  );
-  if (!done.length) {
-    return '<span class="sector-agg na">待结算</span>';
-  }
-  const avg = done.reduce((s, st) => s + Number(st.pct_change), 0) / done.length;
-  const cls = avg > 0 ? 'pos' : avg < 0 ? 'neg' : '';
-  return `<span class="sector-agg ${cls}">${fmtPct(avg)}` +
-         `<span style="font-weight:400;opacity:.7"> · ${done.length}只</span></span>`;
-}
-
-function renderSectorCard(rank, sector) {
-  const stockRows = sector.stocks
-    .sort((a, b) => a.stock_rank - b.stock_rank)
-    .map(renderStockRow)
-    .join('');
+// 板块热度卡：板块名 / 当日涨跌幅 / 领涨股与涨幅 / 成分股数 / AI 客观观察记录。
+function renderBoardCard(b) {
+  const hasPct = b.pct_change !== null && b.pct_change !== undefined;
+  const pctCls = hasPct ? (Number(b.pct_change) > 0 ? 'pos' : Number(b.pct_change) < 0 ? 'neg' : '') : '';
+  const leaderPct = (b.leader_pct !== null && b.leader_pct !== undefined)
+    ? ` <span class="hs-leader-pct ${pctCls}">${fmtSnapshotPct(b.leader_pct)}</span>` : '';
+  const leader = b.leader
+    ? `领涨 ${esc(b.leader)}${leaderPct}`
+    : '领涨股暂缺';
+  const count = (b.stock_count !== null && b.stock_count !== undefined)
+    ? `成分股 ${esc(b.stock_count)} 只` : '';
+  const meta = count ? `${leader} · ${count}` : leader;
   return `
     <div class="sector-card">
       <div class="sector-card-head">
-        <div><span class="sector-rank">${rank}</span><span class="sector-name">${esc(sector.name)}</span></div>
-        ${sectorAgg(sector.stocks)}
+        <div><span class="sector-rank">${esc(b.rank)}</span><span class="sector-name">${esc(b.name)}</span></div>
+        <span class="sector-agg ${pctCls}">${hasPct ? fmtSnapshotPct(b.pct_change) : '—'}</span>
       </div>
-      <div class="sector-reason">${esc(sector.reason)}</div>
-      ${stockRows}
-    </div>
-  `;
-}
-
-function renderStockRow(st) {
-  let badge = '<span class="settle-badge pending">待结算</span>';
-  let pctHtml = '';   // 未结算不显示悬空的"—"，右侧只留价格行
-  let priceLine = '等待买入价回填';
-
-  if (st.settle_status === 'code_not_found') {
-    badge = '<span class="settle-badge na">代码无效</span>';
-    priceLine = '';
-  } else if (st.settle_status === 'suspended') {
-    badge = '<span class="settle-badge na">停牌排除</span>';
-    priceLine = '长期无行情，已排除不计入统计';
-  } else if (st.settle_status === 'settled') {
-    const isWin = st.is_win === 1;
-    badge = isWin
-      ? '<span class="settle-badge win">涨</span>'
-      : '<span class="settle-badge lose">平/跌</span>';
-    pctHtml = `<span class="stock-pct ${isWin ? 'pos' : 'neg'}">${fmtPct(st.pct_change)}</span>`;
-    priceLine = `买 ${fmtPrice(st.buy_price)} → 卖 ${fmtPrice(st.sell_price)}`;
-  } else if (st.settle_status === 'priced') {
-    priceLine = `买 ${fmtPrice(st.buy_price)}，等待次日收盘`;
-  }
-
-  return `
-    <div class="stock-row" data-code="${esc(st.code)}" data-settle-status="${esc(st.settle_status)}">
-      <div class="stock-main">
-        <div class="stock-code-name">${esc(st.name)}<span class="code">${esc(st.code)}</span>${badge}</div>
-        <div class="stock-reason">${esc(st.stock_reason)}</div>
-      </div>
-      <div class="stock-perf">
-        <span class="stock-pct-slot">${pctHtml}</span>
-        <div class="stock-price-line">${priceLine}</div>
-      </div>
+      <div class="hs-board-meta">${meta}</div>
+      <div class="sector-reason">${esc(b.note || '')}</div>
     </div>
   `;
 }
 
 // ── 盘中浮动盈亏(priced 状态:已买入、还没到次日收盘)──────────────────────────
+// 方案 B 后主区不再渲染 .stock-row，applyIntraday 变成历史遗留持仓的空转（安全返回）。
 
 async function loadIntraday() {
   const hint = document.getElementById('hsIntradayUpdated');
@@ -329,7 +272,8 @@ async function loadIntraday() {
 }
 
 function applyIntraday(rows) {
-  if (!rows.length) return;
+  // 空集合直接返回，别报错（主区已无 .stock-row）
+  if (!rows || !rows.length) return;
   const byCode = new Map(rows.map(r => [r.code, r]));
   document.querySelectorAll('.stock-row[data-settle-status="priced"]').forEach(el => {
     const info = byCode.get(el.dataset.code);
@@ -347,7 +291,7 @@ function applyIntraday(rows) {
   });
 }
 
-// ── 4. 历史批次 ──────────────────────────────────────────────────────────────
+// ── 4. 历史批次（历史区）─────────────────────────────────────────────────────
 
 // ── 近期跟踪条 ───────────────────────────────────────────────────────────────
 // 数据与"历史批次"表同源,只是换个读法:20 根柱子把连亏/连赢压成一眼可见的形状。
@@ -429,7 +373,7 @@ async function loadHistory() {
   }
 }
 
-// ── 5. 板块表现 ──────────────────────────────────────────────────────────────
+// ── 5. 板块表现（历史区）─────────────────────────────────────────────────────
 
 async function loadSectorStats() {
   const wrap = document.getElementById('hsSectorStatsWrap');
@@ -446,7 +390,7 @@ async function loadSectorStats() {
         : '—';
       const avgPct = r.avg_pct_change !== null && r.avg_pct_change !== undefined
         ? fmtPct(r.avg_pct_change) : '—';
-      // 出现天数 >= 3 视为"AI 反复推荐同一板块"，高亮提示同质化
+      // 出现天数 >= 3 视为"反复挑中同一板块"，高亮提示同质化
       const rowClass = r.days_picked >= 3 ? ' class="hs-repeat-sector"' : '';
       return `
         <tr${rowClass}>
@@ -472,7 +416,7 @@ async function loadSectorStats() {
   }
 }
 
-// ── 6. 提示词版本对比 ────────────────────────────────────────────────────────
+// ── 6. 提示词版本对比（历史区）───────────────────────────────────────────────
 
 async function loadPromptStats() {
   const wrap = document.getElementById('hsPromptStatsWrap');

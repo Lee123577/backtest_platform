@@ -87,11 +87,12 @@ TASKS: Dict[str, TaskDef] = {
         "depends_on": None,
         "description": "历史 market_cap 增量回填(每月 1 号 03:00,只补新上市/缺口)",
     },
-    # AI 热门板块:15:05(收盘后)调 DeepSeek 两段式提示词出 3 板块×3 股票；
-    # 17:35(daily_update 之后)回填收盘价、结算胜率/资金曲线。两个任务分开，
-    # 结算依赖 daily_update 而不是依赖预测本身 —— 即使当天预测失败/跳过，
-    # 之前几天挂着待结算的股票也照样能在今天回填/结算。
-    # 超时预算:两次串行 DeepSeek 调用各最长 60s + 子进程冷启动联网拉交易日历
+    # AI 板块热度观察:15:05(收盘后)抓当日真实板块涨跌幅快照，客观取涨幅前 3，
+    # 调一次 DeepSeek 让模型对这几个板块各写一段客观观察记录(不选板块、不选个股)。
+    # 17:35(daily_update 之后)回填收盘价、收尾历史在途批次的结算(产品已停止新批次)。
+    # 两个任务分开，结算依赖 daily_update 而不是依赖生成本身 —— 即使当天生成失败/
+    # 跳过，之前几天挂着待结算的历史批次也照样能在今天回填/结算。
+    # 超时预算:一次 DeepSeek 调用最长 120s + 子进程冷启动联网拉交易日历
     # (akshare,进程间不共享缓存,慢网络下可能要几十秒) + 板块快照两个新浪接口
     # (各 3 次重试,最坏 15s 超时 + 3s/8s 退避 ≈ 56s,两个共 ~112s) → 放到 8 分钟
     "ai_hotsector_predict": {
@@ -99,14 +100,14 @@ TASKS: Dict[str, TaskDef] = {
         "schedule": "weekday:15:05",
         "timeout_sec": 8 * 60,
         "depends_on": None,
-        "description": "AI 板块观察每日生成(15:05 收盘后)",
+        "description": "AI 板块热度观察每日生成(15:05 收盘后)",
     },
     "ai_hotsector_settle": {
         "cmd": ["python", "scripts/ai_hotsector_settle.py"],
         "schedule": "weekday:17:35",
         "timeout_sec": 5 * 60,
         "depends_on": "daily_update",
-        "description": "AI 热门板块回填收盘价+结算胜率/资金曲线(17:35,依赖daily_update)",
+        "description": "AI 板块模拟跟踪历史收尾(17:35，产品已停止新批次，仅结算遗留，依赖daily_update)",
     },
     # AI 每日复盘:17:45 用当日已落库的指数/涨跌家数/成交额/AI选股结算数据
     # 调 DeepSeek 生成当日市场复盘。只依赖 daily_update(当日K线/指数必须已入库)，

@@ -17,6 +17,16 @@ from app.data import calendar as trade_cal
 from app.engine.fees import COMMISSION_RATE, MIN_COMMISSION, STAMP_TAX_RATE
 
 
+@pytest.fixture(autouse=True)
+def _reset_realtime_boards_cache():
+    """api._realtime_boards 有进程内 60s 缓存(方案 B 收口 F2)。用例之间必须清干净,
+    否则前一个用例缓存的 boards 会让后一个用例的网络打桩失效、断言串味。"""
+    from app.ai_hotsector import api as hs_api
+    hs_api._realtime_cache["ts"] = 0.0
+    hs_api._realtime_cache["boards"] = []
+    yield
+
+
 # ── 内存假 DB ─────────────────────────────────────────────────────────────────
 
 class FakeDB:
@@ -300,3 +310,217 @@ def test_rebuild_zero_count_batch_no_fee(fake_db):
     cost = runner._round_trip_cost_rate(100_000 / 3)
     assert e2["capital_after_fee"] == pytest.approx(
         100_000 * (1 + 0.05 - cost), abs=0.01)
+
+
+# ── 4. 方案 B：板块热度观察(去个股)───────────────────────────────────────────
+
+# 5 个假板块(按涨跌幅降序,模拟 _fetch_board_snapshot 的返回)
+FAKE_BOARDS = [
+    {"name": "板块A", "pct_change": 5.0, "leader": "股甲", "leader_pct": 9.9, "stock_count": 60},
+    {"name": "板块B", "pct_change": 3.0, "leader": "股乙", "leader_pct": 5.0, "stock_count": 50},
+    {"name": "板块C", "pct_change": 2.0, "leader": "股丙", "leader_pct": 4.0, "stock_count": 40},
+    {"name": "板块D", "pct_change": 1.0, "leader": "股丁", "leader_pct": 3.0, "stock_count": 30},
+    {"name": "板块E", "pct_change": 0.5, "leader": "股戊", "leader_pct": 2.0, "stock_count": 20},
+]
+
+
+def test_sector_prompt_is_objective_observation():
+    """prompt 不再让模型"选"板块/"选"个股,只要求写 note 客观观察记录。"""
+    from app.ai_hotsector import prompts
+    text = "".join(
+        m["content"] for m in prompts.sector_messages(date(2026, 10, 15), FAKE_BOARDS[:3])
+    )
+    for banned in ("选出", "最值得关注", "强势股", "选股", "个股代码"):
+        assert banned not in text
+    assert "note" in text
+    for w in ("建议", "龙头", "目标价"):
+        assert f"『{w}』" in text          # 禁用措辞清单仍在提示词里
+
+
+def test_predict_once_uses_objective_top3_and_one_llm_call(monkeypatch):
+    import asyncio
+    import json
+
+    calls = {"llm": 0}
+
+    monkeypatch.setattr(runner, "_fetch_board_snapshot",
+                        lambda *a, **k: list(FAKE_BOARDS))
+
+    async def fake_chat_json(messages, **kwargs):
+        calls["llm"] += 1
+        return (
+            {"sectors": [
+                {"name": "板块A", "note": "当日领涨，量能放大，产业链订单饱满。"},
+                {"name": "板块B", "note": "跟随反弹，成交温和。"},
+                {"name": "板块C", "note": "小幅收涨，资金分歧。"},
+            ]},
+            "{raw}",
+        )
+    monkeypatch.setattr(runner, "chat_json", fake_chat_json)
+    monkeypatch.setattr(runner.calendar, "is_trading_day", lambda d: True)
+    monkeypatch.setattr(runner.db, "ensure_tables", lambda: None)
+    monkeypatch.setattr(runner.db, "get_pick", lambda d: None)
+
+    captured = {}
+
+    def fake_upsert(*args, **kwargs):
+        captured["args"] = args
+    monkeypatch.setattr(runner.db, "upsert_pick", fake_upsert)
+
+    def boom(*a, **k):
+        raise AssertionError("predict_once 不应再调用 replace_stocks")
+    monkeypatch.setattr(runner.db, "replace_stocks", boom)
+
+    res = asyncio.run(runner.predict_once(date(2026, 10, 15)))
+
+    assert calls["llm"] == 1                      # 全程只 1 次 LLM
+    assert res.status == "predicted"
+    assert res.stock_count == 0                   # 不再产个股
+    assert res.sector_names == ["板块A", "板块B", "板块C"]   # 客观前 3
+
+    board_obs_json = captured["args"][-1]         # upsert_pick 末位参数 = board_obs
+    obs = json.loads(board_obs_json)
+    assert len(obs) == 3
+    assert [o["rank"] for o in obs] == [1, 2, 3]
+    assert [o["name"] for o in obs] == ["板块A", "板块B", "板块C"]
+    assert obs[0]["note"] == "当日领涨，量能放大，产业链订单饱满。"
+    # 字段直接取自快照真实值
+    assert obs[0]["pct_change"] == 5.0 and obs[0]["stock_count"] == 60
+
+
+def test_predict_once_missing_note_does_not_fail_batch(monkeypatch):
+    """模型没对齐某个板块名 → 该板块 note 留空,整批仍成功。"""
+    import asyncio
+    import json
+
+    monkeypatch.setattr(runner, "_fetch_board_snapshot",
+                        lambda *a, **k: list(FAKE_BOARDS))
+
+    async def fake_chat_json(messages, **kwargs):
+        return ({"sectors": [{"name": "对不上的名字", "note": "x"}]}, "{raw}")
+    monkeypatch.setattr(runner, "chat_json", fake_chat_json)
+    monkeypatch.setattr(runner.calendar, "is_trading_day", lambda d: True)
+    monkeypatch.setattr(runner.db, "ensure_tables", lambda: None)
+    monkeypatch.setattr(runner.db, "get_pick", lambda d: None)
+
+    captured = {}
+    monkeypatch.setattr(runner.db, "upsert_pick",
+                        lambda *a, **k: captured.update(args=a))
+
+    res = asyncio.run(runner.predict_once(date(2026, 10, 15)))
+    assert res.status == "predicted"
+    obs = json.loads(captured["args"][-1])
+    assert len(obs) == 3
+    assert all(o["note"] == "" for o in obs)
+
+
+def test_api_today_boards_no_stocks(monkeypatch):
+    from app.ai_hotsector import api
+    monkeypatch.setattr(hs_db, "get_latest_pick_date", lambda: date(2026, 10, 15))
+    monkeypatch.setattr(hs_db, "get_board_obs", lambda d: [
+        {"rank": 1, "name": "光伏", "pct_change": 3.2, "leader": "甲", "leader_pct": 9.9,
+         "stock_count": 55, "note": "客观记录一"},
+        {"rank": 2, "name": "半导体", "pct_change": 1.1, "leader": None, "leader_pct": None,
+         "stock_count": 40, "note": "建议关注"},           # 含禁用词 → 过滤为空
+        {"rank": 3, "name": "军工", "pct_change": 0.8, "leader": "丙", "leader_pct": 5.0,
+         "stock_count": 33, "note": "客观记录三"},
+    ])
+    out = api.today()
+    assert "stocks" not in out
+    assert len(out["boards"]) == 3
+    assert out["boards"][0]["note"] == "客观记录一"
+    assert out["boards"][1]["note"] == ""
+    assert out["stale"] is False
+
+
+def test_api_today_realtime_fallback_blank_notes(monkeypatch):
+    """最新批次没有 board_obs → 走实时快照兜底,note 留空。"""
+    from app.ai_hotsector import api
+    monkeypatch.setattr(hs_db, "get_latest_pick_date", lambda: None)
+    monkeypatch.setattr(hs_db, "get_latest_board_obs", lambda before=None: None)
+    monkeypatch.setattr(runner, "_fetch_board_snapshot",
+                        lambda *a, **k: list(FAKE_BOARDS))
+    out = api.today()
+    assert len(out["boards"]) == 3
+    assert all(b["note"] == "" for b in out["boards"])
+    assert "stocks" not in out
+    assert [b["name"] for b in out["boards"]] == ["板块A", "板块B", "板块C"]
+
+
+def test_api_today_snapshot_failure_returns_empty_boards(monkeypatch):
+    """实时快照抓取抛异常 → 返回空 boards,不抛(接口不能 500)。"""
+    from app.ai_hotsector import api
+    monkeypatch.setattr(hs_db, "get_latest_pick_date", lambda: None)
+    monkeypatch.setattr(hs_db, "get_latest_board_obs", lambda before=None: None)
+
+    def boom(*a, **k):
+        raise RuntimeError("行情接口挂了")
+    monkeypatch.setattr(runner, "_fetch_board_snapshot", boom)
+
+    out = api.today()
+    assert out["boards"] == []
+    assert "stocks" not in out
+
+
+def test_api_today_stale_falls_back_to_older_batch(monkeypatch):
+    """最新批次无 board_obs 且实时抓取失败 → 回退更早一批并标 stale。"""
+    from app.ai_hotsector import api
+    monkeypatch.setattr(hs_db, "get_latest_pick_date", lambda: date(2026, 10, 15))
+    monkeypatch.setattr(hs_db, "get_board_obs", lambda d: None)
+    monkeypatch.setattr(hs_db, "get_latest_board_obs", lambda before=None: {
+        "pick_date": date(2026, 10, 14),
+        "board_obs": [{"rank": 1, "name": "有色", "pct_change": 2.5, "leader": "甲",
+                       "leader_pct": 8.0, "stock_count": 50, "note": "旧记录"}],
+    })
+
+    def boom(*a, **k):
+        raise RuntimeError("行情接口挂了")
+    monkeypatch.setattr(runner, "_fetch_board_snapshot", boom)
+
+    out = api.today()
+    assert out["stale"] is True and out["data_date"] == "2026-10-14"
+    assert out["boards"][0]["name"] == "有色"
+
+
+def test_realtime_boards_uses_short_timeout_and_caches(monkeypatch):
+    """实时兜底必须"限时":2s 超时 + 0 重试(最坏 ~4s),且 60s 内复用缓存——
+    第二次调用不再联网,避免高频轮询把请求反复打到行情源。"""
+    from app.ai_hotsector import api
+
+    calls = {"n": 0, "kwargs": None}
+
+    def fake_snapshot(*a, **k):
+        calls["n"] += 1
+        calls["kwargs"] = k
+        return list(FAKE_BOARDS)
+
+    monkeypatch.setattr(runner, "_fetch_board_snapshot", fake_snapshot)
+
+    first = api._realtime_boards()
+    assert len(first) == 3
+    assert calls["n"] == 1
+    assert calls["kwargs"]["timeout"] == 2.0 and calls["kwargs"]["retries"] == 0
+
+    # 第二次在 TTL 内 → 命中缓存,不再联网
+    second = api._realtime_boards()
+    assert calls["n"] == 1
+    assert second == first
+
+
+def test_realtime_boards_timeout_returns_empty(monkeypatch):
+    """抓取抛异常/超时 → 返回 []，绝不 500 或阻塞。"""
+    from app.ai_hotsector import api
+
+    def boom(*a, **k):
+        raise TimeoutError("行情源超时")
+    monkeypatch.setattr(runner, "_fetch_board_snapshot", boom)
+
+    assert api._realtime_boards() == []
+
+
+def test_public_reason_filters_banned_words():
+    from app.ai_hotsector import api
+    assert api.public_reason("建议买入") == ""
+    assert api.public_reason("板块龙头，值得关注") == ""
+    assert api.public_reason("半导体今日收涨，量能温和") == "半导体今日收涨，量能温和"
+    assert api.public_reason(None) == ""

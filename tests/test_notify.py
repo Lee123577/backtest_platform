@@ -310,17 +310,26 @@ def test_digest_merges_two_blocks_into_one_mail(fake, mail, monkeypatch):
     monkeypatch.setattr(service, "_review_block",
                         lambda d: {"title": "今日复盘", "summary": "摘要"})
     monkeypatch.setattr(service, "_hotsector_block",
-                        lambda d: {"sectors": ["半导体"],
-                                   "stocks": [{"code": "000001", "name": "平安银行",
-                                               "sector_name": "半导体"}]})
+                        lambda d: {"boards": [
+                            {"rank": 1, "name": "半导体", "pct_change": 2.5,
+                             "leader": "贵州茅台", "leader_pct": 9.9, "stock_count": 40,
+                             "note": "当日放量收涨"}]})
     service.get_prefs(UID)
     service.update_prefs(UID, {"daily_review": True, "ai_hotsector": True})
 
     out = service.send_daily_digest()
     assert out["sent"] == 1
     assert len(mail.outbox) == 1          # 两块内容合成一封，不是两封
-    body = mail.outbox[0]["text"]
-    assert "今日复盘" in body and "半导体" in body
+    msg = mail.outbox[0]
+    # 方案 B(收口 F3)：邮件只承载板块层面的客观热度，绝不出现任何个股名称/代码 ——
+    # 连"领涨股 贵州茅台"这种点名到具体个股的成分都不进邮件。
+    for body in (msg["text"], msg["html"]):
+        assert "半导体" in body                 # 板块名照报
+        assert "+2.50%" in body                 # 涨跌幅照报
+        assert "贵州茅台" not in body           # 领涨股(具体个股)不进邮件
+        assert "000001" not in body and "平安银行" not in body
+    assert "今日复盘" in msg["text"]
+    assert "成分股 40 只" in msg["text"]
 
 
 def test_digest_skips_when_no_content(fake, mail, monkeypatch):
