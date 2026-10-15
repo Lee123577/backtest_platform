@@ -25,9 +25,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from ..config import TERMS_VERSION
 from ..csrf import reject_cross_site_write
 from ..visit_log import _client_ip, _is_from_trusted_proxy
-from . import avatar, service
+from . import avatar, db, service
 from .deps import get_current_user, require_login
 from .mailer import MailError
 
@@ -53,6 +54,9 @@ class SendCodeReq(BaseModel):
 class LoginReq(BaseModel):
     email: str
     code: str
+    # 是否已勾选同意隐私政策/用户协议。默认 False —— 前端漏传时按"未同意"处理,
+    # 不能默认通过(默认同意在监管与司法中效力弱,见 §5)。
+    agreed: bool = False
 
 
 class ProfileReq(BaseModel):
@@ -94,6 +98,10 @@ def send_code(req: SendCodeReq, request: Request):
 
 @router.post("/login")
 def login(req: LoginReq, request: Request, response: Response):
+    # 服务端也要校验同意勾选,不能只信前端 —— 默认同意("登录即表示同意")在
+    # 监管与司法中效力弱,这里才是真正的闸。校验放在建会话之前,未同意直接拒。
+    if not req.agreed:
+        raise HTTPException(400, "请先阅读并同意隐私政策与用户协议")
     try:
         user, token, ttl = service.login(req.email, req.code)
     except service.AuthError as e:
@@ -103,6 +111,8 @@ def login(req: LoginReq, request: Request, response: Response):
         max_age=ttl, httponly=True, samesite="lax",
         secure=_cookie_secure(request),
     )
+    # 登录成功后留痕:记下用户最近一次同意的协议版本与时间(幂等,异常吞掉)。
+    _mark_terms_accepted(int(user["id"]))
     is_new = _is_new_user(user)
     # 新老用户**互斥**记:首次登录即建号 → register_success;老用户登录 → login。
     # 漏斗里"完成注册"是转化、日常"登录"不是,两者共用 register 会让注册数被
@@ -148,6 +158,15 @@ def _record_auth_event(user: dict, request, event: str) -> None:
         an_service.record(event, user_id=uid, **ctx)
     except Exception as e:  # 埋点失败绝不影响登录
         logger.info("登录/注册事件埋点失败(忽略): %s", e)
+
+
+def _mark_terms_accepted(uid: int) -> None:
+    """记录用户同意隐私政策/用户协议(留痕)。任何异常都吞掉 ——
+    留痕失败绝不能让登录失败,与上面的埋点同一原则。"""
+    try:
+        db.mark_terms_accepted(int(uid), TERMS_VERSION)
+    except Exception as e:
+        logger.info("记录用户协议同意失败(忽略): %s", e)
 
 
 @router.post("/logout")

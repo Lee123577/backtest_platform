@@ -590,7 +590,7 @@ def get_universe_stats(cap_min: float | None = None,
 def build_universe_hint(cap_min: float, cap_max: float) -> str:
     """
     生成「无可选股票」时的可操作错误信息，包含市值分布和建议范围。
-    用于选股回测 / 实盘信号生成 等任何 universe 过滤为空的场景。
+    用于选股回测 / 模拟信号生成 等任何 universe 过滤为空的场景。
     """
     stats = get_universe_stats(cap_min, cap_max)
     if stats["total"] == 0:

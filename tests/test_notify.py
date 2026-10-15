@@ -229,6 +229,23 @@ def test_digest_only_carries_summary_not_full_text():
     assert "/daily_review/2026-09-08" in html
 
 
+def test_digest_html_carries_ai_disclaimer():
+    """每日推送承载 AI 生成内容(复盘/板块观察) → HTML 外壳页脚必须带 AI 标识全文。"""
+    review = {"title": "标题", "summary": "摘要"}
+    _, _, html = render.daily_digest_mail(_person(), "2026-09-08", TOKEN, review=review)
+    assert render.DISCLAIMER in html
+    assert "不构成投资建议" in html and "AI" in html
+
+
+def test_watchlist_alert_html_keeps_transactional_footer():
+    """自选提醒是规则触发的事务类邮件 → 外壳页脚保持通用旧文案,不带 AI 标识。"""
+    alerts = [{"code": "000001", "name": "平安银行",
+               "strategy_name": "均线交叉", "signal": "buy"}]
+    _, _, html = render.watchlist_alert_mail(_person(), alerts, "2026-09-08", TOKEN)
+    assert "本站内容仅供研究，不构成投资建议。" in html
+    assert render.DISCLAIMER not in html
+
+
 # ── 4. 发送 ───────────────────────────────────────────────────────────────────
 
 @pytest.fixture
@@ -472,7 +489,9 @@ def test_onboarding_mail_basics(step):
     user = {"email": "abcdef@example.com", "display_name": "<b>老王</b>"}
     subject, text, html = render.onboarding_mail(user, step, TOKEN)
     assert render.SITE_NAME in subject
-    assert render.DISCLAIMER in html                # 页脚免责声明
+    # 新手引导是**非 AI 内容**邮件 → 外壳页脚保持通用旧文案不变(事务类文案零变化)
+    assert "本站内容仅供研究，不构成投资建议。" in html
+    assert render.DISCLAIMER not in html            # 不带 AI 标识
     assert "<b>老王</b>" not in html                # 昵称转义
     assert "&lt;b&gt;老王&lt;/b&gt;" in html
     assert render.site_url("/") in text            # 纯文本也带可点的绝对地址

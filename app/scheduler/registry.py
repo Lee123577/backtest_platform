@@ -55,7 +55,7 @@ TASKS: Dict[str, TaskDef] = {
         "schedule": "weekday:17:30",
         "timeout_sec": 10 * 60,
         "depends_on": "daily_update",  # 上游今天没成功就不跑
-        "description": "小市值策略每日信号生成（17:30，参数由实盘观察页 UI 配置）",
+        "description": "小市值策略规则触发记录生成（17:30，参数由模拟盘观察页 UI 配置）",
     },
     "backfill_geo": {
         "cmd": ["python", "scripts/backfill_visit_log_geo.py"],
@@ -99,7 +99,7 @@ TASKS: Dict[str, TaskDef] = {
         "schedule": "weekday:15:05",
         "timeout_sec": 8 * 60,
         "depends_on": None,
-        "description": "AI 热门板块+强势股每日预测(15:05 收盘后)",
+        "description": "AI 板块观察每日生成(15:05 收盘后)",
     },
     "ai_hotsector_settle": {
         "cmd": ["python", "scripts/ai_hotsector_settle.py"],

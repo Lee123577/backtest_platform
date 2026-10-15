@@ -242,7 +242,7 @@
     wrap.innerHTML = alerts.map(function (a) {
       var buy = a.signal === "buy";
       return '<div class="wl-alert' + (a.is_read ? "" : " unread") + '">' +
-        '<span class="wl-alert-sig ' + (buy ? "wl-buy" : "wl-sell") + '">' + (buy ? "买入" : "卖出") + "</span>" +
+        '<span class="wl-alert-sig ' + (buy ? "wl-buy" : "wl-sell") + '">' + (buy ? "触发买入规则" : "触发卖出规则") + "</span>" +
         '<div class="wl-alert-main"><div class="wl-alert-name">' + esc(a.name || "") +
         ' <span style="color:var(--txt2)">' + esc(a.code) + '</span></div>' +
         '<div class="wl-alert-meta">' + esc(a.strategy_name || a.strategy_id) + " 规则触发</div></div>" +

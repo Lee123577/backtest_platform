@@ -541,5 +541,9 @@ def faq_html(context: Dict[str, Any], code: str, name: str) -> str:
         '<h2 class="sr-faq-title">常见问题</h2>'
         f"{body}"
         '<p class="sr-faq-foot">以上问答仅供研究，不构成任何投资建议。</p>'
+        # AI 生成内容的显式标识(法定必须,见《人工智能生成合成内容标识办法》2025-09-01 施行)。
+        # 与 stock_report.html 的免责段同屏并列,复用既有小字样式,不新增 CSS。
+        '<p class="sr-faq-foot">本内容由 AI 生成：AI 内容可能存在错误、滞后或偏差，'
+        '仅供参考，不构成任何投资建议。</p>'
         "</section>"
     )

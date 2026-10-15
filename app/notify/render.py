@@ -26,11 +26,14 @@ from ..auth import mailer
 from ..config import settings
 
 SITE_NAME = "收盘 shoupan"
-DISCLAIMER = "本站内容仅供研究，不构成投资建议。"
+# 邮件正文自带的合规声明。补上 AI 生成标识与偏差提示 —— 邮件会被转发、截图，
+# 脱离页面语境后这两句必须自带(见合规审查 §6)。
+DISCLAIMER = "本站内容（含 AI 自动生成内容）仅供研究，不构成投资建议；AI 内容可能存在错误或偏差。"
 
-# 信号方向 → 中文 + 颜色。A 股口径：买入红、卖出绿（和站内涨红跌绿一致，
+# 规则触发 → 中文 + 颜色。A 股口径：买入红、卖出绿（和站内涨红跌绿一致，
 # 不能照搬西方配色，否则老股民一眼看反）。
-_SIGNAL_TEXT = {"buy": "买入条件", "sell": "卖出条件"}
+# 措辞去方向性:说的是"哪条规则被触发了",不是"该买/该卖"(见 R5)。
+_SIGNAL_TEXT = {"buy": "触发买入规则", "sell": "触发卖出规则"}
 _SIGNAL_COLOR = {"buy": "#d64545", "sell": "#2fa87d"}
 
 
@@ -61,12 +64,17 @@ def greeting(user: Dict[str, Any]) -> str:
 
 # ── HTML 外壳 ─────────────────────────────────────────────────────────────────
 
-def _shell(inner: str, token: str, kind: str, kind_label: str) -> str:
+def _shell(inner: str, token: str, kind: str, kind_label: str,
+           disclaimer: Optional[str] = None) -> str:
     """统一的邮件外壳。
 
     卡片骨架和页脚(站点名 + 免责声明)直接复用 mailer.build_page —— 验证码邮件
     和反馈通知都用它，三处样式不该各写一份。这里只多加一段退订说明，
     追加在正文末尾、页脚之上。样式必须内联：邮件客户端普遍会把 <style> 丢掉。
+
+    disclaimer: 页脚免责文案。默认 None → 外壳用通用旧文案(自选提醒/新手引导等
+    非 AI 内容邮件文案不变);AI 生成内容邮件(每日复盘 + 板块观察推送)传入
+    DISCLAIMER,让 HTML 外壳页脚也带上 AI 标识。
     """
     unsub_block = (
         f'<p style="margin:22px 0 0;font-size:12px;color:#9ca3af;line-height:1.8;">'
@@ -76,7 +84,7 @@ def _shell(inner: str, token: str, kind: str, kind_label: str) -> str:
         f'<a href="{_esc(unsub_url(token))}" style="color:#6b7280;">退订全部</a>'
         f'</p>'
     )
-    return mailer.build_page(inner + unsub_block)
+    return mailer.build_page(inner + unsub_block, disclaimer=disclaimer)
 
 
 def _text_footer(token: str, kind: str, kind_label: str) -> str:
@@ -188,33 +196,23 @@ def daily_digest_mail(
 
     if hotsector:
         sectors = hotsector.get("sectors") or []
-        stocks = hotsector.get("stocks") or []
         link = site_url("/ai_hotsector")
+        # 邮件里**只报板块、不报个股**：主动、定向、持续地把"具体选哪些股、什么代码"
+        # 推到用户面前，是"证券投资咨询"最典型的形态(合规审查 R2)。名单与挑选依据
+        # 只留在站内，邮件只做"今天关注了哪些板块"的摘要 + 回站入口。
         text_parts += ["【AI 板块观察】",
-                       "关注板块：" + ("、".join(sectors) if sectors else "—"), ""]
-        srows = []
-        for st in stocks[:8]:
-            code = str(st.get("code") or "")
-            name = str(st.get("name") or "")
-            sector = str(st.get("sector_name") or "")
-            text_parts.append(f"  · {name}({code})  {sector}")
-            srows.append(
-                f'<tr>'
-                f'<td style="padding:7px 10px;border-bottom:1px solid #f0f1f3;font-size:14px;color:#111827;">'
-                f'{_esc(name)} <span style="color:#9ca3af;">{_esc(code)}</span></td>'
-                f'<td style="padding:7px 10px;border-bottom:1px solid #f0f1f3;font-size:13px;color:#6b7280;">'
-                f'{_esc(sector)}</td>'
-                f'</tr>'
-            )
-        text_parts += ["", f"查看挑选逻辑与跟踪记录：{link}", ""]
+                       "关注板块：" + ("、".join(sectors) if sectors else "—"), "",
+                       "个股名单与挑选依据请回站查看，邮件不承载个股清单。", ""]
+        text_parts += [f"查看挑选逻辑与跟踪记录：{link}", ""]
         html_parts.append(
             f'<div>'
             f'<div style="font-size:12px;color:#9ca3af;letter-spacing:1px;margin-bottom:6px;">'
             f'AI 板块观察</div>'
             f'<p style="margin:0 0 10px;font-size:14px;color:#4b5563;line-height:1.8;">'
             f'今日关注：{_esc("、".join(sectors)) if sectors else "—"}</p>'
-            f'<table style="width:100%;border-collapse:collapse;">{"".join(srows)}</table>'
             + _btn(link, "查看挑选逻辑与跟踪记录")
+            + '<p style="margin:12px 0 0;font-size:12px;color:#9ca3af;line-height:1.7;">'
+              '个股名单与挑选依据请回站查看，邮件不承载个股清单。</p>'
             + '</div>'
         )
 
@@ -222,7 +220,9 @@ def daily_digest_mail(
     text = "\n".join(text_parts) + _text_footer(token, "daily_review", kind_label)
     # 退订链接落在 daily_review 上：这封信里两块内容用的是同一个"每日推送"位，
     # 用户想退的是"每天这封信"，退订页会把两个开关一起关掉。
-    return subject, text, _shell("".join(html_parts), token, "daily_review", kind_label)
+    # 传 DISCLAIMER:本信承载 AI 生成的复盘/板块观察内容,HTML 外壳页脚需带 AI 标识。
+    return subject, text, _shell("".join(html_parts), token, "daily_review", kind_label,
+                                 DISCLAIMER)
 
 
 # ── 新手引导（注册后一周 4 封） ───────────────────────────────────────────────

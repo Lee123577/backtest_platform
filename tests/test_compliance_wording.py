@@ -119,4 +119,6 @@ def test_watchlist_mail_says_rule_triggered_not_signal():
         {"email": "a@b.c"}, [{"signal": "buy", "code": "600519", "name": "贵州茅台",
                               "strategy_name": "均线交叉"}], "2026-10-12", "tok")
     assert "信号" not in subject and "规则" in subject
-    assert "买入条件" in text
+    # 措辞去方向性:报"哪条规则被触发",不报"该买/该卖"(旧文案"买入条件"已弃用)
+    assert "触发买入规则" in text
+    assert "买入条件" not in text

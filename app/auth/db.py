@@ -37,7 +37,9 @@ DDL_STATEMENTS = [
         avatar_file   VARCHAR(80)     NULL COMMENT '头像文件名(相对 data/avatars/,NULL=用默认头像)',
         status        ENUM('active','banned') NOT NULL DEFAULT 'active',
         created_at    DATETIME        DEFAULT CURRENT_TIMESTAMP,
-        last_login_at DATETIME
+        last_login_at DATETIME,
+        terms_accepted_at DATETIME   NULL COMMENT '最近一次同意隐私政策/用户协议的时间',
+        terms_version VARCHAR(16)    NULL COMMENT '同意时的协议版本'
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='注册用户(邮箱登录)'
     """,
     """
@@ -146,6 +148,20 @@ def _migrate_app_user(conn) -> None:
             "补 avatar_file 列",
             "ALTER TABLE app_user ADD COLUMN avatar_file VARCHAR(80) NULL "
             "COMMENT '头像文件名(相对 data/avatars/,NULL=用默认头像)'",
+        ))
+    # 同意留痕(个保法知情同意):登录时主动勾选同意隐私政策/用户协议,记下时间与版本。
+    # 老库里没有这两列 —— 缺了 UPDATE 会报错,所以按现有写法补列。
+    if "terms_accepted_at" not in cols:
+        steps.append((
+            "补 terms_accepted_at 列",
+            "ALTER TABLE app_user ADD COLUMN terms_accepted_at DATETIME NULL "
+            "COMMENT '最近一次同意隐私政策/用户协议的时间'",
+        ))
+    if "terms_version" not in cols:
+        steps.append((
+            "补 terms_version 列",
+            "ALTER TABLE app_user ADD COLUMN terms_version VARCHAR(16) NULL "
+            "COMMENT '同意时的协议版本'",
         ))
 
     for label, sql in steps:
@@ -309,6 +325,35 @@ def set_avatar_file(user_id: int, filename: Optional[str]) -> Optional[str]:
             "UPDATE app_user SET avatar_file=%s WHERE id=%s", (filename, user_id)
         )
     return old or None
+
+
+def mark_terms_accepted(user_id: int, version: str) -> None:
+    """记录用户最近一次同意隐私政策/用户协议的时间与版本。
+
+    只在**版本发生变化(或从未记录)**时才写库:同一版本下的重复同意不产生新信息,
+    每次登录都 UPDATE 只是给 app_user 行制造无谓的写入热点。SELECT 显式别名,
+    避开 MySQL 8 把列名返回成大写的老坑(见 _migrate_app_user 的说明)。
+
+    异常自行吞掉并打 info 日志 —— 留痕是登录的附带动作,绝不该让登录失败。
+    """
+    try:
+        conn = _get_pool()
+        if conn is None:
+            return
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT terms_version AS v FROM app_user WHERE id=%s", (user_id,)
+            )
+            row = cur.fetchone()
+            if row and row.get("v") == version:
+                return          # 同一版本已留痕,不重复写
+            cur.execute(
+                "UPDATE app_user SET terms_accepted_at=NOW(), terms_version=%s "
+                "WHERE id=%s",
+                (version, user_id),
+            )
+    except Exception as e:
+        logger.info("记录用户协议同意失败(忽略): %s", e)
 
 
 # ── 会话 ──────────────────────────────────────────────────────────────────────

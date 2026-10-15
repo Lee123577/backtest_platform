@@ -126,8 +126,14 @@ def send_mail(
         raise MailError("邮件发送失败") from errors[0]
 
 
-def build_page(body_html: str) -> str:
-    """把一段正文 HTML 包进验证码邮件同款的浅色卡片外壳。"""
+def build_page(body_html: str, disclaimer: Optional[str] = None) -> str:
+    """把一段正文 HTML 包进验证码邮件同款的浅色卡片外壳。
+
+    disclaimer: 页脚免责文案。默认 None 时沿用通用旧文案 —— 验证码等**事务类邮件**
+    的文案因此零变化。AI 生成内容邮件(如"每日 AI 板块观察"推送)传入带 AI 标识的
+    文案,让 HTML 外壳页脚也满足显式标识要求(纯文本页脚另由 notify 侧处理)。
+    """
+    foot = disclaimer or "本站内容仅供研究，不构成投资建议。"
     return f"""<!doctype html>
 <html><body style="margin:0;padding:24px;background:#f6f7f9;
     font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;">
@@ -135,7 +141,7 @@ def build_page(body_html: str) -> str:
       padding:28px;border:1px solid #e5e7eb;">{body_html}
     <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0 14px;">
     <p style="margin:0;font-size:12px;color:#9ca3af;line-height:1.7;">
-      {SITE_NAME}<br>本站内容仅供研究，不构成投资建议。</p>
+      {SITE_NAME}<br>{foot}</p>
   </div>
 </body></html>"""
 

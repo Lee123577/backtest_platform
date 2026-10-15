@@ -384,8 +384,7 @@ def _footer(*, legal_links: bool = True, contact: bool = True,
 
     三处开关对应收拢前就存在的、有意为之的差异:
       legal_links=False —— /legal 自己不再链回自己
-      contact=False     —— /s/{token} 分享快照页不放"定制策略"的销售话术
-                           (页面会被分享给陌生人,带招揽内容不合适)
+      contact=False     —— /s/{token} 分享快照页不放联系方式(快照会被分享给陌生人)
       extra_class       —— /my_board 需要额外的 mb-footer 参与卡片布局
     """
     cls = "site-footer" + (f" {extra_class}" if extra_class else "")
@@ -394,10 +393,12 @@ def _footer(*, legal_links: bool = True, contact: bool = True,
         '  <div class="site-footer-brand">🕐 收盘 shoupan · 用数据验证策略，让判断有据可依</div>',
     ]
     if contact:
+        # 这里只放联系方式本身。邮箱是法定必须公示的经营者联系方式(T4) ——
+        # 但页脚不再承载"代码定制 / 实盘接入"这类商业招揽话术:那不是研究工具
+        # 该有的口吻,还可能被读成"代客理财"的经营邀约(合规审查 R4)。
         parts.append(
             '  <div class="site-footer-contact">\n'
-            '  💡 需要定制策略回测代码？只提供代码，服务器需自行购买 · '
-            '第一单免费（目前限时全免）·\n'
+            '  联系我们：\n'
             f'  <a href="mailto:{_CONTACT_EMAIL}">{_CONTACT_EMAIL}</a>\n'
             '  </div>'
         )
@@ -728,7 +729,7 @@ async def page_share(token: str, request: Request):
     """
     if not _SHARE_TOKEN_RE.match(token):
         raise HTTPException(404, "页面不存在")
-    # 快照会被分享给陌生人,页脚不带"定制策略"的招揽内容
+    # 快照会被分享给陌生人,页脚不带联系方式
     return _html(request, "share.html", footer=_footer(contact=False))
 
 

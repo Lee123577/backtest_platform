@@ -160,7 +160,7 @@ window.SPAuth = (function () {
   }
 
   // ── 登录弹窗 ─────────────────────────────────────────────────────────────
-  var mask = null, emailInput, codeInput, codeBtn, submitBtn, msgEl;
+  var mask = null, emailInput, codeInput, codeBtn, submitBtn, msgEl, agreeBox;
 
   // 邮箱校验与后端 service.normalize_email 同口径(宽松但拒空白/控制字符)
   var EMAIL_RE = /^[A-Za-z0-9!#$%&'*+/=?^_`{|}~.-]{1,64}@[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/;
@@ -189,7 +189,7 @@ window.SPAuth = (function () {
       '  </div>' +
       '  <div class="sp-msg" id="spMsg"></div>' +
       '  <button class="sp-submit" id="spSubmit">登录 / 注册</button>' +
-      '  <div class="sp-agreement">登录即表示同意本站服务条款。本站内容仅供研究，不构成投资建议。</div>' +
+      '  <label class="sp-agreement"><input type="checkbox" id="spAgree"> 我已阅读并同意 <a href="/legal" target="_blank" rel="noopener">隐私政策与用户协议</a></label>' +
       '</div>';
     document.body.appendChild(mask);
 
@@ -198,6 +198,7 @@ window.SPAuth = (function () {
     codeBtn = mask.querySelector("#spCodeBtn");
     submitBtn = mask.querySelector("#spSubmit");
     msgEl = mask.querySelector("#spMsg");
+    agreeBox = mask.querySelector("#spAgree");
 
     mask.querySelector(".sp-modal-close").addEventListener("click", close);
     mask.addEventListener("click", function (e) { if (e.target === mask) close(); });
@@ -258,6 +259,11 @@ window.SPAuth = (function () {
     var code = (codeInput.value || "").trim();
     if (!validEmail(email)) { setMsg("请输入正确的邮箱地址"); return; }
     if (!/^\d{6}$/.test(code)) { setMsg("请输入 6 位验证码"); return; }
+    // 主动勾选同意后才允许提交。校验顺序不动:邮箱 → 验证码 → 同意。
+    if (!agreeBox || !agreeBox.checked) {
+      setMsg("请先阅读并勾选同意隐私政策与用户协议");
+      return;
+    }
     submitBtn.disabled = true;
     submitBtn.textContent = "登录中…";
     // 提交动作(发请求前)上报:配合 register_click → register_success 算
@@ -266,7 +272,7 @@ window.SPAuth = (function () {
     try {
       if (window.SPTrack) SPTrack.event("register_submit", { has_code: /^\d{6}$/.test(code) });
     } catch (e) { /* 埋点失败不影响登录 */ }
-    postJson("/api/auth/login", { email: email, code: code })
+    postJson("/api/auth/login", { email: email, code: code, agreed: true })
       .then(function (j) {
         // 登录接口已经把用户信息带回来了,不必再打一次 /me ——
         // 少一个来回,弹窗关掉的瞬间顶栏就是新身份。
@@ -309,6 +315,9 @@ window.SPAuth = (function () {
   function open(triggerAction) {
     buildModal();
     setMsg("");
+    // 勾选态**不持久化**:每次打开登录弹窗都回到未勾选,强制重新确认
+    // (默认同意在监管/司法中效力弱,这里要的是"每一次主动同意")。
+    agreeBox.checked = false;
     submitBtn.disabled = false;
     submitBtn.textContent = "登录 / 注册";
     mask.hidden = false;
