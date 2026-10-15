@@ -158,3 +158,209 @@ def test_站外和畸形路径一律丢掉(bad):
 
 def test_超长路径截断():
     assert len(safe_page_path("/" + "a" * 900)) == 255
+
+
+# ── 爬虫识别(bots)─────────────────────────────────────────────────────────
+# 五类分类 + 判定顺序;`PetalBot` 必须归 search(它命中 search 也命中末尾
+# unknown 的 `bot`,顺序错就归错了),把 URL 当 UA 的扫描器必须归 scanner。
+
+from app.analytics import bots
+
+
+@pytest.mark.parametrize("ua,kind", [
+    ("Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)", "search"),
+    ("Mozilla/5.0 (compatible; PetalBot; +https://webmaster.petalsearch.com/site/petalbot)", "search"),
+    ("Mozilla/5.0 (compatible; Baiduspider/2.0; +http://www.baidu.com/search/spider.html)", "search"),
+    ("Mozilla/5.0 AppleWebKit/537.36 compatible; GPTBot/1.0; +https://openai.com/gptbot", "ai"),
+    ("Mozilla/5.0 (compatible; ClaudeBot/1.0; +claudebot@anthropic.com)", "ai"),
+    ("Mozilla/5.0 (compatible; SemrushBot/7~bl; +http://www.semrush.com/bot.html)", "seo"),
+    ("Mozilla/5.0 (compatible; AhrefsBot/7.0; +http://ahrefs.com/robot/)", "seo"),
+    ("libredtail-http", "scanner"),
+    ("curl/7.88.1", "scanner"),
+    ("python-requests/2.31.0", "scanner"),
+    ("http://example.com/wp-admin/install.php", "scanner"),   # 把 URL 当 UA 的扫描器
+    ("Mozilla/5.0 (X11; Linux x86_64) HeadlessChrome/120.0.0.0", "unknown"),
+])
+def test_bot_kind_classification(ua, kind):
+    is_bot, got = bots.classify(ua)
+    assert is_bot is True
+    assert got == kind
+
+
+def test_真人_UA_不算爬虫():
+    is_bot, kind = bots.classify(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    )
+    assert is_bot is False and kind is None
+    assert bots.classify(None) == (False, None)
+    assert bots.classify("") == (False, None)
+
+
+def test_parse_ua_device_与_classify_同源():
+    # device_type='bot' 的语义被运维页的对照查询依赖,不能改;且必须与 classify 同源
+    d, _, _ = bots.parse_ua("Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)")
+    assert d == "bot"
+    d2, os2, br2 = bots.parse_ua(
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 "
+        "(KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1"
+    )
+    assert d2 == "mobile" and os2 == "iOS" and br2 == "Safari"
+    assert bots.parse_ua(None) == (None, None, None)
+
+
+# ── referer 兜底归因 ────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("host,want", [
+    ("www.baidu.com", "baidu"),
+    ("m.baidu.com", "baidu"),
+    ("zhihu.com", "zhihu"),
+    ("link.zhihu.com", "zhihu"),
+    ("xueqiu.com", "xueqiu"),
+    ("www.jisilu.cn", "jisilu"),
+    ("www.bilibili.com", "bilibili"),
+    ("mp.weixin.qq.com", "wechat"),
+    ("news.example.com", "referral"),
+    ("", "direct"),
+    (None, "direct"),
+])
+def test_referer_channel_映射(host, want):
+    assert attr.referer_channel(host) == want
+
+
+def test_站内_referer_不算外部渠道():
+    assert attr.referer_channel("shoupan.asia") == "direct"
+    assert attr.referer_channel("www.shoupan.asia") == "direct"
+    assert attr.is_external_referer("shoupan.asia") is False
+    assert attr.is_external_referer("") is False
+    assert attr.is_external_referer("www.baidu.com") is True
+
+
+@pytest.mark.parametrize("ref,want", [
+    ("https://www.baidu.com/s?wd=x", "www.baidu.com"),
+    ("http://link.zhihu.com/?target=y", "link.zhihu.com"),
+    ("", ""),
+    ("not a url", ""),
+])
+def test_referer_host_解析(ref, want):
+    assert attr.referer_host(ref) == want
+
+
+# ── UTM cookie 编解码(3 段老 cookie 与 5 段新 cookie 都要能认)──────────────
+
+def test_decode_兼容三段老cookie():
+    """老浏览器里还没过期的三段 cookie 不能被升级后的解析器当畸形串丢掉。"""
+    assert attr.decode_attr("baidu|organic|2026q4") == {
+        "utm_source": "baidu", "utm_medium": "organic", "utm_campaign": "2026q4",
+    }
+
+
+def test_decode_识别五段新cookie():
+    assert attr.decode_attr("baidu|organic|c1|hero-v1|kw") == {
+        "utm_source": "baidu", "utm_medium": "organic", "utm_campaign": "c1",
+        "utm_content": "hero-v1", "utm_term": "kw",
+    }
+
+
+def test_encode_输出五段():
+    assert attr.encode_attr({"utm_source": "baidu"}).count("|") == 4
+
+
+# ── event_id 幂等键格式校验(不合法置 NULL,绝不据此丢事件)──────────────────
+
+@pytest.mark.parametrize("good", ["a" * 32, "0123456789abcdef0123456789abcdef"])
+def test_event_id_合法(good):
+    assert service.valid_event_id(good)
+
+
+@pytest.mark.parametrize("bad", [None, "", "short", "a" * 31, "a" * 33, "Z" * 32, "A" * 32])
+def test_event_id_非法(bad):
+    assert not service.valid_event_id(bad)
+
+
+# ── 会话切分(30 分钟滑动窗口)────────────────────────────────────────────
+# 用注入 now + mock 掉 DB 轻查询,不碰真库。
+
+from datetime import datetime, timedelta
+
+from app.analytics import sessions
+from app.analytics import db as an_db
+
+
+def _patch_session_db(monkeypatch, last_event, prev_sessions):
+    monkeypatch.setattr(an_db, "last_event_for_anon", lambda a: last_event)
+    monkeypatch.setattr(an_db, "count_distinct_sessions_for_anon", lambda a: prev_sessions)
+
+
+def test_会话_窗口内复用(monkeypatch):
+    now = datetime(2026, 10, 14, 12, 0, 0)
+    _patch_session_db(
+        monkeypatch,
+        {"session_id": "s" * 32, "created_at": now - timedelta(minutes=10)},
+        3,
+    )
+    sid, is_new, prev = sessions.resolve("a" * 32, now=now)
+    assert sid == "s" * 32
+    assert is_new is False
+    assert prev == 3
+
+
+def test_会话_超窗口新建(monkeypatch):
+    now = datetime(2026, 10, 14, 12, 0, 0)
+    _patch_session_db(
+        monkeypatch,
+        {"session_id": "s" * 32, "created_at": now - timedelta(seconds=sessions.SESSION_WINDOW_SEC + 1)},
+        2,
+    )
+    sid, is_new, prev = sessions.resolve("a" * 32, now=now)
+    assert is_new is True
+    assert sid != "s" * 32 and len(sid) == 32
+    assert prev == 2
+
+
+def test_会话_边界正好等于窗口算复用(monkeypatch):
+    now = datetime(2026, 10, 14, 12, 0, 0)
+    _patch_session_db(
+        monkeypatch,
+        {"session_id": "b" * 32, "created_at": now - timedelta(seconds=sessions.SESSION_WINDOW_SEC)},
+        1,
+    )
+    sid, is_new, _ = sessions.resolve("a" * 32, now=now)
+    assert sid == "b" * 32 and is_new is False
+
+
+def test_会话_首访无历史(monkeypatch):
+    now = datetime(2026, 10, 14, 12, 0, 0)
+    _patch_session_db(monkeypatch, None, 0)
+    sid, is_new, prev = sessions.resolve("a" * 32, now=now)
+    assert is_new is True and len(sid) == 32 and prev == 0
+
+
+def test_会话_空设备直接返回空(monkeypatch):
+    assert sessions.resolve(None) == (None, False, 0)
+    assert sessions.resolve("") == (None, False, 0)
+
+
+def test_会话_DB异常退回空不抛(monkeypatch):
+    def boom(_a):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(an_db, "last_event_for_anon", boom)
+    assert sessions.resolve("a" * 32) == (None, False, 0)
+
+
+# ── 事件白名单扩容 ──────────────────────────────────────────────────────────
+
+def test_新增漏斗事件都在白名单():
+    for name in ("session_start", "channel_hit", "demo_result_view", "register_click",
+                 "register_submit", "register_success", "login", "backtest_result_view",
+                 "watchlist_add", "digest_open", "return_visit"):
+        assert service.is_valid_event(name)
+
+
+def test_漏斗层级是完整链路():
+    keys = [k for k, _ in service.FUNNEL_STEPS]
+    assert keys == [
+        "page_view", "demo_click", "demo_result_view", "register_click",
+        "register_success", "backtest_run", "order_created", "subscribe_activated",
+    ]

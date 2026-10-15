@@ -20,7 +20,6 @@ import asyncio
 import ipaddress
 import logging
 import os
-import re
 import threading
 import time
 from pathlib import Path
@@ -28,7 +27,7 @@ from typing import Dict, List, Optional, Tuple
 
 from starlette.requests import Request
 
-from .analytics import attribution
+from .analytics import attribution, bots
 from .data.data_loader import _get_pool
 
 logger = logging.getLogger(__name__)
@@ -194,37 +193,11 @@ def _client_ip(request: Request) -> str:
 
 
 # ────────────────────────── UA 轻量解析 ─────────────────────────
-
-_OS_PATTERNS = [
-    ("iOS",     re.compile(r"iPhone|iPad|iPod", re.I)),     # iOS 要先于 macOS 匹配
-    ("Android", re.compile(r"Android", re.I)),
-    ("Windows", re.compile(r"Windows NT", re.I)),
-    ("macOS",   re.compile(r"Mac OS X|Macintosh", re.I)),
-    ("Linux",   re.compile(r"Linux", re.I)),
-]
-_BROWSER_PATTERNS = [
-    ("Edge",    re.compile(r"Edg/", re.I)),                  # Edge 先于 Chrome
-    ("Chrome",  re.compile(r"Chrome/", re.I)),
-    ("Firefox", re.compile(r"Firefox/", re.I)),
-    ("Safari",  re.compile(r"Safari/", re.I)),               # Safari 最后（Chrome 也含 Safari 字样）
-    ("IE",      re.compile(r"MSIE|Trident", re.I)),
-]
-_MOBILE_PATTERN = re.compile(r"Mobile|Android|iPhone|iPad|iPod", re.I)
-_BOT_PATTERN    = re.compile(r"bot|crawler|spider|slurp|bingpreview", re.I)
-
-
+# 已统一到 app/analytics/bots.py(纯函数、无 app 内依赖):UA 打标与 device/os/browser
+# 解析放一处,让访问日志与事件表的爬虫口径**同源**。这里只做转发,保留 _parse_ua
+# 这个历史名字以免其它调用点全改。
 def _parse_ua(ua: Optional[str]) -> Tuple[Optional[str], Optional[str], Optional[str]]:
-    if not ua:
-        return None, None, None
-    os_name  = next((n for n, p in _OS_PATTERNS if p.search(ua)), None)
-    browser  = next((n for n, p in _BROWSER_PATTERNS if p.search(ua)), None)
-    if _BOT_PATTERN.search(ua):
-        device = "bot"
-    elif _MOBILE_PATTERN.search(ua):
-        device = "mobile"
-    else:
-        device = "pc"
-    return device, os_name, browser
+    return bots.parse_ua(ua)
 
 
 # ─────────────────────────── 写入逻辑 ───────────────────────────
@@ -401,6 +374,11 @@ class VisitLogMiddleware:
         - sp_sid:没有或格式不对就补一个。同一浏览器稳定,漏斗靠它串起来。
         - sp_attr:**只在还没有的时候写** —— 首次触达归因,后面再带 utm 进来
           也不覆盖,否则老用户点一次自己的推广链接就把原始来源冲掉了。
+
+        本次决定的 sid 会写回 ``scope["sp_sid"]``:新访客的 sid 是在**这个响应**
+        里才签发的,而同一请求的 `_record_inner` 从 request.cookies 里读不到它
+        (cookie 要下一次请求才带上)。不补这一手,落地页那条访问日志与 channel_hit
+        的 anonymous_id 就会是空的 —— 恰恰是最关键的一次访问没有身份。
         """
         try:
             path = scope.get("path", "")
@@ -412,11 +390,14 @@ class VisitLogMiddleware:
             )
             out: List[str] = []
 
-            if not attribution.valid_sid(request.cookies.get(attribution.SID_COOKIE)):
+            sid = request.cookies.get(attribution.SID_COOKIE)
+            if not attribution.valid_sid(sid):
+                sid = attribution.new_sid()
                 out.append(attribution.build_cookie(
-                    attribution.SID_COOKIE, attribution.new_sid(),
+                    attribution.SID_COOKIE, sid,
                     attribution.SID_MAX_AGE, secure,
                 ))
+            scope["sp_sid"] = sid
 
             if not request.cookies.get(attribution.ATTR_COOKIE):
                 utm = attribution.utm_from_query(
@@ -474,15 +455,20 @@ class VisitLogMiddleware:
 
         # 身份与归因:sid 认自己签发的格式,user_id 走 5 分钟缓存的轻查询。
         # 本次请求刚补发的 sid 在 request.cookies 里还看不到(要下次请求才带上),
-        # 那条日志的 session_id 为空是正常的,不值得为它把 cookie 再传一手。
+        # 回退读 _attribution_cookies 存进 scope 的那个值 —— 否则落地页这条最关键
+        # 的访问日志(以及 channel_hit)拿不到 anonymous_id。
         sid = request.cookies.get(attribution.SID_COOKIE)
         if not attribution.valid_sid(sid):
+            sid = scope.get("sp_sid")
+        if not attribution.valid_sid(sid):
             sid = None
-        utm = attribution.decode_attr(request.cookies.get(attribution.ATTR_COOKIE))
+        attr_cookie = request.cookies.get(attribution.ATTR_COOKIE)
+        utm = attribution.decode_attr(attr_cookie)
+        query_utm = attribution.utm_from_query(request.url.query or "")
         if not utm:
             # 落地那一刻 cookie 还没写回来,直接从查询串取,不然首次触达
             # 这条最关键的记录反而没有渠道
-            utm = attribution.utm_from_query(request.url.query or "")
+            utm = query_utm
 
         payload = {
             "ip":      ip,
@@ -501,8 +487,59 @@ class VisitLogMiddleware:
             "user_id": user_id,
             "sid":     sid,
         }
-        for col in ("utm_source", "utm_medium", "utm_campaign"):
+        for col in ("utm_source", "utm_medium", "utm_campaign",
+                    "utm_content", "utm_term"):
             payload[col] = utm.get(col)
 
         # 已在线程池 worker 里(__call__ 把整个 _record 丢了进来),直接同步写
         _insert_log_sync(payload)
+
+        # 渠道命中(§5.1 改造点 3):把"落地时的渠道判定"从"事后查 referer"升级为
+        # "落库即固化" —— referer 会被中间跳转抹掉,事后查不到。
+        self._maybe_channel_hit(
+            path, sid, attr_cookie, query_utm,
+            (request.headers.get("referer") or "")[:512] or None,
+        )
+
+    def _maybe_channel_hit(self, path, sid, attr_cookie, query_utm, referer) -> None:
+        """落地时若命中渠道信号,发一条 channel_hit。**排在管理员排除之后**。
+
+        两个条件**必须同时成立、缺一不发**:
+          ① `sp_attr` cookie 不存在 —— 还没固化过首触渠道(保证每访客只固化一次);
+          ② 有渠道信号 —— query 带 utm,或 referer 的 host 是外部站点。
+        这天然把"无 referer、无 utm 的爬虫"挡在门外:爬虫两样都没有。
+        只在**页面请求**上发(path 不以 /api/ 开头),api 请求没有"落地"一说。
+        """
+        try:
+            if not sid:
+                return
+            if path.startswith("/api/"):
+                return
+            if attr_cookie:
+                return
+            ref_host = attribution.referer_host(referer)
+            external = attribution.is_external_referer(ref_host)
+            if not query_utm and not external:
+                return
+            from .analytics import service as an_service
+            an_service.record(
+                "channel_hit",
+                anonymous_id=sid,
+                path=path,
+                referer=referer,
+                referer_host=ref_host or None,
+                utm=query_utm,
+                # 不建立会话:channel_hit 常在首个 page_view 之前落库(访问日志走
+                # 线程池、紧跟响应),若它抢先建会话,那个 page_view 会被判成
+                # "会话续用",session_start 就永远补不上了。
+                derive_session=False,
+                props={
+                    "referrer_host": ref_host or None,
+                    "channel": attribution.referer_channel(ref_host),
+                    "utm_present": bool(query_utm),
+                    "first_touch": True,
+                },
+            )
+        except Exception as e:
+            # 渠道固化是锦上添花,失败绝不能影响访问日志与响应
+            logger.debug("channel_hit 埋点失败(忽略): %s", e)

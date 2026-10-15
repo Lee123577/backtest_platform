@@ -20,10 +20,10 @@ from pydantic import BaseModel, Field
 
 from ..csrf import reject_cross_site_write
 from ..auth.deps import get_current_user
-from ..auth.admin import require_admin
+from ..auth.admin import require_admin, is_admin_user
 from ..ratelimit import SlidingWindowLimiter
 from ..visit_log import _client_ip
-from . import attribution, db, service
+from . import attribution, bots, db, service
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +49,9 @@ class EventReq(BaseModel):
     # /api/event 本身 —— 曾经所有 demo_click 的 path 都存成了 /api/event,
     # 这一列标着"触发页面"却没有一行是页面。
     path: Optional[str] = Field(default=None, max_length=255)
+    # 客户端生成的幂等键(uuid hex)。重复上报(beacon 重发/刷新)靠它去重,
+    # 服务端只认 ^[a-f0-9]{32}$ 的格式,不合法就置 NULL,绝不因此丢事件。
+    event_id: Optional[str] = Field(default=None, max_length=32)
     # 只收少量标量,不当通用日志管道用
     meta: Optional[Dict[str, Any]] = None
 
@@ -71,17 +74,36 @@ def safe_page_path(raw: Optional[str]) -> Optional[str]:
 
 
 def request_context(request: Request, page_path: Optional[str] = None) -> Dict[str, Any]:
-    """从请求里取埋点要用的身份与归因(不查库的部分)。
+    """从请求里取埋点要用的身份、归因与**设备/爬虫标记**(不查库的部分)。
 
     page_path 由调用方给(前端上报的页面);没给就退回请求自身的 path ——
     服务端就地记的事件(注册/下单)本来也没有页面可言。
+
+    UA 从 request.headers 取,用 bots 统一解析/打标 —— 这样**所有服务端就地
+    埋点都自动带上 is_bot / device_type**,与访问日志同源(见 app/analytics/bots.py)。
+
+    `anonymous_id` 是持久设备 ID(sp_sid);真正的 `session_id` 不在这里算 ——
+    由 service.record() 交给会话层按 30 分钟窗口派生,避免把设备 ID 当会话。
     """
+    ua = request.headers.get("user-agent") or None
+    device, os_name, browser = bots.parse_ua(ua)
+    is_bot, bot_kind = bots.classify(ua)
     sid = request.cookies.get(attribution.SID_COOKIE)
+    referer = (request.headers.get("referer") or "")[:512] or None
+    ref_host = attribution.referer_host(referer) or None
     return {
-        "session_id": sid if attribution.valid_sid(sid) else None,
+        "anonymous_id": sid if attribution.valid_sid(sid) else None,
         "utm": attribution.decode_attr(request.cookies.get(attribution.ATTR_COOKIE)),
         "ip": _client_ip(request),
         "path": page_path or request.url.path,
+        "referer": referer,
+        "referer_host": ref_host,
+        "is_bot": is_bot,
+        "bot_kind": bot_kind,
+        "device_type": device,
+        "browser": browser,
+        "os": os_name,
+        "app_version": bots.RULES_VERSION,
     }
 
 
@@ -90,11 +112,17 @@ def post_event(req: EventReq, request: Request, _rl: None = Depends(_rate_limit)
     if not service.is_valid_event(req.event):
         raise HTTPException(400, "未知事件")
     user = get_current_user(request)
+    # 管理员自测不入库(与访问日志一致):否则站主巡检会把"真人访客"分母刷高。
+    # 用邮箱判定(不查库),命中就静默成功返回,前端无感。
+    if is_admin_user(user):
+        return {"ok": True}
     ctx = request_context(request, safe_page_path(req.path))
     ok = service.record(
         req.event,
         user_id=int(user["id"]) if user else None,
+        event_id=req.event_id if service.valid_event_id(req.event_id) else None,
         meta=req.meta,
+        props=req.meta,
         **ctx,
     )
     return {"ok": ok}
@@ -137,6 +165,9 @@ def get_funnel(
     return {
         "range": {"start": str(start), "end": str(end), "days": days},
         "page_view_since": pv_since,
+        # 口径声明:真人数一律 is_bot=0 的 page_view,且已排除管理员账号。
+        # 前端把它显示出来,免得下次又有人拿错的口径算转化率。
+        "admin_excluded": True,
         "steps": data["steps"],
         "events": data["events"],
         "channels": channels,

@@ -276,10 +276,26 @@
     });
   }
 
+  // 复盘详情打开埋点。from_email:URL 带 utm_medium=email 即认为来自邮件推送。
+  function reportDigestOpen(dateStr) {
+    try {
+      if (window.SPTrack) {
+        SPTrack.event("digest_open", {
+          date: dateStr,
+          from_email: new URLSearchParams(location.search).get("utm_medium") === "email",
+        });
+      }
+    } catch (e) { /* 埋点失败不影响渲染 */ }
+  }
+
   function loadByDate(dateStr, push) {
     fetchJson("/api/daily_review/" + encodeURIComponent(dateStr))
       .then(function (data) {
         renderReview(data.review);
+        // 复盘详情真的加载出来了才记 digest_open —— 邮件推送点进来的人
+        // 落地就落在这一天,from_email 由 URL 的 utm_medium=email 判定,
+        // 用来衡量"邮件链路到底有没有把人带来"。
+        reportDigestOpen(dateStr);
         if (push) {
           history.pushState({ date: dateStr }, "", "/daily_review/" + dateStr);
         }

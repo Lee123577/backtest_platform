@@ -260,6 +260,12 @@ window.SPAuth = (function () {
     if (!/^\d{6}$/.test(code)) { setMsg("请输入 6 位验证码"); return; }
     submitBtn.disabled = true;
     submitBtn.textContent = "登录中…";
+    // 提交动作(发请求前)上报:配合 register_click → register_success 算
+    // "弹窗打开后的完成率"。has_code 记录验证码是否填写(到这里已通过 6 位校验,
+    // 恒为 true;保留该字段是为以后支持别的登录方式时口径不变)。
+    try {
+      if (window.SPTrack) SPTrack.event("register_submit", { has_code: /^\d{6}$/.test(code) });
+    } catch (e) { /* 埋点失败不影响登录 */ }
     postJson("/api/auth/login", { email: email, code: code })
       .then(function (j) {
         // 登录接口已经把用户信息带回来了,不必再打一次 /me ——
@@ -285,12 +291,28 @@ window.SPAuth = (function () {
       });
   }
 
-  function open() {
+  // 登录/注册入口点击埋点(register_click)。放在 open() 这个唯一的"弹窗真的
+  // 打开"的 chokepoint 上:导航登录按钮和 requireLogin 触发的门禁弹窗都从这里
+  // 走 —— 一处记一次、不会重复;requireLogin 在已登录时直接 resolve、根本不经过
+  // 这里,所以"已登录直接 resolve"不会被算成点击。action 区分实际入口。
+  function reportClick(action) {
+    try {
+      if (window.SPTrack) {
+        SPTrack.event("register_click", {
+          trigger_page: location.pathname,
+          trigger_action: action || "nav_login",
+        });
+      }
+    } catch (e) { /* 埋点失败绝不影响登录 */ }
+  }
+
+  function open(triggerAction) {
     buildModal();
     setMsg("");
     submitBtn.disabled = false;
     submitBtn.textContent = "登录 / 注册";
     mask.hidden = false;
+    reportClick(triggerAction);
     emailInput.focus();
   }
 
@@ -524,7 +546,7 @@ window.SPAuth = (function () {
       if (u) return u;
       return new Promise(function (resolve) {
         pending = resolve;
-        open();
+        open("backtest_gate");
       });
     });
   }

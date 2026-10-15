@@ -470,16 +470,22 @@ function renderBotNote(data) {
   // 而下游事件有历史 —— 不说明的话转化率会出现 300% 这种数。攒够数据自动消失。
   const since = data.page_view_since;
   const rangeStart = (data.range || {}).start;
+  // 口径说明:把"真人 = is_bot=0 的 page_view,且已排除管理员"写出来。
+  // 不加这句,"真人访客"到底怎么数的又得靠翻代码 —— 口径要摆在页面上。
+  const crit = '<div style="margin-bottom:6px;color:#57606a;">真人口径：只数 ' +
+    '<b>is_bot=0</b> 的 page_view' +
+    (data.admin_excluded ? '，且已排除管理员账号' : '') +
+    '。</div>';
   let warn = '';
   if (since && rangeStart && since > rangeStart) {
     warn = `<div style="margin-bottom:6px;color:#9a6700;">` +
       `真人访客从 <b>${esc(since)}</b> 起才开始记录，` +
       `本区间前半段没有这项数据 —— 这期间的转化率（可能超过 100%）不作数。</div>`;
   }
-  if (raw == null) { el.innerHTML = warn; return; }
+  if (raw == null) { el.innerHTML = crit + warn; return; }
   const bots = Math.max(0, Number(raw) - realN);
   const pct = raw > 0 ? Math.round(bots / raw * 100) : 0;
-  el.innerHTML = warn +
+  el.innerHTML = crit + warn +
     `同期访问日志去重访客 <b>${Number(raw).toLocaleString()}</b>，` +
     `其中约 <b>${bots.toLocaleString()}</b>（${pct}%）没有跑 JS，基本都是爬虫和扫描器。` +
     `漏斗第一层用的是上面的真人数，<b>不要拿访问日志那个数算转化率</b>。`;

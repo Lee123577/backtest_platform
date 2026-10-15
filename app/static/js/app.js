@@ -16,6 +16,10 @@ let currentMode = 'signal';  // 'signal' | 'portfolio'
 // 而 runBacktest 里的 data 是局部变量,渲染完就没了
 let lastShareable = null;
 
+// 最近一次渲染的策略结果数组。给埋点用:判断本次结果是否含防过拟合检查
+// (has_robustness),以及策略条数 —— 这些在回调里拿不到 data,只能记在这一处。
+let lastResults = null;
+
 // ── Boot ──────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('endDate').value = todayStr();
@@ -49,12 +53,13 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('shareLinkBtn').addEventListener('click', onShareLink);
 
   document.getElementById('heroDemoBtn').addEventListener('click', () => {
-    reportEvent('demo_click');
+    reportEvent('demo_click', { strategy_id: 'ma_cross', src: 'hero' });
     if (currentMode !== 'signal') switchMode('signal');
     // 结果面板要等回测返回才 display:'',所以滚动必须排在 quickRun 之后
     Promise.resolve(quickRun('ma_cross')).then(() => {
       const panel = document.getElementById('resultsPanel');
       if (panel.style.display !== 'none') {
+        reportDemoResultView('ma_cross');
         panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }
     });
@@ -69,7 +74,16 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('signalStrategyGrid').addEventListener('click', e => {
     if (e.target.closest('a')) return;   // 卡片里的「原理」链接:正常跳转,别顺手把策略加进列表
     const quickBtn = e.target.closest('.sc-quickrun');
-    if (quickBtn) { quickRun(quickBtn.dataset.id); return; }
+    if (quickBtn) {
+      // 策略卡「一键试跑」也是"用示例试跑":点它=对这条策略感兴趣,
+      // 与首屏 heroDemoBtn 同属 demo_click,只是来源(src)不同、策略不同。
+      reportEvent('demo_click', { strategy_id: quickBtn.dataset.id, src: 'card' });
+      Promise.resolve(quickRun(quickBtn.dataset.id)).then(() => {
+        const panel = document.getElementById('resultsPanel');
+        if (panel.style.display !== 'none') reportDemoResultView(quickBtn.dataset.id);
+      });
+      return;
+    }
     const card = e.target.closest('.strategy-card');
     if (card) addInstance(card.dataset.id);
   });
@@ -549,6 +563,7 @@ async function runBacktest() {
     };
     renderResults(data.results, data.benchmark, `${data.stock_name || data.stock_code}  ${start} → ${end}`);
     equityChart?.resize();
+    lastResults = data.results;
 
     // 资金不足警告（如 600519 这种 1393 元股 + 10w 资金 → 0 交易）
     if (data.capital_warning) {
@@ -556,6 +571,13 @@ async function runBacktest() {
     }
 
     scrollTo('resultsPanel');
+    // 渲染完成、面板可见 —— 客户端"看到回测结果"。服务端 backtest_run 只知道
+    // "跑成功了",不知道用户有没有真看到结果,这一层只能前端记。
+    reportEvent('backtest_result_view', {
+      code: data.stock_code,
+      n_strategies: (data.results || []).length,
+      has_robustness: resultsHasRobustness(data.results),
+    });
   } catch (e) {
     showError(e.message);
   } finally {
@@ -629,11 +651,18 @@ async function runPortfolioBacktest() {
       };
       renderResults(evt.results, evt.benchmark, subtitle, true);
       equityChart?.resize();
+      lastResults = evt.results;
 
       const result = evt.results?.[0];
       if (result?.holdings_log?.length) renderHoldingsLog(result.holdings_log);
 
       scrollTo('resultsPanel');
+      // 组合回测没有单一 code,给 null(拿不到的字段不编);其余口径同单股
+      reportEvent('backtest_result_view', {
+        code: null,
+        n_strategies: (evt.results || []).length,
+        has_robustness: resultsHasRobustness(evt.results),
+      });
     }
   };
 
@@ -1246,6 +1275,24 @@ function copyToClipboard(text) {
 // 所有页面都发不出事件。保留这个名字是为了本文件里几处调用不用全改。
 function reportEvent(event, meta) {
   SPTrack.event(event, meta);
+}
+
+// 结果里是否含防过拟合检查(参数敏感性 / 样本外)。给埋点的 has_robustness 用。
+function resultsHasRobustness(results) {
+  return Array.isArray(results) && results.some(r => r && (r.sensitivity || r.oos_split));
+}
+
+// 「用示例试跑」真正跑到结果后上报一次(demo_result_view)。
+// 它补上漏斗的关键一段:点了示例(demo_click)≠ 真的看到了结果(结果加载慢/出错
+// 就看不到),完成率要靠这条算。拿不到的字段给 null,不编。
+function reportDemoResultView(strategyId) {
+  const codeEl = document.getElementById('stockCode');
+  const code = codeEl ? codeEl.value.trim() : '';
+  reportEvent('demo_result_view', {
+    code: /^\d{6}$/.test(code) ? code : null,
+    strategy_id: strategyId || null,
+    has_robustness: resultsHasRobustness(lastResults),
+  });
 }
 
 // ── Trade history ─────────────────────────────────────────────────────────────

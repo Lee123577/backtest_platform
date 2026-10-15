@@ -63,6 +63,20 @@ var SPTrack = (function () {
   // 运维页不计入:那是我们自己在看,算进去等于自己给自己刷数
   var SKIP = { "/tasks": 1, "/admin/tasks": 1 };
 
+  // 幂等键:同一事件重复上报(beacon 重发 / 用户刷新)靠它去重,服务端命中
+  // 唯一键就静默丢弃。优先用 crypto.randomUUID(仅安全上下文有),去掉连字符
+  // 得到 32 位 hex;老浏览器 / 非 https 退回 Math.random —— 重复概率可忽略。
+  function newEventId() {
+    try {
+      if (window.crypto && typeof crypto.randomUUID === "function") {
+        return crypto.randomUUID().replace(/-/g, "");
+      }
+    } catch (e) { /* 忽略,走下面的兜底 */ }
+    var s = "";
+    for (var i = 0; i < 32; i++) s += Math.floor(Math.random() * 16).toString(16);
+    return s;
+  }
+
   function send(event, meta) {
     try {
       fetch("/api/event", {
@@ -76,6 +90,7 @@ var SPTrack = (function () {
         body: JSON.stringify({
           event: event,
           path: location.pathname,
+          event_id: newEventId(),
           meta: meta || null,
         }),
       }).catch(function () {});     // 埋点失败绝不能影响页面

@@ -17,8 +17,8 @@ from __future__ import annotations
 
 import re
 import secrets
-from typing import Dict, Optional
-from urllib.parse import parse_qs
+from typing import Dict, Optional, Tuple
+from urllib.parse import parse_qs, urlparse
 
 SID_COOKIE = "sp_sid"
 ATTR_COOKIE = "sp_attr"
@@ -26,7 +26,14 @@ ATTR_COOKIE = "sp_attr"
 SID_MAX_AGE = 365 * 24 * 3600      # 访客标识留一年
 ATTR_MAX_AGE = 30 * 24 * 3600      # 归因窗口 30 天
 
-UTM_KEYS = ("utm_source", "utm_medium", "utm_campaign")
+# 首次触达渠道从 3 个扩到 5 个(补 utm_content / utm_term,做素材位与关键词级
+# 归因)。cookie 里是 "src|medium|campaign|content|term" 五段,但要**向后兼容**
+# 老浏览器里还没过期的三段 cookie —— 见 decode_attr。
+UTM_KEYS: Tuple[str, ...] = (
+    "utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term",
+)
+# 旧 cookie 段数(仅前三个字段)。decode 时必须同时认 3 段与 5 段。
+_LEGACY_ATTR_SEGMENTS = 3
 
 # 渠道值只留字母数字和 - _ . —— 够表达 baidu / wechat-moments / 2026q3_seo,
 # 又杜绝了分隔符(|)、控制字符和换行进入 cookie 与 DB
@@ -66,23 +73,86 @@ def utm_from_query(query_string: str) -> Dict[str, str]:
 
 
 def encode_attr(utm: Dict[str, str]) -> str:
-    """{utm_source,...} → "source|medium|campaign" 。值已过白名单,不含 |。"""
+    """{utm_source,...} → "source|medium|campaign|content|term" 。值已过白名单,不含 |。"""
     return "|".join(_clean(utm.get(k, "")) for k in UTM_KEYS)
 
 
 def decode_attr(raw: Optional[str]) -> Dict[str, str]:
-    """cookie 值 → {utm_source,...}。格式不对就当没有,不抛。"""
+    """cookie 值 → {utm_source,...}。格式不对就当没有,不抛。
+
+    **向后兼容老 cookie**:3 段按前三个字段映射、后两个为空;5 段全映射;
+    其它段数(1/2/4/6+)一律当没有 —— 宁可丢归因,也不把畸形串猜错。
+    """
     if not raw:
         return {}
     parts = raw.split("|")
-    if len(parts) != len(UTM_KEYS):
+    if len(parts) == _LEGACY_ATTR_SEGMENTS:
+        keys = UTM_KEYS[:_LEGACY_ATTR_SEGMENTS]
+    elif len(parts) == len(UTM_KEYS):
+        keys = UTM_KEYS
+    else:
         return {}
     out = {}
-    for key, val in zip(UTM_KEYS, parts):
+    for key, val in zip(keys, parts):
         cleaned = _clean(val)
         if cleaned:
             out[key] = cleaned
     return out
+
+
+# ── referer 兜底归因 ─────────────────────────────────────────────────────────
+# UTM 为空时,referer 是唯一的外部来源线索。用户从百度/知乎点进来时 referer
+# 是可用的 —— 把"落地时判定一次"升级为"落库即固化"(channel_hit 事件),
+# 避免 referer 被中间跳转抹掉。
+
+# 站内域名:自引 referer 不算外部渠道(在我们自己页面之间跳转而已)。
+_SELF_HOSTS: Tuple[str, ...] = ("shoupan.asia",)
+
+# 外部 host → 渠道名。用"等于或 .后缀"匹配,天然覆盖子域
+# (m.baidu.com 命中 baidu.com、link.zhihu.com 命中 zhihu.com、mp.weixin.qq.com 命中 weixin.qq.com)。
+_CHANNEL_BY_HOST: Tuple[Tuple[Tuple[str, ...], str], ...] = (
+    (("baidu.com",), "baidu"),
+    (("zhihu.com",), "zhihu"),
+    (("xueqiu.com",), "xueqiu"),
+    (("jisilu.cn",), "jisilu"),
+    (("bilibili.com",), "bilibili"),
+    (("weixin.qq.com",), "wechat"),
+)
+
+
+def _is_self_host(host: str) -> bool:
+    h = (host or "").strip().lower()
+    if not h or h in ("localhost", "127.0.0.1"):
+        return True
+    return any(h == s or h.endswith("." + s) for s in _SELF_HOSTS)
+
+
+def referer_host(referer: Optional[str]) -> str:
+    """referer URL → host(小写,不含端口)。解析不出来返回空串。"""
+    if not referer:
+        return ""
+    try:
+        return (urlparse(referer).hostname or "").lower()
+    except Exception:
+        return ""
+
+
+def is_external_referer(host: Optional[str]) -> bool:
+    """host 是否外部站点(非空且非站内)。channel_hit 的第二条件靠它。"""
+    h = (host or "").strip().lower()
+    return bool(h) and not _is_self_host(h)
+
+
+def referer_channel(host: Optional[str]) -> str:
+    """外部 host → 渠道名;站内/空 → direct;其余外部 → referral。"""
+    h = (host or "").strip().lower()
+    if not h or _is_self_host(h):
+        return "direct"
+    for suffixes, name in _CHANNEL_BY_HOST:
+        for s in suffixes:
+            if h == s or h.endswith("." + s):
+                return name
+    return "referral"
 
 
 def build_cookie(name: str, value: str, max_age: int, secure: bool) -> str:

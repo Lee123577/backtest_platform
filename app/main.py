@@ -2088,10 +2088,13 @@ def _record_backtest_event(request: Request, code: str,
         from .analytics.api import request_context
         from .analytics import service as an_service
         user = _auth_deps.get_current_user(request)
+        # 同一份属性同时写 meta(兼容未迁移读方)与 props(结构化 JSON,可 SQL 直查)
+        detail = {"code": code, "robustness": bool(robustness), "strategies": n}
         an_service.record(
             "backtest_run",
             user_id=int(user["id"]) if user else None,
-            meta={"code": code, "robustness": bool(robustness), "strategies": n},
+            meta=detail,
+            props=detail,
             **request_context(request),
         )
     except Exception as e:

@@ -104,8 +104,10 @@ def login(req: LoginReq, request: Request, response: Response):
         secure=_cookie_secure(request),
     )
     is_new = _is_new_user(user)
-    if is_new:
-        _record_register(user, request)
+    # 新老用户**互斥**记:首次登录即建号 → register_success;老用户登录 → login。
+    # 漏斗里"完成注册"是转化、日常"登录"不是,两者共用 register 会让注册数被
+    # 老用户登录刷高。
+    _record_auth_event(user, request, "register_success" if is_new else "login")
     # is_new 让前端能对首次注册的人多说一句(引导设昵称/头像)，
     # 不用再多打一次接口去问"我是不是新号"。
     return {"ok": True, "user": _user_out(user), "is_new": is_new}
@@ -128,14 +130,24 @@ def _is_new_user(user: dict) -> bool:
         return False
 
 
-def _record_register(user: dict, request) -> None:
+def _record_auth_event(user: dict, request, event: str) -> None:
+    """登录/注册事件埋点。服务端就地记 —— 前端 beacon 会被关页面吃掉。
+
+    `register_success` 额外回捞该用户最早一条带渠道的 utm:注册这一跳常常发生在
+    落地之后,此时 cookie 里的首触渠道可能已被清理,回捞能把它挂回原始来源。
+    任何异常都吞掉,绝不影响登录。
+    """
     try:
         from ..analytics.api import request_context
+        from ..analytics import db as an_db
         from ..analytics import service as an_service
-        an_service.record("register", user_id=int(user["id"]),
-                          **request_context(request))
+        uid = int(user["id"])
+        ctx = request_context(request)
+        if event == "register_success" and not ctx.get("utm"):
+            ctx["utm"] = an_db.first_utm_for_user(uid)
+        an_service.record(event, user_id=uid, **ctx)
     except Exception as e:  # 埋点失败绝不影响登录
-        logger.info("注册事件埋点失败(忽略): %s", e)
+        logger.info("登录/注册事件埋点失败(忽略): %s", e)
 
 
 @router.post("/logout")

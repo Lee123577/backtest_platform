@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from ..csrf import reject_cross_site_write
@@ -66,12 +66,34 @@ def config(user: dict = Depends(require_login)):
 
 
 @router.post("/add")
-def add(req: CodeReq, user: dict = Depends(require_login)):
+def add(req: CodeReq, request: Request, user: dict = Depends(require_login)):
     try:
         out = service.add_watch(int(user["id"]), req.code)
     except service.WatchlistError as e:
         raise HTTPException(400, str(e))
+    _record_watchlist_add(user, request, out.get("code"))
     return {"ok": True, **out}
+
+
+def _record_watchlist_add(user: dict, request: Request, code) -> None:
+    """加入自选成功后的服务端埋点(激活层,前端 beacon 会被关页面吃掉)。
+
+    注意:`service.add_watch` 对"已在清单里"也返回成功(幂等,不占额度),
+    返回值**不区分**"真新增"与"重复加" —— 所以这里按"调用成功即记"处理,
+    重复加会让这一层数字略偏高(已加过的再点一次也会记)。宁可贵在完整,
+    不为了精确去改 service 的签名。
+    """
+    try:
+        from ..analytics.api import request_context
+        from ..analytics import service as an_service
+        an_service.record(
+            "watchlist_add",
+            user_id=int(user["id"]),
+            props={"code": code, "source": "manual"},
+            **request_context(request),
+        )
+    except Exception as e:
+        logger.info("自选新增埋点失败(忽略): %s", e)
 
 
 @router.post("/remove")
