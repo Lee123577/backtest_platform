@@ -23,8 +23,7 @@
   var hasSsr = initEl ? initEl.getAttribute("data-ssr") === "1" : false;
 
   var currentDate = ssrDate || null; // 正在展示的 review_date
-  var subscribed = false; // 当前用户是否会员(付费墙用)
-  var ltOffer = null;     // 终生会员名额概览;还有名额时付费墙的钩子换成"免费领"
+  var subscribed = false; // 当前用户是否会员(仅用于给往期列表加锁标记)
   var latestDate = null;  // 最新一篇复盘日期(对所有人免费,不加锁)
 
   // ── 工具(esc() 用 util.js 里全站共用的实现)──────────────────────────────
@@ -162,16 +161,13 @@
     document.title = (review.title || (currentDate + " A股复盘")) +
       "（" + currentDate + "） | shoupan";
     if (review.locked) {
-      // 付费墙:历史篇未订阅 —— 标题当钩子,正文换成订阅引导
+      // 往期未解锁 —— 正文替换为中性锁提示(站内不再有开通引导)
       titleEl.textContent = review.title || (currentDate + " A股复盘");
       bodyEl.innerHTML =
         '<div class="dr-paywall">' +
-        '<div class="dr-paywall-title">🔒 ' + paywallTitle() + "</div>" +
-        '<p>历史复盘的完整正文与当日数据快照为会员内容，最新一篇可免费查看。</p>' +
-        '<button class="dr-paywall-btn" id="drSubBtn">' + paywallCta() + "</button>" +
+        '<div class="dr-paywall-title">🔒 该篇为往期内容</div>' +
+        "<p>历史复盘的完整正文与当日数据快照暂不展示，最新一篇可免费查看。</p>" +
         "</div>";
-      var btn = document.getElementById("drSubBtn");
-      if (btn) btn.addEventListener("click", goSubscribe);
       renderSummary(null);
       highlightHistory();
       return;
@@ -190,41 +186,9 @@
     highlightHistory();
   }
 
-  // 名额还有的时候,付费墙的钩子是"免费领",不是"开通会员" —— 后者在
-  // 有免费名额的阶段等于把人往外推
-  function ltLeft() {
-    return (ltOffer && ltOffer.remaining) || 0;
-  }
-  function paywallTitle() {
-    return ltLeft() > 0 ? "前 " + ltOffer.total + " 名免费领终生会员" : "订阅解锁历史复盘";
-  }
-  function paywallCta() {
-    return ltLeft() > 0
-      ? "🎁 免费领终生会员（还剩 " + ltLeft() + " 个）"
-      : "开通会员 · 查看套餐";
-  }
-
-  // 去订阅页(未登录时订阅页自身会先引导登录)
-  function goSubscribe() {
-    window.location.href = "/subscribe";
-  }
-
-  // 服务端直出的付费墙按钮也要能点(首屏就在页面上,不经 renderReview)
-  function bindPaywallBtn() {
-    var btn = document.getElementById("drSubBtn");
-    if (btn) btn.addEventListener("click", goSubscribe);
-  }
-
-  // 直出付费墙的文案按名额覆盖。**必须等 status 回来**才知道还剩几个,所以
-  // 跟上面的绑事件分开两步:按钮要立刻能点(别等接口),文案晚一拍无所谓。
-  // 服务端不能直接写死名额数 —— 那段 HTML 带 ETag、会被共享缓存复用。
-  function refreshPaywallCopy() {
-    if (ltLeft() <= 0) return;
-    var btn = document.getElementById("drSubBtn");
-    if (btn) btn.textContent = paywallCta();
-    var t = document.querySelector(".dr-paywall-title");
-    if (t) t.textContent = "🔒 " + paywallTitle();
-  }
+  // 往期未解锁的提示已在 HTML 首屏 / renderReview 里直出，站内不再有任何开通引导 ——
+  // 名额文案与订阅按钮相关逻辑（原 ltLeft/paywallTitle/paywallCta/goSubscribe/
+  // bindPaywallBtn/refreshPaywallCopy）已随 /subscribe 引导一并移除。
 
   // ── 历史列表 ──────────────────────────────────────────────────────────
   function highlightHistory() {
@@ -335,11 +299,8 @@
 
   function refreshSub() {
     return fetchJson("/api/subscription/status")
-      .then(function (s) {
-        subscribed = !!s.subscribed;
-        ltOffer = s.lifetime_offer || null;
-      })
-      .catch(function () { subscribed = false; ltOffer = null; });
+      .then(function (s) { subscribed = !!s.subscribed; })
+      .catch(function () { subscribed = false; });
   }
 
   // ── 初始化 ────────────────────────────────────────────────────────────
@@ -350,11 +311,9 @@
   // 服务端直出的列表/付费墙按钮先接上交互，别等接口回来
   // (锁图标依赖订阅态，是按人变的，只能等 renderHistory；直出的 HTML 里不能有)
   bindHistoryLinks(document.getElementById("drHistoryWrap"));
-  bindPaywallBtn();
   highlightHistory();
 
   refreshSub().then(function () {
-    refreshPaywallCopy();
     var legacy = hashDate();
     if (legacy) {
       // 老 hash 链接 → 换成真实路径后按该日期加载

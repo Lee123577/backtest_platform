@@ -227,7 +227,7 @@ def get_market_breadth(trade_date: _Date) -> Optional[Dict[str, Any]]:
 def get_recent_daily_amounts(trade_date: _Date, days: int = 5) -> List[float]:
     """当日之前最近 N 个有效交易日的全市场成交额(元),按日期倒序 ——
     首项即上一交易日(放量/缩量对比),整段均值用于 5 日量能趋势。
-    与 cloudmap 同口径：以"当日 K 线 ≥ 500 行"识别有效交易日。"""
+    与有效交易日口径一致：以"当日 K 线 ≥ 500 行"识别有效交易日。"""
     conn = _get_pool()
     if conn is None:
         return []

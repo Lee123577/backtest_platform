@@ -524,3 +524,50 @@ def test_public_reason_filters_banned_words():
     assert api.public_reason("板块龙头，值得关注") == ""
     assert api.public_reason("半导体今日收涨，量能温和") == "半导体今日收涨，量能温和"
     assert api.public_reason(None) == ""
+
+
+# ── 5. 读列容错：board_obs 列缺失(生产库未迁移)时 /today 绝不 500 ──────────────
+
+def test_get_board_obs_returns_none_on_missing_column(monkeypatch):
+    """board_obs 列不存在时 SELECT 抛 OperationalError(1054) ——
+    get_board_obs 必须吞掉并返回 None(语义＝没有观察记录)，而不是把异常抛出去。"""
+    import pymysql
+
+    class _Cur:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def execute(self, *a, **k):
+            raise pymysql.err.OperationalError(1054, "Unknown column 'board_obs'")
+
+        def fetchone(self):  # pragma: no cover - 不会走到
+            return None
+
+    class _Conn:
+        def cursor(self):
+            return _Cur()
+
+    monkeypatch.setattr(hs_db, "_get_pool", lambda: _Conn())
+    assert hs_db.get_board_obs(date(2026, 10, 15)) is None
+
+
+def test_api_today_survives_get_board_obs_error(monkeypatch):
+    """ /today 里 get_board_obs 抛 OperationalError 时不得 500：
+    兜底后返回 boards(list) / stale(bool)，自然走实时快照兜底。"""
+    import pymysql
+    from app.ai_hotsector import api
+
+    def boom(*a, **k):
+        raise pymysql.err.OperationalError(1054, "Unknown column 'board_obs'")
+
+    monkeypatch.setattr(hs_db, "get_latest_pick_date", lambda: date(2026, 10, 15))
+    monkeypatch.setattr(hs_db, "get_board_obs", boom)
+    monkeypatch.setattr(runner, "_fetch_board_snapshot", lambda *a, **k: list(FAKE_BOARDS))
+
+    out = api.today()                       # 不抛异常
+    assert isinstance(out["boards"], list)
+    assert isinstance(out["stale"], bool)
+    assert len(out["boards"]) == 3

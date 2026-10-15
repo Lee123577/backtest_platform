@@ -1,7 +1,7 @@
 /**
  * 自选盯盘页
  * ==========
- * 登录后管理自选股 + 盯盘策略；规则提醒是会员权益(未订阅显示订阅引导)。
+ * 登录后管理自选股 + 盯盘策略；规则提醒暂未开放给未订阅账号。
  * 后端：/api/watchlist/{config,add,remove,rules,alerts,alerts/read}
  *
  * 页面底部还有一块「邮件通知」开关，走的是另一套后端 /api/notify/prefs ——
@@ -12,7 +12,6 @@
   "use strict";
 
   var cfg = null;      // 最近一次 /config 结果
-  var ltOffer = null;  // 终生会员名额概览(只在未订阅时拉,用来换付费墙文案)
 
   function getJson(url) {
     return fetch(url).then(function (r) {
@@ -220,17 +219,7 @@
     var wrap = $("wlAlerts");
     if (!cfg.subscribed) {
       $("wlReadBtn").style.display = "none";
-      // 名额还有时把钩子换成"免费领" —— 免费的还没发完还喊"开通会员",
-      // 等于在把人往外推
-      var left = (ltOffer && ltOffer.remaining) || 0;
-      wrap.innerHTML =
-        '<div class="wl-paywall"><p>规则提醒是会员权益。开通后，每个交易日收盘系统会按你选的策略扫描自选股并在此提醒' +
-        (left > 0 ? "，也可以发到你的邮箱" : "") + "。</p>" +
-        '<button class="wl-paywall-btn" id="wlSubBtn">' +
-        (left > 0 ? "🎁 免费领终生会员（还剩 " + left + " 个）" : "开通会员 · 查看套餐") +
-        "</button></div>";
-      var b = $("wlSubBtn");
-      if (b) b.addEventListener("click", function () { window.location.href = "/subscribe"; });
+      wrap.innerHTML = '<div class="wl-paywall"><p>该功能暂未开放。</p></div>';
       return;
     }
     var alerts = (data && data.alerts) || [];
@@ -345,11 +334,7 @@
 
   function loadAlerts() {
     if (!cfg.subscribed) {
-      // 只有未订阅才需要知道还剩几个名额;拉失败就退回原来的"开通会员"文案
-      getJson("/api/subscription/status")
-        .then(function (s) { ltOffer = s.lifetime_offer || null; })
-        .catch(function () { ltOffer = null; })
-        .then(function () { renderAlerts(null); });
+      renderAlerts(null);
       return;
     }
     getJson("/api/watchlist/alerts?limit=50")
@@ -371,23 +356,6 @@
   // ── 未登录挡板：拉公开的 /api/strategies(首页回测用的同一份策略注册表，
   // 盯盘策略是它的子集)渲染真实规则说明，而不是空喊"登录后可用" ──────────────
   var _gateStrategiesLoaded = false;
-  // 免费名额只在登录闸上提一次。这里是全站最该说它的位置:能走到这一步的人
-  // 已经明确表达了"我要盯这只票"的意图,而 /subscribe 一周只有 2 个人打开过 ——
-  // 名额发不出去不是名额不够吸引,是根本没人看见。
-  function loadGateOffer() {
-    var box = $("wlGateOffer");
-    if (!box) return;
-    fetch("/api/subscription/status")
-      .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (s) {
-        var o = s && s.lifetime_offer;
-        if (!o || !o.remaining) return;      // 名额发完就不提,免得像画饼
-        box.innerHTML = "🎁 前 " + o.total + " 名注册用户免费领<b>终生会员</b>，" +
-          "还剩 <b>" + o.remaining + "</b> 个 —— 规则提醒是会员权益，登录后可直接领取。";
-        box.style.display = "";
-      })
-      .catch(function () { /* 拿不到就不显示,不影响登录 */ });
-  }
 
   function loadGateStrategies() {
     if (_gateStrategiesLoaded) return;
@@ -409,7 +377,6 @@
     $("wlLoginGate").style.display = "";
     $("wlBody").style.display = "none";
     loadGateStrategies();
-    loadGateOffer();
     var b = $("wlLoginBtn");
     if (b) b.addEventListener("click", function () {
       window.SPAuth.requireLogin().then(function (u) { if (u) init(); });

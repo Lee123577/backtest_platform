@@ -57,7 +57,7 @@ def ensure_tables() -> None:
 
 
 def latest_market_date() -> Optional[_Date]:
-    """最新有效交易日(当日 K 线 ≥500 行,与 cloudmap/daily_review 同口径)。"""
+    """最新有效交易日(当日 K 线 ≥500 行,与 daily_review 同口径)。"""
     conn = _get_pool()
     if conn is None:
         return None

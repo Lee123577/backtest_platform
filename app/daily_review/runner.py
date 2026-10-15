@@ -33,7 +33,7 @@ INDEX_LIST = [
     ("000852", "中证1000"),
 ]
 
-# 当日 K 线少于这个数视为 daily_update 未完成(与 cloudmap 有效交易日口径一致)
+# 当日 K 线少于这个数视为 daily_update 未完成(有效交易日口径)
 MIN_KLINE_ROWS = 500
 
 

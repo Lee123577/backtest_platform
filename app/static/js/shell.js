@@ -18,7 +18,6 @@
     { title: "行情研究", items: [
       { label: "每日复盘", href: "/daily_review", ico: "📈" },
       { label: "AI板块观察", href: "/ai_hotsector", ico: "🔥" },
-      { label: "大盘云图", href: "/cloudmap", ico: "🗺️" },
     ]},
     { title: "策略工具", items: [
       { label: "单股策略", href: "/", ico: "📉" },
@@ -27,11 +26,9 @@
       { label: "模拟盘观察", href: "/paper_trading", ico: "💹" },
       { label: "自选盯盘", href: "/watchlist", ico: "⭐" },
     ]},
-    // 订阅页(/subscribe)不进侧边栏,但**不是**下线状态 —— 页面/接口都在正常
-    // 收单,入口走场景内引导(复盘付费墙、仪表盘会员卡、自选盯盘提醒),转化率
-    // 比放一个常驻"开通会员"菜单项高;同时它照常进 sitemap 吃搜索流量。
-    // 早先这里写的是"暂缓上线,不导流量进去",跟 main.py 的 _SITEMAP_PAGES
-    // 自相矛盾,已按实际行为改正。
+    // 订阅页(/subscribe)保留可用(页面 + /api/subscription/* 接口都在),但
+    // **站内不再有任何入口指向它**:复盘付费墙、仪表盘会员卡、自选盯盘提醒里的
+    // 开通引导已全部撤下;它照常进 sitemap 吃搜索流量。
     // 运维页:仅管理员账号可见(默认 hidden,确认身份后才显示,避免闪现)。
     // 路径特意用 /admin/tasks 而不是 /tasks —— 这是内部运维监控,不该跟
     // 单股回测/看板等用户功能同层级挂在一起(旧路径 /tasks 307 跳转过来)。

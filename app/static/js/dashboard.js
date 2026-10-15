@@ -2,7 +2,7 @@
  * 仪表盘首页
  * ==========
  * 登录后的概览落地页。复用现有接口，不加后端：
- *   /api/auth/me · /api/subscription/status · /api/daily_review/latest
+ *   /api/auth/me · /api/daily_review/latest
  *   /api/watchlist/config(需登录，取未读提醒数)
  * 访客态显示登录引导。
  */
@@ -25,7 +25,6 @@
     { href: "/daily_review", ico: "📈", label: "每日复盘", desc: "AI 收盘复盘" },
     { href: "/ai_hotsector", ico: "🔥", label: "AI板块观察", desc: "每日模拟跟踪" },
     { href: "/watchlist", ico: "⭐", label: "自选盯盘", desc: "规则提醒" },
-    { href: "/cloudmap", ico: "🗺️", label: "大盘云图", desc: "市场全景" },
     { href: "/", ico: "📉", label: "单股策略", desc: "指标回测" },
     { href: "/?mode=portfolio", ico: "🧮", label: "组合策略", desc: "组合回测" },
     { href: "/paper_trading", ico: "💹", label: "模拟盘观察", desc: "模拟盘" },
@@ -71,49 +70,13 @@
       });
     } else {
       $("dashHello").textContent = "欢迎使用 A 股量化平台";
-      $("dashHeroSub").textContent = "登录后解锁历史复盘、自选盯盘规则提醒等会员内容";
+      $("dashHeroSub").textContent = "登录后可使用历史复盘、自选盯盘规则提醒等功能";
       $("dashHeroAction").innerHTML = '<button class="dash-hero-btn" id="dashLoginBtn">登录 / 注册</button>';
       $("dashLoginBtn").addEventListener("click", function () {
         // 登录成功不再 location.reload():整页重刷要重新拉四个接口、白屏一下,
         // 而这页需要变的只是几个卡片。登录态由 SPAuth 广播回来,当场重画。
         if (window.SPAuth) window.SPAuth.requireLogin();
       });
-    }
-  }
-
-  function renderMember(sub, loggedIn) {
-    var el = $("memberBody");
-    var left = (sub && sub.lifetime_offer && sub.lifetime_offer.remaining) || 0;
-    if (!loggedIn) {
-      el.innerHTML = '<div class="dash-big muted">未登录</div>' +
-        '<div class="dash-note">' +
-        (left > 0 ? "登录后可免费领终生会员（还剩 " + left + " 个）" : "登录后可开通会员") +
-        "</div>";
-      return;
-    }
-    if (sub && sub.lifetime) {
-      el.innerHTML = '<div class="dash-big ok">终生会员</div>' +
-        '<div class="dash-note">全部会员功能已解锁，无到期时间</div>';
-      return;
-    }
-    if (sub && sub.subscribed) {
-      var d = (sub.expires_at || "").slice(0, 10);
-      var days = "";
-      if (d) {
-        var left = Math.ceil((new Date(d) - new Date()) / 86400000);
-        days = left >= 0 ? "剩 " + left + " 天" : "";
-      }
-      el.innerHTML = '<div class="dash-big ok">会员有效</div>' +
-        '<div class="dash-note">到期 ' + esc(d) + (days ? " · " + days : "") + "</div>" +
-        '<a class="dash-link" href="/subscribe">续费 / 管理 →</a>';
-    } else {
-      el.innerHTML = '<div class="dash-big muted">未开通</div>' +
-        '<div class="dash-note">' +
-        (left > 0
-          ? "前 " + sub.lifetime_offer.total + " 名可免费领终生会员，还剩 " + left + " 个"
-          : "开通后解锁历史复盘与规则提醒") + "</div>" +
-        '<a class="dash-cta" href="/subscribe">' +
-        (left > 0 ? "🎁 免费领取" : "立即开通") + "</a>";
     }
   }
 
@@ -138,8 +101,8 @@
       return;
     }
     if (!cfg || !cfg.subscribed) {
-      el.innerHTML = '<div class="dash-big muted">会员功能</div>' +
-        '<div class="dash-note">开通后收盘自动提醒策略规则触发</div>' +
+      el.innerHTML = '<div class="dash-big muted">暂未开放</div>' +
+        '<div class="dash-note">该功能当前不可用</div>' +
         '<a class="dash-cta ghost" href="/watchlist">去看看</a>';
       return;
     }
@@ -170,17 +133,9 @@
     var loggedIn = !!user;
     renderHero(user);
     if (!loggedIn) {
-      // 未登录也拉一次订阅状态:这个接口是公开的,要的只是 lifetime_offer ——
-      // 名额还剩几个是给没登录的人看的钩子,拿不到就退回"登录后可开通会员"
-      getJson("/api/subscription/status")
-        .then(function (sub) { renderMember(sub, false); })
-        .catch(function () { renderMember(null, false); });
       renderAlerts(null, false);
       return;
     }
-    getJson("/api/subscription/status")
-      .then(function (sub) { renderMember(sub, true); })
-      .catch(function () { renderMember(null, true); });
     getJson("/api/watchlist/config")
       .then(function (cfg) { renderAlerts(cfg, true); })
       .catch(function () { renderAlerts(null, true); });

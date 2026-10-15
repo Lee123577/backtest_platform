@@ -109,7 +109,12 @@ def today() -> Dict[str, Any]:
     """
     latest_date = db.get_latest_pick_date()
     if latest_date is not None:
-        obs = db.get_board_obs(latest_date)
+        # 读列缺失(未迁移)/DB 抖动都可能让底层抛 —— 一律退化为"无观察记录"，
+        # 让下面的实时兜底接管，接口绝不 500。
+        try:
+            obs = db.get_board_obs(latest_date)
+        except Exception:  # noqa: BLE001 —— 兜底读失败不能 500
+            obs = None
         if obs:
             return {
                 "boards": [_sanitize_board(b) for b in obs],
@@ -126,7 +131,10 @@ def today() -> Dict[str, Any]:
                 "stale": False, "data_date": today_str}
 
     # 实时抓取也失败 → 回退到更早一批有 board_obs 的历史，标注 stale + 真实数据日期
-    alt = db.get_latest_board_obs(before=latest_date)
+    try:
+        alt = db.get_latest_board_obs(before=latest_date)
+    except Exception:  # noqa: BLE001 —— 兜底读失败不能 500
+        alt = None
     if alt is not None:
         return {
             "boards": [_sanitize_board(b) for b in alt["board_obs"]],

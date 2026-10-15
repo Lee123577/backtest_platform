@@ -22,6 +22,8 @@ import logging
 from datetime import date as _Date
 from typing import Any, Dict, List, Optional
 
+import pymysql
+
 from ..data.data_loader import _get_pool, transaction_flag
 
 logger = logging.getLogger(__name__)
@@ -240,16 +242,25 @@ def _load_board_obs(row: Optional[Dict[str, Any]]) -> Optional[List[Dict[str, An
 
 
 def get_board_obs(pick_date: _Date) -> Optional[List[Dict[str, Any]]]:
-    """指定日 pick 行的板块热度观察(反序列化后的 list)；无则 None。"""
+    """指定日 pick 行的板块热度观察(反序列化后的 list)；无则 None。
+
+    读列容错：生产库若还没补出 board_obs 列（启动迁移未跑 / DB 账号无 ALTER
+    权限），`SELECT board_obs` 会抛 OperationalError(1054)。这里吞掉并返回 None
+    （语义＝"没有观察记录"），让 /today 自然走实时兜底，绝不 500。
+    """
     conn = _get_pool()
     if conn is None:
         return None
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT board_obs FROM ai_hotsector_pick WHERE pick_date=%s",
-            (pick_date,),
-        )
-        row = cur.fetchone()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT board_obs FROM ai_hotsector_pick WHERE pick_date=%s",
+                (pick_date,),
+            )
+            row = cur.fetchone()
+    except pymysql.err.OperationalError as e:
+        logger.warning("读取 board_obs 失败(按无观察记录处理): %s", e)
+        return None
     return _load_board_obs(row)
 
 
@@ -257,6 +268,9 @@ def get_latest_board_obs(before: Optional[_Date] = None) -> Optional[Dict[str, A
     """最近一批 board_obs 非空的行，返回 {"pick_date", "board_obs"}；无则 None。
 
     before 给了就取严格早于它的那批（用于"最新一批没有 board_obs → 回退上一批"）。
+
+    读列容错：board_obs 列缺失时(OperationalError 1054)返回 None，语义＝
+    "没有历史观察记录"，绝不把 500 抛给 /today。
     """
     conn = _get_pool()
     if conn is None:
@@ -266,14 +280,18 @@ def get_latest_board_obs(before: Optional[_Date] = None) -> Optional[Dict[str, A
     if before is not None:
         where += " AND pick_date < %s"
         params.append(before)
-    with conn.cursor() as cur:
-        cur.execute(
-            f"""SELECT pick_date, board_obs FROM ai_hotsector_pick
-                WHERE {where}
-                ORDER BY pick_date DESC LIMIT 1""",
-            tuple(params),
-        )
-        row = cur.fetchone()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""SELECT pick_date, board_obs FROM ai_hotsector_pick
+                    WHERE {where}
+                    ORDER BY pick_date DESC LIMIT 1""",
+                tuple(params),
+            )
+            row = cur.fetchone()
+    except pymysql.err.OperationalError as e:
+        logger.warning("读取 board_obs 失败(按无观察记录处理): %s", e)
+        return None
     obs = _load_board_obs(row)
     if obs is None:
         return None

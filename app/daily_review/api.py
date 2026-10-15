@@ -77,7 +77,7 @@ def _locked_out(row: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-# /latest 进程缓存(cloudmap 同款):复盘一天只变一次(17:45 生成),
+# /latest 进程缓存:复盘一天只变一次(17:45 生成),
 # 60s TTL 足够新鲜,页面每次加载省 1 次 DB 查询
 _LATEST_CACHE: Dict[str, Any] = {}
 _LATEST_TTL = 60  # 秒

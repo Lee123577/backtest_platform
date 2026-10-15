@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import time
+from contextlib import asynccontextmanager
 from datetime import date as _date
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -88,7 +89,23 @@ from .strategies.registry import (
     list_strategies,
 )
 
-app = FastAPI(title="A股量化回测平台", version="1.2.0")
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """应用启动时的幂等迁移钩子。
+
+    只做「补列 / 建表」这类幂等、可重复的迁移，并**不阻塞启动**：DB 未就绪、
+    连接不可用(RuntimeError)、账号无 ALTER 权限等任何异常都只记 warning，
+    绝不 raise —— 否则一次数据库抖动就会让整个服务起不来。
+    """
+    try:
+        from .ai_hotsector import db as _hs_db
+        _hs_db.ensure_tables()
+    except Exception as e:  # noqa: BLE001 —— 启动迁移失败不得阻塞服务
+        logger.warning("启动迁移 ai_hotsector 表失败(不阻塞启动): %s", e)
+    yield
+
+
+app = FastAPI(title="A股量化回测平台", version="1.2.0", lifespan=_lifespan)
 
 # 访问日志中间件 —— 异步写入 back_test.user_visit_log
 from .visit_log import VisitLogMiddleware  # noqa: E402
@@ -216,10 +233,6 @@ app.add_middleware(SecurityHeadersMiddleware)
 # 今日数据入库状态 API
 from .data_status.api import router as data_status_router  # noqa: E402
 app.include_router(data_status_router)
-
-# 大盘云图 API（前端 ECharts treemap 消费）
-from .cloudmap.api import router as cloudmap_router  # noqa: E402
-app.include_router(cloudmap_router)
 
 # AI 板块观察(DeepSeek 每日选板块+选股，T 日收盘买入/T+1 收盘卖出模拟)
 from .ai_hotsector.api import router as ai_hotsector_router  # noqa: E402
@@ -582,8 +595,27 @@ async def paper_trading_page(request: Request):
 
 @app.get("/cloudmap", include_in_schema=False)
 async def page_cloudmap(request: Request):
-    """大盘云图（D3 Treemap）。资源在 app/static/cloudmap/ 下。"""
-    return _html(request, "cloudmap", "index.html")
+    """大盘云图已下线（410 Gone）。
+
+    页面与数据接口一体下线，站内已无任何入口指向它。这里刻意**不读**
+    `app/static/cloudmap/index.html`（该目录已随功能一并删除），而是直接返回
+    一段自包含的最小 HTML 说明页，附回首页链接。
+    """
+    body = (
+        '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1.0">'
+        '<meta name="robots" content="noindex,follow">'
+        "<title>页面已下线 - 收盘 shoupan</title></head>"
+        "<body style=\"font-family:system-ui,-apple-system,'Segoe UI',sans-serif;"
+        'max-width:640px;margin:14vh auto;padding:0 20px;color:#1f2733;text-align:center;">'
+        '<h1 style="font-size:20px;">该页面已下线</h1>'
+        '<p style="color:#5b6472;line-height:1.7;">'
+        "大盘云图功能已停止提供，感谢你的理解。</p>"
+        '<p><a href="/" style="color:#2f6feb;">← 返回首页</a></p>'
+        "</body></html>"
+    )
+    return Response(content=body, status_code=410,
+                    media_type="text/html; charset=utf-8")
 
 
 @app.get("/ai_hotsector", include_in_schema=False)
@@ -875,19 +907,15 @@ def _dr_body(row: Optional[Dict[str, Any]], locked: bool, *,
         return banner + ('<div class="no-data">该交易日复盘正在补录，'
                          "可先查看最近一个交易日的复盘内容。</div>")
     if locked:
-        # 免费预览 + 付费墙。付费墙整段包在 .dr-paid 里 —— 与 _dr_head() 里
-        # hasPart.cssSelector 对应,是向搜索引擎声明"这里确实是会员内容"的锚点。
+        # 免费预览 + 往期内容提示。整段包在 .dr-paid 里 —— 与 _dr_head() 里
+        # hasPart.cssSelector 对应，是向搜索引擎声明"这里确实是未公开正文"的锚点。
+        # 站内已不再有任何指向 /subscribe 的入口，这里只出中性锁提示、不放开通按钮。
         return banner + (
             _dr_render.preview_html(row.get("content_md")) +
             '<div class="dr-paid">'
             '<div class="dr-paywall">'
-            '<div class="dr-paywall-title">🔒 订阅解锁完整复盘</div>'
-            "<p>往期复盘的完整正文与当日数据快照为会员内容，最新一篇可免费查看。</p>"
-            # 文案里**不放名额数**:这段 HTML 带 ETag、会被共享缓存复用,
-            # 写死"还剩 30 个"过两天就是假的。前端 bindPaywallBtn 拿到
-            # /api/subscription/status 后会把按钮换成"免费领(还剩 N 个)"。
-            '<button class="dr-paywall-btn" id="drSubBtn" type="button">'
-            "开通会员 · 查看套餐</button>"
+            '<div class="dr-paywall-title">🔒 该篇为往期内容</div>'
+            "<p>历史复盘的完整正文与当日数据快照暂不展示，最新一篇可免费查看。</p>"
             "</div></div>"
         )
     return banner + _dr_render.md_to_html(row.get("content_md"))
@@ -1212,7 +1240,6 @@ def page_strategy(strategy_id: str, request: Request):
 _SITEMAP_PAGES = [
     ("/", "daily", "1.0"),
     ("/paper_trading", "daily", "0.8"),
-    ("/cloudmap", "daily", "0.7"),
     ("/ai_hotsector", "daily", "0.7"),
     ("/daily_review", "daily", "0.7"),
     ("/strategy", "weekly", "0.7"),

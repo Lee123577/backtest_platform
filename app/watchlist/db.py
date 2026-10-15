@@ -261,7 +261,7 @@ def mark_all_read(user_id: int) -> None:
 # ── 扫描辅助:最新交易日 + 近 N 根 K 线 ───────────────────────────────────────
 
 def latest_market_date() -> Optional[_Date]:
-    """最新有效交易日(K 线 ≥ 500 行,与 cloudmap 同口径)。"""
+    """最新有效交易日(K 线 ≥ 500 行,与 daily_review 同口径)。"""
     conn = _get_pool()
     if conn is None:
         return None
