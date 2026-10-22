@@ -462,7 +462,8 @@ def page_breakdown(start: _Date, end: _Date, limit: int = 20) -> List[Dict[str, 
     """按页面拆的 PV/UV —— 只数 page_view 事件,即只数真人。
 
     和 user_visit_log 里那份"每页多少 UV"不是一回事:那份含爬虫,而这份的每一行
-    都对应一次真实的浏览器渲染。
+    都对应一次真实的浏览器渲染;跑 JS 的无头浏览器靠 is_bot=0 再筛一道。
+    UV 按设备(anonymous_id)去重,理由见 count_events。
     """
     ensure_tables()
     conn = _get_pool()
@@ -474,9 +475,9 @@ def page_breakdown(start: _Date, end: _Date, limit: int = 20) -> List[Dict[str, 
             f"""
             SELECT path,
                    COUNT(*) AS pv,
-                   COUNT(DISTINCT COALESCE(session_id, CAST(user_id AS CHAR), ip)) AS uv
+                   COUNT(DISTINCT COALESCE(anonymous_id, CAST(user_id AS CHAR), ip)) AS uv
               FROM user_event_log
-             WHERE event = 'page_view'
+             WHERE event = 'page_view' AND is_bot = 0
                AND created_at >= %s AND created_at < %s + INTERVAL 1 DAY
                AND path IS NOT NULL AND path <> ''{clause}
              GROUP BY path
@@ -511,7 +512,14 @@ def first_event_date(event: str) -> Optional[str]:
 
 
 def count_events(start: _Date, end: _Date) -> Dict[str, int]:
-    """区间内各事件的独立主体数(同一访客重复触发只算一次)。排除管理员。"""
+    """区间内各事件的独立主体数(同一访客重复触发只算一次)。排除管理员与爬虫。
+
+    🔴 去重键必须是 `anonymous_id`(持久设备 ID),**不能是 session_id**:
+    session_id 现在是 30 分钟会话,拿它去重数的是"会话数",同一个人来三次就
+    算三个访客,漏斗各层转化率全部失真。老数据的设备 ID 已由迁移搬进
+    anonymous_id,所以跨上线日的窗口口径也是一致的。
+    `is_bot = 0`:UA 打标为爬虫/自动化的(含跑 JS 的无头浏览器)一律不算真人。
+    """
     ensure_tables()
     conn = _get_pool()
     if conn is None:
@@ -520,9 +528,10 @@ def count_events(start: _Date, end: _Date) -> Dict[str, int]:
     with conn.cursor() as cur:
         cur.execute(
             f"""
-            SELECT event, COUNT(DISTINCT COALESCE(session_id, CAST(user_id AS CHAR), ip)) AS n
+            SELECT event, COUNT(DISTINCT COALESCE(anonymous_id, CAST(user_id AS CHAR), ip)) AS n
             FROM user_event_log
-            WHERE created_at >= %s AND created_at < %s + INTERVAL 1 DAY{clause}
+            WHERE is_bot = 0
+              AND created_at >= %s AND created_at < %s + INTERVAL 1 DAY{clause}
             GROUP BY event
             """,
             (start, end, *extra),
@@ -531,7 +540,7 @@ def count_events(start: _Date, end: _Date) -> Dict[str, int]:
 
 
 def channel_breakdown(start: _Date, end: _Date, limit: int = 20) -> List[Dict[str, Any]]:
-    """按 utm_source 拆分的事件数 —— 哪个渠道带来了转化。排除管理员。"""
+    """按 utm_source 拆分的事件数 —— 哪个渠道带来了转化。排除管理员与爬虫(is_bot=1)。"""
     ensure_tables()
     conn = _get_pool()
     if conn is None:
@@ -543,7 +552,8 @@ def channel_breakdown(start: _Date, end: _Date, limit: int = 20) -> List[Dict[st
             SELECT COALESCE(NULLIF(utm_source, ''), '(直接/未标记)') AS source,
                    event, COUNT(*) AS n
             FROM user_event_log
-            WHERE created_at >= %s AND created_at < %s + INTERVAL 1 DAY{clause}
+            WHERE is_bot = 0
+              AND created_at >= %s AND created_at < %s + INTERVAL 1 DAY{clause}
             GROUP BY source, event
             ORDER BY n DESC
             LIMIT %s

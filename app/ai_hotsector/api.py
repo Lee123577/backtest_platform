@@ -12,7 +12,9 @@ GET /api/ai_hotsector/intraday       — 当前持仓中(priced,还没到次日�
 
 手动触发生成/结算复用现有的通用任务接口 POST /api/tasks/{name}/run
 （任务已注册在 app/scheduler/registry.py 的 ai_hotsector_predict / ai_hotsector_settle）。
-/today 已改为"最新一批板块热度观察"，**不再返回任何个股**；其余接口供历史折叠区使用。
+/today 已改为"最新一批板块热度观察"，**不再返回任何个股**。
+其余接口是原 AI 个股模拟跟踪的历史数据(个股代码 / 胜率 / 收益曲线)，公开页已下线，
+**仅限管理员**查询 —— 对外公开历史选股战绩正是合规审查要撤掉的东西。
 """
 from __future__ import annotations
 
@@ -20,14 +22,18 @@ import time
 from datetime import date as _Date
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from ..auth.admin import require_admin
 from ..data.realtime import get_realtime_prices
 from ..json_safe import json_safe as _json_safe
 from . import db
 from .prompts import REASON_BANNED_WORDS
 
 router = APIRouter(prefix="/api/ai_hotsector", tags=["ai_hotsector"])
+
+# 历史个股模拟跟踪接口统一挂这个依赖：未登录 401、非管理员 403。
+_ADMIN_ONLY = [Depends(require_admin)]
 
 
 def public_reason(text) -> str:
@@ -146,32 +152,32 @@ def today() -> Dict[str, Any]:
     return {"boards": [], "pick_date": None, "stale": False, "data_date": None}
 
 
-@router.get("/history")
+@router.get("/history", dependencies=_ADMIN_ONLY)
 def history(limit: int = 30):
     return {"history": _json_safe(db.get_history(limit))}
 
 
-@router.get("/equity")
+@router.get("/equity", dependencies=_ADMIN_ONLY)
 def equity(limit: int = 365):
     return {"equity": _json_safe(db.get_equity_curve(limit))}
 
 
-@router.get("/stats")
+@router.get("/stats", dependencies=_ADMIN_ONLY)
 def stats():
     return _json_safe(db.get_stats())
 
 
-@router.get("/sector_stats")
+@router.get("/sector_stats", dependencies=_ADMIN_ONLY)
 def sector_stats():
     return {"sectors": _json_safe(db.get_sector_stats())}
 
 
-@router.get("/prompt_stats")
+@router.get("/prompt_stats", dependencies=_ADMIN_ONLY)
 def prompt_stats():
     return {"prompts": _json_safe(db.get_prompt_version_stats())}
 
 
-@router.get("/intraday")
+@router.get("/intraday", dependencies=_ADMIN_ONLY)
 def intraday():
     """当前"已买入、还没到次日收盘"的股票，接实时行情算浮动盈亏。
     非交易时段实时价接口返回的是最近一笔成交价，跟收盘价基本一致——

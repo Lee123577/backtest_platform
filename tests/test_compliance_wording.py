@@ -134,3 +134,34 @@ def test_watchlist_mail_says_rule_triggered_not_signal():
     # 措辞去方向性:报"哪条规则被触发",不报"该买/该卖"(旧文案"买入条件"已弃用)
     assert "触发买入规则" in text
     assert "买入条件" not in text
+
+
+# ── 历史选股战绩不再对外展示 ──────────────────────────────────────────────────
+
+_LEGACY_HS_APIS = ("/api/ai_hotsector/stats", "/api/ai_hotsector/history",
+                   "/api/ai_hotsector/equity", "/api/ai_hotsector/intraday",
+                   "/api/ai_hotsector/sector_stats", "/api/ai_hotsector/prompt_stats")
+
+
+@pytest.mark.parametrize("path", list(_shipped_files()), ids=lambda p: p.name)
+def test_前端不再拉历史选股战绩接口(path):
+    """首页的"上涨占比 / 跑赢中证1000"、板块页的历史收益区都来自这些接口 ——
+    它们已改为仅限管理员,任何公开页面都不该再调。"""
+    text = path.read_text(encoding="utf-8")
+    hits = [api for api in _LEGACY_HS_APIS if api in text]
+    assert not hits, f"{path.name} 仍在调用历史战绩接口: {hits}"
+
+
+def test_板块观察页不再展示收益与上涨占比():
+    text = (STATIC / "ai_hotsector.html").read_text(encoding="utf-8")
+    for word in ("超额收益", "累计收益", "上涨占比", "模拟资金", "资金曲线"):
+        assert word not in text
+
+
+# ── /subscribe 不进搜索索引 ───────────────────────────────────────────────────
+
+def test_subscribe_不在sitemap且带noindex():
+    import app.main as main
+    assert "/subscribe" not in [p for p, *_ in main._SITEMAP_PAGES]
+    html = (STATIC / "subscribe.html").read_text(encoding="utf-8")
+    assert '<meta name="robots" content="noindex' in html
