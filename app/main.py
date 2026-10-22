@@ -1235,8 +1235,8 @@ def page_strategy(strategy_id: str, request: Request):
 
 
 # (路径, 更新频率, 优先级) —— 仅收录面向用户的功能页；/admin/tasks、/tasks 是运维监控页不收录
-# /subscribe 在这里是**有意为之**:它不在侧边栏(入口走场景内引导,见 shell.js 的
-# NAV 注释),但页面正常收单,该吃的搜索流量要吃。别因为"侧边栏里没有"就摘掉。
+# /subscribe **有意不收录**:站内付费引导已全部撤下(合规审查),页面只留给已有链接
+# 的用户自助查看,同时带 noindex —— 别再把"免费领终生会员 / 套餐价格"主动送给爬虫。
 _SITEMAP_PAGES = [
     ("/", "daily", "1.0"),
     ("/paper_trading", "daily", "0.8"),
@@ -1246,7 +1246,6 @@ _SITEMAP_PAGES = [
     ("/discuss", "daily", "0.5"),
     ("/watchlist", "daily", "0.6"),
     ("/my_board", "weekly", "0.5"),
-    ("/subscribe", "weekly", "0.5"),
     ("/legal", "yearly", "0.2"),
 ]
 

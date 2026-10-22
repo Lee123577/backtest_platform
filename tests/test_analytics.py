@@ -364,3 +364,58 @@ def test_漏斗层级是完整链路():
         "page_view", "demo_click", "demo_result_view", "register_click",
         "register_success", "backtest_run", "order_created", "subscribe_activated",
     ]
+
+
+# ── 漏斗口径:按设备去重 + 排除爬虫 ─────────────────────────────────────────────
+# session_id 现在是 30 分钟会话。统计若仍按它去重,同一个人来三次就算三个"访客";
+# is_bot 落了字段却没人过滤,跑 JS 的无头浏览器照样进漏斗。下面锁住 SQL 口径。
+
+class _SqlSpy:
+    def __init__(self):
+        self.sql = []
+
+    def cursor(self):
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def execute(self, sql, params=None):
+        self.sql.append(" ".join(sql.split()))
+
+    def fetchall(self):
+        return []
+
+    def fetchone(self):
+        return None
+
+
+@pytest.fixture
+def sql_spy(monkeypatch):
+    from app.analytics import db as an_db
+    spy = _SqlSpy()
+    monkeypatch.setattr(an_db, "_get_pool", lambda: spy)
+    monkeypatch.setattr(an_db, "ensure_tables", lambda: None)
+    monkeypatch.setattr(an_db, "_admin_filter_clause", lambda: ("", []))
+    return spy
+
+
+@pytest.mark.parametrize("fn", ["count_events", "page_breakdown", "channel_breakdown"])
+def test_统计查询排除爬虫(sql_spy, fn):
+    from datetime import date
+    from app.analytics import db as an_db
+    getattr(an_db, fn)(date(2026, 10, 1), date(2026, 10, 7))
+    assert "is_bot = 0" in sql_spy.sql[-1]
+
+
+@pytest.mark.parametrize("fn", ["count_events", "page_breakdown"])
+def test_独立主体按设备去重而不是按会话(sql_spy, fn):
+    from datetime import date
+    from app.analytics import db as an_db
+    getattr(an_db, fn)(date(2026, 10, 1), date(2026, 10, 7))
+    sql = sql_spy.sql[-1]
+    assert "COUNT(DISTINCT COALESCE(anonymous_id," in sql
+    assert "COALESCE(session_id" not in sql

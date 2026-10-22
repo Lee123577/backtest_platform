@@ -23,7 +23,7 @@
 
   var SHORTCUTS = [
     { href: "/daily_review", ico: "📈", label: "每日复盘", desc: "AI 收盘复盘" },
-    { href: "/ai_hotsector", ico: "🔥", label: "AI板块观察", desc: "每日模拟跟踪" },
+    { href: "/ai_hotsector", ico: "🔥", label: "AI板块观察", desc: "板块热度" },
     { href: "/watchlist", ico: "⭐", label: "自选盯盘", desc: "规则提醒" },
     { href: "/", ico: "📉", label: "单股策略", desc: "指标回测" },
     { href: "/?mode=portfolio", ico: "🧮", label: "组合策略", desc: "组合回测" },
@@ -36,25 +36,6 @@
         '<span class="sc-ico">' + s.ico + "</span><span><div class=\"sc-label\">" +
         esc(s.label) + '</div><div class="sc-desc">' + esc(s.desc) + "</div></span></a>";
     }).join("");
-  }
-
-  // hero 里的 AI 板块观察数据条：累计模拟跟踪结果公开可查。
-  // 样本太少(结算<30只)或接口失败就保持隐藏，不给空壳。
-  function renderHeroStats(st) {
-    var el = $("dashHeroStats");
-    if (!st || !st.total_count || st.total_count < 30 || st.win_rate == null) return;
-    var pills = [];
-    pills.push('<span class="dash-hero-stat">AI 板块观察累计上涨占比 <b>' +
-      (st.win_rate * 100).toFixed(1) + "%</b>（" + st.win_count + "/" + st.total_count + "）</span>");
-    if (st.cum_return_after_fee != null && st.benchmark_cum_return != null) {
-      var diff = (st.cum_return_after_fee - st.benchmark_cum_return) * 100;
-      var word = diff >= 0 ? "跑赢" : "跑输";
-      pills.push('<span class="dash-hero-stat">扣费后 ' + word + "中证1000 <b>" +
-        Math.abs(diff).toFixed(1) + "</b> 个百分点</span>");
-    }
-    pills.push('<a class="dash-hero-stat" href="/ai_hotsector">完整跟踪记录公开可查 →</a>');
-    el.innerHTML = pills.join("");
-    el.hidden = false;
   }
 
   function renderHero(user) {
@@ -118,14 +99,12 @@
   // ── 初始化 ──────────────────────────────────────────────────────────────
   renderShortcuts();
 
-  // 与登录态无关的三块:只拉一次,登录/登出都不用重来。
-  Promise.all([
-    getJson("/api/daily_review/latest").catch(function () { return { review: null }; }),
-    getJson("/api/ai_hotsector/stats").catch(function () { return null; }),
-  ]).then(function (res) {
-    renderReview((res[0] && res[0].review) || null);
-    renderHeroStats(res[1]);
-  });
+  // 与登录态无关的复盘卡片:只拉一次,登录/登出都不用重来。
+  // 不再在首屏摆 AI 历史跟踪的上涨占比 / 跑赢基准 —— 那是原个股模拟跟踪的
+  // 历史收益,挂在已去个股的板块观察名下既张冠李戴,也正是合规审查要撤的展示。
+  getJson("/api/daily_review/latest")
+    .catch(function () { return { review: null }; })
+    .then(function (res) { renderReview((res && res.review) || null); });
 
   // 与登录态有关的三块:每次身份变化(登录、登出、改昵称换头像)重画一遍。
   // /api/auth/me 不在这里打 —— SPAuth 全站共享那一次结果。

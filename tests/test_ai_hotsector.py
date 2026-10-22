@@ -571,3 +571,28 @@ def test_api_today_survives_get_board_obs_error(monkeypatch):
     assert isinstance(out["boards"], list)
     assert isinstance(out["stale"], bool)
     assert len(out["boards"]) == 3
+
+
+# ── 历史个股模拟跟踪接口:仅限管理员 ──────────────────────────────────────────
+# 这些接口返回个股代码 / 胜率 / 收益曲线,公开页已下线;对外放着等于继续公示选股战绩。
+
+_LEGACY_PATHS = {"/history", "/equity", "/stats", "/sector_stats", "/prompt_stats", "/intraday"}
+
+
+def _route_deps(path):
+    from app.ai_hotsector import api as hs_api
+    from app.auth.admin import require_admin
+    full = hs_api.router.prefix + path
+    route = next(r for r in hs_api.router.routes if r.path == full)
+    return [d.dependency for d in route.dependencies], require_admin
+
+
+@pytest.mark.parametrize("path", sorted(_LEGACY_PATHS))
+def test_历史个股接口仅限管理员(path):
+    deps, require_admin = _route_deps(path)
+    assert require_admin in deps
+
+
+def test_today_仍然公开():
+    deps, require_admin = _route_deps("/today")
+    assert require_admin not in deps
