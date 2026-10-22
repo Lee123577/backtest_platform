@@ -18,7 +18,7 @@ import pytest
 from fastapi import HTTPException
 
 import app.main as main
-from app.main import _dr_body, _dr_head, _json_ld
+from app.main import _dr_body, _dr_head, _dr_pending, _json_ld
 
 
 # 结尾放个独特标记：预览只截开头，标记出现在 HTML 里就说明全文泄漏了
@@ -62,6 +62,29 @@ def test_failed_review_renders_placeholder():
     assert "no-data" in html
     # 生成失败的正文可能是内部报错，不能直出
     assert "大盘综述" not in html
+
+
+# ── 回退快照的横幅：旧日期不能说"正在生成" ──────────────────────────────────
+
+def test_stale_banner_最新一期说正在生成():
+    html = _dr_body(ROW, locked=False, stale=True, snapshot_date="2026-07-21", pending=True)
+    assert "正在生成" in html and "2026-07-21" in html
+
+
+def test_stale_banner_旧日期如实说暂缺():
+    html = _dr_body(ROW, locked=True, stale=True, snapshot_date="2026-03-02", pending=False)
+    assert "正在生成" not in html
+    assert "该交易日复盘暂缺" in html and "2026-03-02" in html
+
+
+def test_dr_pending_按是否已有更新的复盘判定():
+    from datetime import date
+    latest = {"review_date": date(2026, 7, 22)}
+    assert _dr_pending(None, latest) is True                    # 首页
+    assert _dr_pending(date(2026, 7, 23), latest) is True       # 最新一期之后(今天还在生成)
+    assert _dr_pending(date(2026, 7, 22), latest) is True
+    assert _dr_pending(date(2026, 3, 3), latest) is False       # 之后已有成功复盘的旧日期
+    assert _dr_pending(date(2026, 3, 3), None) is True          # 取不到最新篇就按旧口径
 
 
 # ── _dr_head：付费墙的结构化声明 ───────────────────────────────────────────

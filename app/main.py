@@ -884,19 +884,31 @@ def _dr_head(row: Optional[Dict[str, Any]], canonical: str,
 
 
 def _dr_body(row: Optional[Dict[str, Any]], locked: bool, *,
-             stale: bool = False, snapshot_date: str = "") -> str:
+             stale: bool = False, snapshot_date: str = "",
+             pending: bool = True) -> str:
     """复盘正文区。locked=True 时只出免费预览，完整正文由 JS 按登录态补。
 
     stale=True 表示这一行是**回退来的快照**（请求日期当天缺失/失败），此时在
     正文最前面加一条"数据更新于 X"的横幅 —— 不让访客把旧日期内容误当成当天。
+
+    pending 决定横幅怎么说：请求的是最新一期(其后还没有成功的复盘)时，内容确实
+    可能还在生成；而几个月前某个失败的旧日期**不会再生成**，再说"正在生成"就是
+    假话 —— 此时只如实说明"该交易日复盘暂缺"。
     """
     banner = ""
     if stale:
-        banner = (
-            '<div class="data-stale">'
-            f'数据更新于 {_htmlmod.escape(snapshot_date or "")}'
-            "（当日内容正在生成，先为你展示最近一次成功结果）</div>"
-        )
+        snap = _htmlmod.escape(snapshot_date or "")
+        if pending:
+            banner = (
+                '<div class="data-stale">'
+                f"数据更新于 {snap}"
+                "（当日内容正在生成，先为你展示最近一次成功结果）</div>"
+            )
+        else:
+            banner = (
+                '<div class="data-stale">'
+                f"该交易日复盘暂缺，以下为 {snap} 的复盘内容。</div>"
+            )
     if row is None:
         return banner + ('<div class="no-data">还没有生成过复盘 —— 每个交易日 17:45 '
                          "数据入库后自动生成。</div>")
@@ -956,6 +968,17 @@ def _dr_history(limit: int = 30) -> str:
     return html
 
 
+def _dr_pending(d: Optional[_date], latest: Optional[Dict[str, Any]]) -> bool:
+    """请求的这一期是否"可能还在生成"。
+
+    请求日期之后已经有成功的复盘 → 这是个不会再补生成的旧日期,横幅不能说
+    "正在生成";首页(d=None)或请求的就是最新一期及以后 → 可能还在生成。
+    """
+    if d is None or latest is None or latest.get("review_date") is None:
+        return True
+    return str(latest.get("review_date")) <= str(d)
+
+
 def _daily_review_page(request: Request, d: Optional[_date]) -> Response:
     """渲染复盘页。d=None 表示复盘首页(展示最新一篇)。"""
     latest = _dr_latest_cached()
@@ -993,6 +1016,8 @@ def _daily_review_page(request: Request, d: Optional[_date]) -> Response:
         if snap is not None:
             row, stale, snapshot_date = snap, True, str(snap.get("review_date"))
 
+    pending = _dr_pending(d, latest)
+
     # 最新一篇对所有人免费;往期是会员内容 —— 服务端一律按"未订阅"直出,
     # 订阅用户的完整正文由前端拿 API 覆盖(HTML 带 ETag,不能塞按人变化的内容)
     is_latest = (
@@ -1022,7 +1047,8 @@ def _daily_review_page(request: Request, d: Optional[_date]) -> Response:
             "<!--DR_TITLE-->": _htmlmod.escape(art_title) or "加载中…",
             "<!--DR_DATE-->": _htmlmod.escape(date_txt),
             "<!--DR_BODY-->": _dr_body(
-                row, locked, stale=stale, snapshot_date=snapshot_date),
+                row, locked, stale=stale, snapshot_date=snapshot_date,
+                pending=pending),
             "<!--DR_HISTORY-->": _dr_history(),
             # 前端据此判断服务端已经直出了哪一篇,避免二次渲染时白闪一下
             "<!--DR_INIT-->": (

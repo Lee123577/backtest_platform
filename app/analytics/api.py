@@ -49,9 +49,12 @@ class EventReq(BaseModel):
     # /api/event 本身 —— 曾经所有 demo_click 的 path 都存成了 /api/event,
     # 这一列标着"触发页面"却没有一行是页面。
     path: Optional[str] = Field(default=None, max_length=255)
-    # 客户端生成的幂等键(uuid hex)。重复上报(beacon 重发/刷新)靠它去重,
-    # 服务端只认 ^[a-f0-9]{32}$ 的格式,不合法就置 NULL,绝不因此丢事件。
-    event_id: Optional[str] = Field(default=None, max_length=32)
+    # 客户端生成的幂等键(uuid hex)。同一次上报的重复投递(beacon/网络重发)靠它
+    # 去重;刷新页面是新的一次浏览,前端会生成新 id,不在去重范围内。
+    # 服务端只认 ^[a-f0-9]{32}$ 的格式,不合法就置 NULL,绝不因此丢事件 ——
+    # 所以这里的长度上限要放宽:卡 32 的话,一个带连字符的 36 位 UUID 会在校验层
+    # 直接 422,整条事件就丢了。128 只为挡明显的垃圾输入。
+    event_id: Optional[str] = Field(default=None, max_length=128)
     # 只收少量标量,不当通用日志管道用
     meta: Optional[Dict[str, Any]] = None
 
