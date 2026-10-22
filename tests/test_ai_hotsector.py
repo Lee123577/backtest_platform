@@ -24,6 +24,7 @@ def _reset_realtime_boards_cache():
     from app.ai_hotsector import api as hs_api
     hs_api._realtime_cache["ts"] = 0.0
     hs_api._realtime_cache["boards"] = []
+    hs_api._realtime_cache["fail_ts"] = None
     yield
 
 
@@ -516,6 +517,66 @@ def test_realtime_boards_timeout_returns_empty(monkeypatch):
     monkeypatch.setattr(runner, "_fetch_board_snapshot", boom)
 
     assert api._realtime_boards() == []
+
+
+def test_realtime_boards_失败负缓存_TTL内不再联网(monkeypatch):
+    """行情源挂掉时不能每个请求都重新联网(每次最坏卡 8s,线程池会被占满)。
+    失败后 30s 内直接返回 [],过了 TTL 才再试。"""
+    from app.ai_hotsector import api
+
+    calls = {"n": 0}
+
+    def boom(*a, **k):
+        calls["n"] += 1
+        raise TimeoutError("行情源超时")
+    monkeypatch.setattr(runner, "_fetch_board_snapshot", boom)
+
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(api.time, "monotonic", lambda: clock["t"])
+
+    assert api._realtime_boards() == []
+    assert calls["n"] == 1
+    clock["t"] += api._REALTIME_FAIL_TTL - 1
+    assert api._realtime_boards() == []
+    assert calls["n"] == 1                      # 负缓存期内不联网
+    clock["t"] += 2
+    api._realtime_boards()
+    assert calls["n"] == 2                      # 过期后再试一次
+
+
+def test_realtime_boards_空结果也写负缓存(monkeypatch):
+    from app.ai_hotsector import api
+
+    calls = {"n": 0}
+
+    def empty(*a, **k):
+        calls["n"] += 1
+        return []
+    monkeypatch.setattr(runner, "_fetch_board_snapshot", empty)
+
+    assert api._realtime_boards() == []
+    assert api._realtime_boards() == []
+    assert calls["n"] == 1
+
+
+def test_realtime_boards_有人在联网时不排队(monkeypatch):
+    """单飞锁被占用时直接返回 [],不阻塞等待、也不再发第二个请求。"""
+    from app.ai_hotsector import api
+
+    calls = {"n": 0}
+
+    def fake_snapshot(*a, **k):
+        calls["n"] += 1
+        return list(FAKE_BOARDS)
+    monkeypatch.setattr(runner, "_fetch_board_snapshot", fake_snapshot)
+
+    assert api._realtime_lock.acquire(blocking=False)
+    try:
+        assert api._realtime_boards() == []
+        assert calls["n"] == 0
+    finally:
+        api._realtime_lock.release()
+    assert len(api._realtime_boards()) == 3     # 锁释放后照常抓取
 
 
 def test_public_reason_filters_banned_words():

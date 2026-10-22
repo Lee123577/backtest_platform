@@ -18,6 +18,7 @@ GET /api/ai_hotsector/intraday       — 当前持仓中(priced,还没到次日�
 """
 from __future__ import annotations
 
+import threading
 import time
 from datetime import date as _Date
 from typing import Any, Dict, List, Optional
@@ -58,10 +59,19 @@ def _sanitize_board(b: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-# /today 实时兜底的进程内缓存:{"ts": 单调时钟秒, "boards": 最近一次成功抓到的板块}。
-# 60s 内复用,避免高频轮询把请求反复打到 (可能正在限流的) 行情源;空结果不写缓存。
+# /today 实时兜底的进程内缓存:{"ts": 单调时钟秒, "boards": 最近一次成功抓到的板块,
+# "fail_ts": 最近一次抓取失败的时刻}。成功结果 60s 内复用,避免高频轮询把请求反复
+# 打到 (可能正在限流的) 行情源。
+#
+# 失败也要缓存(负缓存 30s):/today 是同步接口、跑在线程池里,行情源挂掉时若每个
+# 请求都重新联网,每个请求最坏卡 8s,首页 + 板块页 + 爬虫一起来就能把线程池占满,
+# 拖垮整站。负缓存期内直接返回 [],交给 /today 的历史回退。
 _REALTIME_CACHE_TTL = 60.0
-_realtime_cache: Dict[str, Any] = {"ts": 0.0, "boards": []}
+_REALTIME_FAIL_TTL = 30.0
+_realtime_cache: Dict[str, Any] = {"ts": 0.0, "boards": [], "fail_ts": None}
+# 单飞锁:同一时刻只放一个请求去联网,其余请求不排队等它 —— 有旧结果就用旧结果,
+# 没有就直接 [](走历史回退)。排队等同样会把线程池堆满。
+_realtime_lock = threading.Lock()
 
 
 def _realtime_boards() -> List[Dict[str, Any]]:
@@ -71,19 +81,38 @@ def _realtime_boards() -> List[Dict[str, Any]]:
     最坏约 8s 就返回(requests 的单值 timeout 是"连接 2s + 读取 2s"各自计时,
     单请求最坏 4s × 2 个接口),绝不会像默认参数那样 15s×多次重试把请求线程
     挂到 100s+。异常/超时/
-    空结果一律返回 [],绝不 500 或长时间挂起。成功结果进进程内缓存 60s,TTL 内
-    直接复用、不再联网。
+    空结果一律返回 [],绝不 500 或长时间挂起。成功结果进进程内缓存 60s,失败
+    结果负缓存 30s,TTL 内都不再联网;同一时刻只有一个请求在联网(单飞锁)。
     """
     now = time.monotonic()
     if _realtime_cache["boards"] and (now - _realtime_cache["ts"]) < _REALTIME_CACHE_TTL:
         return _realtime_cache["boards"]
+    fail_ts = _realtime_cache.get("fail_ts")
+    if fail_ts is not None and (now - fail_ts) < _REALTIME_FAIL_TTL:
+        return []
 
+    if not _realtime_lock.acquire(blocking=False):
+        # 别的请求正在联网:不等它,直接 [] 走历史回退(过期的旧快照可能是几小时前的,
+        # 不能贴上今天的日期返回)
+        return []
+    try:
+        return _fetch_realtime_boards()
+    finally:
+        _realtime_lock.release()
+
+
+def _fetch_realtime_boards() -> List[Dict[str, Any]]:
+    """真正联网抓一次并写缓存(成功写正缓存,失败/空结果写负缓存)。调用方持锁。
+
+    缓存时间戳取**抓完之后**的时刻:抓取本身最坏 8s,按开始时刻记会把 TTL 吃掉一截。
+    """
     from .runner import _fetch_board_snapshot
 
     try:
         # 短超时 + 不重试:实时兜底必须封顶,这里才是"限时"的关键。
         snapshot = _fetch_board_snapshot(timeout=2.0, retries=0)
     except Exception:  # noqa: BLE001 —— 行情抓取失败不能让接口 500
+        _realtime_cache["fail_ts"] = time.monotonic()
         return []
 
     boards: List[Dict[str, Any]] = []
@@ -98,9 +127,11 @@ def _realtime_boards() -> List[Dict[str, Any]]:
             "note": "",   # 实时兜底没有 AI 观察记录
         })
     if boards:
-        _realtime_cache["ts"] = now
+        _realtime_cache["ts"] = time.monotonic()
         _realtime_cache["boards"] = boards
+        _realtime_cache["fail_ts"] = None
         return boards
+    _realtime_cache["fail_ts"] = time.monotonic()
     return []
 
 

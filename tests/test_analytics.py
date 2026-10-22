@@ -419,3 +419,12 @@ def test_独立主体按设备去重而不是按会话(sql_spy, fn):
     sql = sql_spy.sql[-1]
     assert "COUNT(DISTINCT COALESCE(anonymous_id," in sql
     assert "COALESCE(session_id" not in sql
+
+
+def test_带连字符的UUID不会被校验层拒掉而丢事件():
+    """event_id 格式不对应当置 NULL 继续记,而不是在 pydantic 层 422 丢整条事件。"""
+    from app.analytics.api import EventReq
+    dashed = "123e4567-e89b-12d3-a456-426614174000"
+    req = EventReq(event="page_view", event_id=dashed)
+    assert req.event_id == dashed
+    assert service.valid_event_id(req.event_id) is False     # 落库时置 NULL

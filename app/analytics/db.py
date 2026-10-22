@@ -17,8 +17,8 @@
     否则会把后来的会话 ID 覆盖进设备 ID,造成不可逆的数据损坏。
   - `props` JSON:结构化属性,可被 SQL 直接查询(旧 `meta` 是 VARCHAR512 自由串,
     截断还丢数据)。**保留 meta 继续写入**只为兼容尚未迁移的读方。
-  - `event_id CHAR(32)` + `ON DUPLICATE KEY UPDATE id=id`:前端 beacon 重发/
-    刷新导致的重复 page_view,靠唯一键静默丢弃,PV 不再虚高。
+  - `event_id CHAR(32)` + `ON DUPLICATE KEY UPDATE id=id`:同一次上报被 beacon /
+    网络重发投递多次时,靠唯一键静默丢弃。刷新页面是新的一次浏览(新 id),照常计数。
   - `is_bot` / `bot_kind`:UA 打标落字段,真人口径可一键过滤(见 app/analytics/bots.py)。
 
 另外负责给 user_visit_log 补 utm_* 列(首次触达渠道) —— 那张表是既有表,

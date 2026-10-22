@@ -46,9 +46,36 @@ def _send_webhook(subject: str, body: str) -> Optional[str]:
     try:
         r = httpx.post(url, json=payload, timeout=10.0)
         r.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        return f"HTTP {e.response.status_code}"
+    except Exception as e:  # 网络/超时等都算失败，不想让告警本身把脚本拖挂
+        # 🔴 只记异常类型，不记 str(e)：httpx 的异常文本可能带完整 URL，而钉钉的
+        # access_token、Server酱的 SendKey 都在 URL 里 —— 会写进 ops_alert.err 和日志。
+        # 类型名(ConnectTimeout / ConnectError …)已足够判断是网络问题。
+        return type(e).__name__
+    return _check_body(kind, r)
+
+
+def _check_body(kind: str, r) -> Optional[str]:
+    """机器人接口出错时多半仍回 HTTP 200，错误码写在正文里 —— 只看状态码会把
+    "token 失效 / 关键词不匹配 / 被限流"全当成发送成功。
+
+    企业微信/钉钉：``{"errcode": 0, "errmsg": "ok"}``，errcode≠0 即失败；
+    Server酱：``{"code": 0, ...}``，code≠0 即失败。正文不是 JSON 时按成功处理
+    （状态码已经是 2xx，不为解析不了正文去误报失败）。
+    """
+    try:
+        data = r.json()
+    except Exception:
         return None
-    except Exception as e:  # 网络/超时/4xx/5xx 都算失败，不想让告警本身把脚本拖挂
-        return f"{type(e).__name__}: {e}"
+    if not isinstance(data, dict):
+        return None
+    field = "errcode" if kind in ("wecom", "dingtalk") else "code"
+    code = data.get(field)
+    if code in (None, 0, "0"):
+        return None
+    msg = str(data.get("errmsg") or data.get("message") or "")[:120]
+    return f"{field}={code} {msg}".strip()
 
 
 def send_alert(subject: str, body: str, *, kind: str, level: str = "warn") -> bool:

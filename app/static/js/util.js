@@ -63,8 +63,9 @@ var SPTrack = (function () {
   // 运维页不计入:那是我们自己在看,算进去等于自己给自己刷数
   var SKIP = { "/tasks": 1, "/admin/tasks": 1 };
 
-  // 幂等键:同一事件重复上报(beacon 重发 / 用户刷新)靠它去重,服务端命中
-  // 唯一键就静默丢弃。优先用 crypto.randomUUID(仅安全上下文有),去掉连字符
+  // 幂等键:每次上报现生成一个,所以只能去掉**同一次上报的重复投递**(beacon /
+  // 网络重发),服务端命中唯一键就静默丢弃。用户刷新页面是一次新的浏览,会拿到
+  // 新 id、照常计一次 PV —— 这是预期口径,不是漏去重。优先用 crypto.randomUUID(仅安全上下文有),去掉连字符
   // 得到 32 位 hex;老浏览器 / 非 https 退回 Math.random —— 重复概率可忽略。
   function newEventId() {
     try {
