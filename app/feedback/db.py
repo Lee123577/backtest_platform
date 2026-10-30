@@ -16,7 +16,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime as _DT
 from typing import Any, Dict, List, Optional
 
 from ..data.data_loader import _get_pool

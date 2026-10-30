@@ -113,7 +113,7 @@ def test_漏斗第一层是JS埋点而不是访问日志():
     keys = [k for k, _ in service.FUNNEL_STEPS]
     assert keys[0] == "page_view"
     assert "visitors" not in keys
-    assert keys[-1] == "subscribe_activated"
+    assert keys[-1] == "watchlist_add"
 
 
 def test_page_view_在事件白名单里():
@@ -362,7 +362,7 @@ def test_漏斗层级是完整链路():
     keys = [k for k, _ in service.FUNNEL_STEPS]
     assert keys == [
         "page_view", "demo_click", "demo_result_view", "register_click",
-        "register_success", "backtest_run", "order_created", "subscribe_activated",
+        "register_success", "backtest_run", "watchlist_add",
     ]
 
 

@@ -48,7 +48,7 @@ import threading
 import time
 from collections import Counter, deque
 from dataclasses import dataclass
-from typing import Callable, Deque, Dict, List, Optional, Tuple
+from typing import Callable, Deque, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 

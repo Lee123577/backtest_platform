@@ -133,19 +133,19 @@ def test_set_rules_dedup(fake):
 
 # ── 3. scan 编排 ─────────────────────────────────────────────────────────────
 
-def test_scan_only_subscribed_and_dedup(fake, monkeypatch):
-    # user 1 订阅,user 2 未订阅;都盯 600519 + ma_cross
-    fake.watch = {1: {"600519": "贵州茅台"}, 2: {"600519": "贵州茅台"}}
+def test_scan_all_users_with_rules_and_dedup(fake, monkeypatch):
+    # 不再区分会员:user 1、2 都盯 600519 + ma_cross,user 3 只有自选没配策略
+    fake.watch = {1: {"600519": "贵州茅台"}, 2: {"600519": "贵州茅台"},
+                  3: {"600519": "贵州茅台"}}
     fake.rules = {1: ["ma_cross"], 2: ["ma_cross"]}
-    monkeypatch.setattr(service, "is_subscribed", lambda uid: uid == 1)
     # 信号判定:600519+ma_cross → buy
     monkeypatch.setattr(service, "signal_on_last_bar",
                         lambda sid, df, latest: "buy")
 
     res = service.scan()
-    assert res["users"] == 1                 # 只处理订阅用户
-    assert res["alerts_created"] == 1        # 只给 user 1 落一条
-    assert fake.alerts[0]["user_id"] == 1
+    assert res["users"] == 2                 # 有自选 + 有策略的都处理
+    assert res["alerts_created"] == 2
+    assert sorted(a["user_id"] for a in fake.alerts) == [1, 2]
 
     # 再跑一次(幂等):唯一键去重,不新增
     res2 = service.scan()
@@ -153,10 +153,9 @@ def test_scan_only_subscribed_and_dedup(fake, monkeypatch):
 
 
 def test_scan_pair_computed_once(fake, monkeypatch):
-    # 两个订阅用户都盯同一 (600519, ma_cross) → 信号只算一次
+    # 两个用户都盯同一 (600519, ma_cross) → 信号只算一次
     fake.watch = {1: {"600519": "贵州茅台"}, 2: {"600519": "贵州茅台"}}
     fake.rules = {1: ["ma_cross"], 2: ["ma_cross"]}
-    monkeypatch.setattr(service, "is_subscribed", lambda uid: True)
     calls = {"n": 0}
 
     def fake_sig(sid, df, latest):
@@ -172,7 +171,6 @@ def test_scan_pair_computed_once(fake, monkeypatch):
 def test_scan_skips_user_without_rules(fake, monkeypatch):
     fake.watch = {1: {"600519": "贵州茅台"}}
     fake.rules = {}  # 没配盯盘策略
-    monkeypatch.setattr(service, "is_subscribed", lambda uid: True)
     monkeypatch.setattr(service, "signal_on_last_bar", lambda *a: "buy")
     res = service.scan()
     assert res["users"] == 0 and res["alerts_created"] == 0

@@ -296,3 +296,26 @@ def test_homepage_block_has_no_wall_without_testimonials(monkeypatch):
     import app.main as main
     monkeypatch.setattr(main._fb_service, "testimonials", lambda limit=6: [])
     assert main._testimonials_block() == ""
+
+
+# ── 管理员通知邮件:用户字段必须转义 ──────────────────────────────────────────
+
+def test_notify_admin_html_escapes_user_fields(monkeypatch):
+    """反馈内容/联系方式/昵称/页面路径都是用户可控的,HTML 邮件里不转义就能
+    往管理员邮箱塞任意标签和钓鱼链接。"""
+    from app.feedback import service as fb
+    from app.config import settings
+    sent = {}
+    monkeypatch.setattr(settings, "ADMIN_EMAILS", frozenset({"admin@example.com"}))
+    monkeypatch.setattr(fb.mailer, "send_mail",
+                        lambda to, subject, text, html: sent.update(html=html, text=text))
+    evil = '<a href="https://evil.example">点我</a><script>x()</script>'
+    fb._notify_admin(
+        7, {"id": 3, "email": "u@example.com", "display_name": "<b>昵称</b>"},
+        "bug", evil, "<img src=x>", "1.2.3.4", "/watchlist<i>",
+    )
+    html = sent["html"]
+    for raw in ("<script>", '<a href="https://evil.example">', "<img src=x>", "<b>昵称</b>", "<i>"):
+        assert raw not in html
+    assert "&lt;script&gt;" in html
+    assert evil in sent["text"]          # 纯文本版保留原文,本身不会被渲染

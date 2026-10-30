@@ -30,7 +30,7 @@ async function loadToday() {
     const list = boards || [];
     if (!list.length) {
       if (dateEl) dateEl.textContent = '';
-      wrap.innerHTML = '<div class="no-data">尚未生成板块热度观察，请等待 15:05 定时任务，或在 /tasks 页面手动触发 ai_hotsector_predict</div>';
+      wrap.innerHTML = '<div class="no-data">今日板块热度观察尚未生成，每个交易日收盘后（约 15:05）自动更新</div>';
       return;
     }
 

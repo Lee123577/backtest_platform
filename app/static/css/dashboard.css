@@ -39,27 +39,6 @@
 .dash-hello { display: flex; align-items: center; gap: 10px; }
 .dash-hero-avatar { box-shadow: 0 0 0 2px rgba(255, 255, 255, .55); }
 
-/* hero 里的 AI 战绩数据条 */
-.dash-hero-stats {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 12px;
-}
-.dash-hero-stat {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 6px;
-  padding: 5px 12px;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, .14);
-  font-size: 12px;
-  color: rgba(255, 255, 255, .85);
-  text-decoration: none;
-}
-.dash-hero-stat b { font-size: 15px; font-weight: 700; color: #fff; }
-a.dash-hero-stat:hover { background: rgba(255, 255, 255, .22); }
-
 /* 状态卡片 */
 .dash-grid {
   display: grid;

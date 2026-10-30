@@ -9,22 +9,19 @@
  * 服务端有一份同款实现(app/daily_review/render.py)负责首屏直出,改这里记得同步。
  *
  * 路由:每篇复盘有独立路径 /daily_review/YYYY-MM-DD(可被搜索引擎收录)。
- * 服务端已直出公开正文,本脚本只负责:
- *   1) 会员的往期完整正文(HTML 是公共缓存,付费内容只能走 API)
- *   2) 概览卡片(数据快照)
- *   3) 站内切换往期时的局部刷新(pushState,不整页重载)
+ * 服务端已直出正文(所有复盘对所有人开放),本脚本只负责:
+ *   1) 概览卡片(数据快照)
+ *   2) 站内切换往期时的局部刷新(pushState,不整页重载)
  */
 (function () {
   "use strict";
 
   var initEl = document.getElementById("drInit");
   var ssrDate = initEl ? initEl.getAttribute("data-review-date") : "";
-  var ssrLocked = initEl ? initEl.getAttribute("data-locked") === "1" : false;
   var hasSsr = initEl ? initEl.getAttribute("data-ssr") === "1" : false;
 
   var currentDate = ssrDate || null; // 正在展示的 review_date
-  var subscribed = false; // 当前用户是否会员(仅用于给往期列表加锁标记)
-  var latestDate = null;  // 最新一篇复盘日期(对所有人免费,不加锁)
+  var latestDate = null;  // 最新一篇复盘日期(浏览器后退回首页时用)
 
   // ── 工具(esc() 用 util.js 里全站共用的实现)──────────────────────────────
   function fetchJson(url) {
@@ -148,8 +145,7 @@
     if (!review) {
       titleEl.textContent = "暂无复盘";
       bodyEl.innerHTML =
-        '<div class="no-data">还没有生成过复盘 —— 每个交易日 17:45 数据入库后自动生成,' +
-        "也可在「定时任务」页手动触发 daily_review_generate。</div>";
+        '<div class="no-data">还没有生成过复盘 —— 每个交易日 17:45 数据入库后自动生成。</div>';
       dateEl.textContent = "";
       renderSummary(null);
       return;
@@ -160,22 +156,11 @@
     // 否则收藏/分享出去的还是上一篇的标题
     document.title = (review.title || (currentDate + " A股复盘")) +
       "（" + currentDate + "） | shoupan";
-    if (review.locked) {
-      // 往期未解锁 —— 正文替换为中性锁提示(站内不再有开通引导)
-      titleEl.textContent = review.title || (currentDate + " A股复盘");
-      bodyEl.innerHTML =
-        '<div class="dr-paywall">' +
-        '<div class="dr-paywall-title">🔒 该篇为往期内容</div>' +
-        "<p>历史复盘的完整正文与当日数据快照暂不展示，最新一篇可免费查看。</p>" +
-        "</div>";
-      renderSummary(null);
-      highlightHistory();
-      return;
-    }
     if (review.status === "failed") {
-      titleEl.textContent = currentDate + " 生成失败";
-      bodyEl.innerHTML = '<div class="no-data">' +
-        esc(review.error_msg || "生成失败") + "</div>";
+      // 与服务端直出(_dr_body)同口径:公开页不出现"生成失败"这类事故字样
+      titleEl.textContent = currentDate + " A股复盘";
+      bodyEl.innerHTML = '<div class="no-data">该交易日复盘正在补录，' +
+        "可先查看最近一个交易日的复盘内容。</div>";
     } else {
       titleEl.textContent = review.title || (currentDate + " A股复盘");
       // 服务端那份带股票名链接(名字索引在后端,搬不过来);拿不到再自己渲染
@@ -185,10 +170,6 @@
     renderSummary(review.context);
     highlightHistory();
   }
-
-  // 往期未解锁的提示已在 HTML 首屏 / renderReview 里直出，站内不再有任何开通引导 ——
-  // 名额文案与订阅按钮相关逻辑（原 ltLeft/paywallTitle/paywallCta/goSubscribe/
-  // bindPaywallBtn/refreshPaywallCopy）已随 /subscribe 引导一并移除。
 
   // ── 历史列表 ──────────────────────────────────────────────────────────
   function highlightHistory() {
@@ -207,19 +188,17 @@
       wrap.innerHTML = '<div class="no-data">暂无历史复盘</div>';
       return;
     }
-    // 历史按日期倒序 → 第一条即最新一篇(对所有人免费)
+    // 历史按日期倒序 → 第一条即最新一篇
     latestDate = String(rows[0].review_date);
     // 每项都是真链接 —— 服务端也直出同样的 <a>,爬虫顺着能抓到每篇往期;
     // 下面再拦截点击做局部刷新,兼顾可收录与不整页重载
     wrap.innerHTML = rows.map(function (r) {
       var d = String(r.review_date);
-      var locked = !subscribed && d !== latestDate && r.status !== "failed";
       return '<a class="dr-history-item" href="/daily_review/' + esc(d) +
         '" data-date="' + esc(d) + '">' +
         '<span class="dr-history-date">' + esc(d) + "</span>" +
         '<span class="dr-history-title">' + esc(r.title || "") + "</span>" +
-        (r.status === "failed" ? '<span class="dr-history-failed">生成失败</span>' : "") +
-        (locked ? '<span class="dr-history-lock">🔒</span>' : "") +
+        (r.status === "failed" ? '<span class="dr-history-failed">待更新</span>' : "") +
         "</a>";
     }).join("");
     bindHistoryLinks(wrap);
@@ -297,23 +276,13 @@
     }
   });
 
-  function refreshSub() {
-    return fetchJson("/api/subscription/status")
-      .then(function (s) { subscribed = !!s.subscribed; })
-      .catch(function () { subscribed = false; });
-  }
-
   // ── 初始化 ────────────────────────────────────────────────────────────
-  // 服务端已直出的部分不要重复渲染：正文首屏已经在页面上，这里只补
-  //   ① 概览卡片(数据快照，服务端不直出)
-  //   ② 会员的往期完整正文(付费内容不进公共缓存的 HTML)
-  // 先定订阅态，再渲染历史(锁标记依赖 subscribed)
-  // 服务端直出的列表/付费墙按钮先接上交互，别等接口回来
-  // (锁图标依赖订阅态，是按人变的，只能等 renderHistory；直出的 HTML 里不能有)
+  // 服务端已直出的部分不要重复渲染：正文首屏已经在页面上，这里只补概览卡片
+  // (数据快照，服务端不直出)。服务端直出的列表先接上交互，别等接口回来。
   bindHistoryLinks(document.getElementById("drHistoryWrap"));
   highlightHistory();
 
-  refreshSub().then(function () {
+  (function init() {
     var legacy = hashDate();
     if (legacy) {
       // 老 hash 链接 → 换成真实路径后按该日期加载
@@ -329,9 +298,6 @@
           .then(function (data) { renderReview(data.review); })
           .catch(function () { renderReview(null); });
       }
-    } else if (ssrLocked && subscribed) {
-      // 直出的是付费墙预览，但当前用户是会员 → 拉完整正文覆盖
-      loadByDate(ssrDate, false);
     } else {
       // 首屏正文已就位，只补概览卡片
       fetchJson("/api/daily_review/" + encodeURIComponent(ssrDate))
@@ -344,5 +310,5 @@
     fetchJson("/api/daily_review/history?limit=30")
       .then(function (data) { renderHistory(data.history); })
       .catch(function () { renderHistory([]); });
-  });
+  })();
 })();

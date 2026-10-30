@@ -24,7 +24,7 @@ from typing import Any, Dict, List, Optional
 
 import pymysql
 
-from ..data.data_loader import _get_pool, transaction_flag
+from ..data.data_loader import _get_pool
 
 logger = logging.getLogger(__name__)
 
@@ -300,44 +300,6 @@ def get_latest_board_obs(before: Optional[_Date] = None) -> Optional[Dict[str, A
 
 # ── stock（明细，历史）────────────────────────────────────────────────────────
 
-def replace_stocks(pick_date: _Date, stocks: List[Dict[str, Any]]) -> None:
-    """先删后插当天的 9 行明细，便于手动重跑同一天覆盖。
-
-    方案 B 后 predict 不再调用本函数（不再产生个股）；保留供历史数据维护使用。
-
-    DELETE + INSERT 放同一事务:连接默认 autocommit,不包事务的话
-    两步之间断连会留下"当天明细被清空"的半截状态。transaction_flag
-    禁止事务期间 ping 重连(重连会换成没有 BEGIN 上下文的新连接)。
-    """
-    conn = _get_pool()
-    with transaction_flag():
-        conn.begin()
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "DELETE FROM ai_hotsector_stock WHERE pick_date=%s",
-                    (pick_date,),
-                )
-                if stocks:
-                    cur.executemany(
-                        """
-                        INSERT INTO ai_hotsector_stock
-                            (pick_date, sector_name, sector_rank, sector_reason,
-                             code, name, stock_rank, stock_reason, settle_status)
-                        VALUES (%(pick_date)s, %(sector_name)s, %(sector_rank)s,
-                                %(sector_reason)s, %(code)s, %(name)s,
-                                %(stock_rank)s, %(stock_reason)s, %(settle_status)s)
-                        """,
-                        [{**s, "pick_date": pick_date} for s in stocks],
-                    )
-            conn.commit()
-        except BaseException:
-            try:
-                conn.rollback()
-            except Exception:
-                logger.exception("replace_stocks 事务回滚失败")
-            raise
-
 
 def get_stocks_by_pick_date(pick_date: _Date) -> List[Dict[str, Any]]:
     conn = _get_pool()
@@ -547,26 +509,6 @@ class DbUnavailableError(RuntimeError):
     而 predict 只校验一次、没有重试机会)。"""
 
 
-def lookup_stock(code: str, as_of: _Date) -> Optional[Dict[str, Any]]:
-    """校验 code 在 as_of 时点是否是真实存在且未退市的 A 股，返回 {code, name}。
-
-    数据库连接不可用时抛 DbUnavailableError(而不是返回 None)——
-    调用方据此整批标记失败重试，避免把连接抖动误判成代码无效。
-    """
-    conn = _get_pool()
-    if conn is None:
-        raise DbUnavailableError("数据库连接不可用，无法校验股票代码")
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT code, name FROM stock_info
-            WHERE code=%s AND (delist_date IS NULL OR delist_date > %s)
-            """,
-            (code, as_of),
-        )
-        return cur.fetchone()
-
-
 def get_close_price(code: str, trade_date: _Date) -> Optional[float]:
     """指定股票在指定交易日的收盘价；无数据(停牌/未上市)返回 None。"""
     conn = _get_pool()
@@ -582,49 +524,6 @@ def get_close_price(code: str, trade_date: _Date) -> Optional[float]:
 
 
 # ── 查询接口（API 用）────────────────────────────────────────────────────────
-
-def get_today() -> Optional[Dict[str, Any]]:
-    """最新一批：pick 元信息 + 9 行明细（历史区/邮件旧逻辑用）。"""
-    pick_date = get_latest_pick_date()
-    if pick_date is None:
-        return None
-    pick = get_pick(pick_date)
-    stocks = get_stocks_by_pick_date(pick_date)
-    if pick is not None:
-        pick["stocks"] = stocks
-    return pick
-
-
-def get_latest_with_stocks(before: Optional[_Date] = None) -> Optional[Dict[str, Any]]:
-    """最近一批**有选股明细**的历史批次（status IN ('predicted','settled')）。
-
-    方案 B 后不再产生新股明细，本函数仅用于历史数据的只读回退/展示。
-    before 给了就取严格早于它的那批。
-    """
-    conn = _get_pool()
-    if conn is None:
-        return None
-    where = (
-        "p.status IN ('predicted','settled') "
-        "AND EXISTS (SELECT 1 FROM ai_hotsector_stock s "
-        "WHERE s.pick_date = p.pick_date)"
-    )
-    params: list = []
-    if before is not None:
-        where += " AND p.pick_date < %s"
-        params.append(before)
-    with conn.cursor() as cur:
-        cur.execute(
-            f"""SELECT p.* FROM ai_hotsector_pick p
-                WHERE {where}
-                ORDER BY p.pick_date DESC LIMIT 1""",
-            tuple(params),
-        )
-        pick = cur.fetchone()
-    if pick is None:
-        return None
-    pick["stocks"] = get_stocks_by_pick_date(pick["pick_date"])
-    return pick
 
 
 def get_history(limit: int = 30) -> List[Dict[str, Any]]:

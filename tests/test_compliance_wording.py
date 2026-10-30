@@ -158,10 +158,31 @@ def test_板块观察页不再展示收益与上涨占比():
         assert word not in text
 
 
-# ── /subscribe 不进搜索索引 ───────────────────────────────────────────────────
+# ── /subscribe 下线 ───────────────────────────────────────────────────
 
-def test_subscribe_不在sitemap且带noindex():
+def test_subscribe_已下线返回410且不在sitemap():
+    """全站免费开放后订阅页整体下线:410 Gone + noindex,sitemap 不再列出。"""
     import app.main as main
     assert "/subscribe" not in [p for p, *_ in main._SITEMAP_PAGES]
-    html = (STATIC / "subscribe.html").read_text(encoding="utf-8")
-    assert '<meta name="robots" content="noindex' in html
+    resp = main.page_subscribe(None)
+    assert resp.status_code == 410
+    assert b'<meta name="robots" content="noindex' in resp.body
+    # 任何公开页面都不该再链向它或调订阅接口
+    for path in _shipped_files():
+        text = path.read_text(encoding="utf-8")
+        assert 'href="/subscribe"' not in text, path.name
+        assert "/api/subscription" not in text, path.name
+
+
+# ── 公开页不暴露内部运维指引 ─────────────────────────────────────────────────
+
+_OPS_PAGES = {"tasks.html", "tasks.js", "admin_feedback.js", "bot_guard_admin.js"}
+
+
+@pytest.mark.parametrize("path", [p for p in _shipped_files() if p.name not in _OPS_PAGES],
+                         ids=lambda p: p.name)
+def test_公开页不出现运维操作指引(path):
+    """"去 /tasks 手动触发 xxx_predict"这类话是写给站主的,访客看到既困惑又显得不专业。"""
+    text = path.read_text(encoding="utf-8")
+    for word in ("手动触发", "/tasks 页面", "「定时任务」页", "_predict", "daily_review_generate"):
+        assert word not in text, f"{path.name} 含运维指引「{word}」"

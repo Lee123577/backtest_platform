@@ -13,7 +13,7 @@ from urllib.parse import parse_qs
 
 import pandas as pd
 from fastapi import Depends, FastAPI, HTTPException, Response
-from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel, Field
@@ -40,7 +40,7 @@ def _validate_date_range(start: str, end: str) -> None:
     if s.year < 1990:
         raise HTTPException(400, "开始日期不能早于 1990 年")
     if (e - s).days > _MAX_RANGE_DAYS:
-        raise HTTPException(400, f"回测时间跨度最大 15 年,请缩短日期范围")
+        raise HTTPException(400, "回测时间跨度最大 15 年,请缩短日期范围")
 
 from .auth import deps as _auth_deps
 from .daily_review import db as _dr_db
@@ -242,7 +242,7 @@ app.include_router(ai_hotsector_router)
 from .daily_review.api import router as daily_review_router  # noqa: E402
 app.include_router(daily_review_router)
 
-# 账号/登录(邮箱验证码，付费墙前置)
+# 账号/登录(邮箱验证码)
 from .auth.api import router as auth_router  # noqa: E402
 app.include_router(auth_router)
 
@@ -252,15 +252,11 @@ app.include_router(auth_router)
 from .auth.api import media_router as auth_media_router  # noqa: E402
 app.include_router(auth_media_router)
 
-# 订阅/订单(内容付费墙)
-from .subscription.api import router as subscription_router  # noqa: E402
-app.include_router(subscription_router)
-
 # 用户反馈 / 功能建议
 from .feedback.api import router as feedback_router  # noqa: E402
 app.include_router(feedback_router)
 
-# 自选盯盘(收盘信号提醒,会员权益)
+# 自选盯盘(收盘规则提醒,登录即可用)
 from .watchlist.api import router as watchlist_router  # noqa: E402
 app.include_router(watchlist_router)
 
@@ -506,7 +502,7 @@ def _html(request: Request, *parts: str,
 
     replacements: 服务端直出用 —— {占位注释: 替换成的 HTML}。只允许放**公开
     内容**:响应带 ETag 且可被共享缓存复用,任何按登录态变化的内容进了 HTML
-    就可能串给其他人(付费正文永远走 API,不走这里)。
+    就可能串给其他人(按人变化的内容一律走 API,不走这里)。
 
     footer: 覆盖默认页脚(见 _footer 的三处开关);None = 标准页脚。
     """
@@ -593,13 +589,11 @@ async def paper_trading_page(request: Request):
     return _html(request, "paper_trading.html")
 
 
-@app.get("/cloudmap", include_in_schema=False)
-async def page_cloudmap(request: Request):
-    """大盘云图已下线（410 Gone）。
+def _gone_page(message: str) -> Response:
+    """已下线功能的 410 Gone 说明页。
 
-    页面与数据接口一体下线，站内已无任何入口指向它。这里刻意**不读**
-    `app/static/cloudmap/index.html`（该目录已随功能一并删除），而是直接返回
-    一段自包含的最小 HTML 说明页，附回首页链接。
+    自包含的最小 HTML(不读 static 模板 —— 对应页面文件已随功能删除),带
+    noindex,附回首页链接。410 比 404 更明确地告诉爬虫"永久下线、别再来抓"。
     """
     body = (
         '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8">'
@@ -610,12 +604,18 @@ async def page_cloudmap(request: Request):
         'max-width:640px;margin:14vh auto;padding:0 20px;color:#1f2733;text-align:center;">'
         '<h1 style="font-size:20px;">该页面已下线</h1>'
         '<p style="color:#5b6472;line-height:1.7;">'
-        "大盘云图功能已停止提供，感谢你的理解。</p>"
+        f"{_htmlmod.escape(message)}</p>"
         '<p><a href="/" style="color:#2f6feb;">← 返回首页</a></p>'
         "</body></html>"
     )
     return Response(content=body, status_code=410,
                     media_type="text/html; charset=utf-8")
+
+
+@app.get("/cloudmap", include_in_schema=False)
+async def page_cloudmap(request: Request):
+    """大盘云图已下线（410 Gone）。页面与数据接口一体下线，站内已无任何入口。"""
+    return _gone_page("大盘云图功能已停止提供，感谢你的理解。")
 
 
 @app.get("/ai_hotsector", include_in_schema=False)
@@ -644,84 +644,10 @@ def page_daily_review_dated(review_date: str, request: Request):
     return _daily_review_page(request, d)
 
 
-def _sub_status_ssr(offer: Optional[Dict[str, Any]]) -> str:
-    """订阅页"会员状态"区的服务端**公开兜底**文案。
-
-    🔴 只放与登录态无关、对所有人都一样的内容（免费名额进度）——"你是不是会员"
-    这种按人变化的东西**绝不能**进这段 HTML：响应带 ETag 会被共享缓存复用，
-    一旦混入用户态就可能串给其他人。真·订阅态仍由 subscribe.js 拉
-    /api/subscription/status 覆盖。
-    """
-    if not offer or not offer.get("total"):
-        return '<span class="sub-inactive">登录后可查看会员状态并领取免费名额。</span>'
-    remaining = int(offer.get("remaining") or 0)
-    if remaining > 0:
-        return (f'<span class="sub-inactive">免费终生会员名额还剩 {remaining} 个</span>，'
-                "登录后即可领取；名额发完后可按下述套餐开通。")
-    return '<span class="sub-inactive">免费名额已领完</span>，可按下述套餐开通会员。'
-
-
-def _sub_plans_ssr(plans) -> str:
-    """套餐卡片（公开价格，与登录态无关）。结构对齐 subscribe.js 的 renderPlans，
-    便于 JS 加载后无痕覆盖；取不到套餐时返回空串（JS 兜底）。"""
-    if not plans:
-        return ""
-    cards = []
-    for p in plans:
-        cards.append(
-            '<div class="plan-card" data-plan="'
-            + _htmlmod.escape(str(p.get("code", ""))) + '">'
-            '<div class="plan-label">' + _htmlmod.escape(str(p.get("label", ""))) + "</div>"
-            '<div class="plan-price">¥' + _htmlmod.escape(str(p.get("price_yuan", ""))) + "</div>"
-            '<div class="plan-days">' + _htmlmod.escape(str(p.get("days", ""))) + " 天</div>"
-            "</div>"
-        )
-    return "".join(cards)
-
-
-def _sub_contact_ssr() -> str:
-    """人工开通方式（公开）。复用 service.contact_info()，取不到则整块不出。"""
-    try:
-        from .subscription import service as sub_service
-        c = sub_service.contact_info()
-    except Exception as e:
-        logger.info("订阅页取联系方式失败(整块不出): %s", e)
-        c = None
-    qq = (c or {}).get("qq")
-    if not qq:
-        return ""
-    return (
-        '<div class="sub-contact-title">如何开通</div>'
-        "<p>目前暂未开放在线支付，采用人工开通：选择套餐生成订单号后，"
-        '加 QQ <strong class="sub-contact-qq">' + _htmlmod.escape(str(qq)) + "</strong> "
-        "并发送订单号，核对后即为你开通对应时长。</p>"
-    )
-
-
 @app.get("/subscribe", include_in_schema=False)
 def page_subscribe(request: Request):
-    """订阅页。服务端直出**公开内容**：名额进度、套餐价格、开通方式。
-
-    只直出与登录态无关的部分——订阅状态("你是否已是会员")按人变化，绝不进 HTML
-    （响应带 ETag 会被共享缓存复用），仍由 subscribe.js 拉
-    /api/subscription/status 覆盖。取数失败退化成空壳，同样由 JS 兜底。
-    订阅页也是最需要社会证明的地方:掏钱之前想知道别人用得怎么样。
-    """
-    from .subscription import service as sub_service
-    try:
-        plans = sub_service.plans_public()
-        # uid=None：只拿公开名额概览（total/claimed/remaining），不含"我领没领"
-        offer = sub_service.lifetime_stats(None)
-    except Exception as e:
-        logger.info("订阅页取套餐/名额失败(退化出空壳，JS 兜底): %s", e)
-        plans, offer = [], None
-    return _html(request, "subscribe.html",
-                 replacements={
-                     "<!--SUB_STATUS-->": _sub_status_ssr(offer),
-                     "<!--SUB_PLANS-->": _sub_plans_ssr(plans),
-                     "<!--SUB_CONTACT-->": _sub_contact_ssr(),
-                     "<!--TESTIMONIALS-->": _testimonials_block(),
-                 })
+    """订阅页已下线（410 Gone）。全站功能对所有人免费开放，不再有付费会员。"""
+    return _gone_page("本站所有功能已免费开放，无需开通会员。")
 
 
 @app.get("/watchlist", include_in_schema=False)
@@ -772,8 +698,7 @@ _SITE_ORIGIN = settings.SITE_ORIGIN
 
 
 # ── 每日复盘：服务端直出(SEO)──────────────────────────────────────────────
-# 只直出**公开内容**：最新一篇全文免费，往期正文是会员内容，HTML 里只放一段
-# 免费预览 + 付费墙占位，完整正文照旧走 /api/daily_review/{date} 按登录态发。
+# 所有复盘(含往期)对所有人开放,整篇正文直出。HTML 与登录态无关(带 ETag 可共享缓存)。
 # 给爬虫和给访客的 HTML 完全一致 —— 按 UA 区分就是 cloaking,会被判罚。
 _DR_LATEST_CACHE: Dict[str, Any] = {}
 _DR_HISTORY_CACHE: Dict[str, Any] = {}
@@ -801,7 +726,7 @@ def _json_ld(obj: Dict[str, Any]) -> str:
 
 
 def _dr_head(row: Optional[Dict[str, Any]], canonical: str,
-             locked: bool, *, stale: bool = False,
+             *, stale: bool = False,
              page_date: Optional[str] = None) -> str:
     """复盘页 <head> 的 title / description / canonical / OG / 结构化数据。
 
@@ -858,16 +783,8 @@ def _dr_head(row: Optional[Dict[str, Any]], canonical: str,
             "mainEntityOfPage": {"@type": "WebPage", "@id": canonical},
             "publisher": {"@type": "Organization", "name": "收盘 shoupan",
                           "url": _SITE_ORIGIN},
-            "isAccessibleForFree": not locked,
+            "isAccessibleForFree": True,
         }
-        if locked:
-            # 付费墙的正规声明:告诉搜索引擎"这段确实是会员内容",
-            # 不声明才会被当成对爬虫和用户发不同内容。
-            article["hasPart"] = {
-                "@type": "WebPageElement",
-                "isAccessibleForFree": False,
-                "cssSelector": ".dr-paid",
-            }
         head.append(_json_ld(article))
         head.append(_json_ld({
             "@context": "https://schema.org",
@@ -883,10 +800,10 @@ def _dr_head(row: Optional[Dict[str, Any]], canonical: str,
     return "\n  ".join(head)
 
 
-def _dr_body(row: Optional[Dict[str, Any]], locked: bool, *,
+def _dr_body(row: Optional[Dict[str, Any]], *,
              stale: bool = False, snapshot_date: str = "",
              pending: bool = True) -> str:
-    """复盘正文区。locked=True 时只出免费预览，完整正文由 JS 按登录态补。
+    """复盘正文区。所有复盘(含往期)对所有人开放,整篇正文服务端直出。
 
     stale=True 表示这一行是**回退来的快照**（请求日期当天缺失/失败），此时在
     正文最前面加一条"数据更新于 X"的横幅 —— 不让访客把旧日期内容误当成当天。
@@ -918,18 +835,6 @@ def _dr_body(row: Optional[Dict[str, Any]], locked: bool, *,
         # 改为不含事故信息的友好态,并把访客导向最近一个有效交易日。
         return banner + ('<div class="no-data">该交易日复盘正在补录，'
                          "可先查看最近一个交易日的复盘内容。</div>")
-    if locked:
-        # 免费预览 + 往期内容提示。整段包在 .dr-paid 里 —— 与 _dr_head() 里
-        # hasPart.cssSelector 对应，是向搜索引擎声明"这里确实是未公开正文"的锚点。
-        # 站内已不再有任何指向 /subscribe 的入口，这里只出中性锁提示、不放开通按钮。
-        return banner + (
-            _dr_render.preview_html(row.get("content_md")) +
-            '<div class="dr-paid">'
-            '<div class="dr-paywall">'
-            '<div class="dr-paywall-title">🔒 该篇为往期内容</div>'
-            "<p>历史复盘的完整正文与当日数据快照暂不展示，最新一篇可免费查看。</p>"
-            "</div></div>"
-        )
     return banner + _dr_render.md_to_html(row.get("content_md"))
 
 
@@ -1018,13 +923,6 @@ def _daily_review_page(request: Request, d: Optional[_date]) -> Response:
 
     pending = _dr_pending(d, latest)
 
-    # 最新一篇对所有人免费;往期是会员内容 —— 服务端一律按"未订阅"直出,
-    # 订阅用户的完整正文由前端拿 API 覆盖(HTML 带 ETag,不能塞按人变化的内容)
-    is_latest = (
-        row is not None and latest is not None
-        and row.get("review_date") == latest.get("review_date")
-    )
-    locked = row is not None and not is_latest and row.get("status") != "failed"
     if row is not None:
         # 历史复盘可能写着"AI 策略表现 / 战绩 / 胜率",公开展示前统一换成合规说法
         # (见 daily_review/render.public_md)。拷贝一份改,别动进程缓存里的原行。
@@ -1042,18 +940,17 @@ def _daily_review_page(request: Request, d: Optional[_date]) -> Response:
             # page_date：标题里的日期锚用**请求的日期**(与 canonical 一致);
             # 快照的真实数据日期写在正文横幅里(_dr_body)。
             "<!--DR_HEAD-->": _dr_head(
-                row, canonical, locked, stale=stale,
+                row, canonical, stale=stale,
                 page_date=str(d) if d is not None else None),
             "<!--DR_TITLE-->": _htmlmod.escape(art_title) or "加载中…",
             "<!--DR_DATE-->": _htmlmod.escape(date_txt),
             "<!--DR_BODY-->": _dr_body(
-                row, locked, stale=stale, snapshot_date=snapshot_date,
+                row, stale=stale, snapshot_date=snapshot_date,
                 pending=pending),
             "<!--DR_HISTORY-->": _dr_history(),
             # 前端据此判断服务端已经直出了哪一篇,避免二次渲染时白闪一下
             "<!--DR_INIT-->": (
                 f'<span id="drInit" hidden data-review-date="{date_txt}" '
-                f'data-locked="{"1" if locked else "0"}" '
                 f'data-ssr="{"1" if row is not None else "0"}"></span>'
             ),
         },
@@ -1261,8 +1158,6 @@ def page_strategy(strategy_id: str, request: Request):
 
 
 # (路径, 更新频率, 优先级) —— 仅收录面向用户的功能页；/admin/tasks、/tasks 是运维监控页不收录
-# /subscribe **有意不收录**:站内付费引导已全部撤下(合规审查),页面只留给已有链接
-# 的用户自助查看,同时带 noindex —— 别再把"免费领终生会员 / 套餐价格"主动送给爬虫。
 _SITEMAP_PAGES = [
     ("/", "daily", "1.0"),
     ("/paper_trading", "daily", "0.8"),

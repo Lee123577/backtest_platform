@@ -48,9 +48,10 @@ EVENTS: Dict[str, str] = {
     # 保留的历史事件
     "strategy_try":        "策略页去回测",
     "register":            "注册(历史,新代码不再写)",   # 保留以免历史数据不可读
-    "lifetime_claimed":    "领取终生会员",
-    "order_created":       "创建订单",
-    "subscribe_activated": "开通会员",
+    # 付费会员已下线,下面三个不再产生,只为历史数据可读而留在白名单
+    "lifetime_claimed":    "领取终生会员(历史)",
+    "order_created":       "创建订单(历史)",
+    "subscribe_activated": "开通会员(历史)",
 }
 
 # 漏斗层级(顺序即漏斗顺序)。
@@ -62,6 +63,7 @@ EVENTS: Dict[str, str] = {
 #
 # 中段补齐(报告 P2):demo_click / demo_result_view / register_click /
 # register_success —— 过去整段是黑的,无法回答"卡在哪一步"。
+# 末层原是"下单 → 开通会员";付费会员下线后改以"加入自选"作为激活终点。
 FUNNEL_STEPS = [
     ("page_view", "真人访客"),
     ("demo_click", "点示例"),
@@ -69,8 +71,7 @@ FUNNEL_STEPS = [
     ("register_click", "点登录/注册"),
     ("register_success", "完成注册"),
     ("backtest_run", "跑通回测"),
-    ("order_created", "创建订单"),
-    ("subscribe_activated", "开通会员"),
+    ("watchlist_add", "加入自选"),
 ]
 
 _META_MAX = 480  # 留余量,DB 列是 VARCHAR(512)
@@ -233,7 +234,7 @@ def _record_session_events(
 
 
 def funnel(start, end) -> Dict[str, Any]:
-    """漏斗:访客 → 示例 → 结果 → 点注册 → 完成注册 → 回测 → 下单 → 付费，
+    """漏斗:访客 → 示例 → 结果 → 点注册 → 完成注册 → 回测 → 加自选，
     逐层给绝对数与相对上一层的转化率。"""
     try:
         visitors = db.count_visitors(start, end)

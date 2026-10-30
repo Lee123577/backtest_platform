@@ -603,7 +603,6 @@ table.trades-tbl {
 .trades-tbl tr.sell-row td { background: rgba(26,127,55,.04); }
 .badge-buy { background: rgba(207,34,46,.1); color: var(--up); border-radius: 4px; padding: 2px 8px; font-weight: 600; }
 .badge-sell { background: rgba(26,127,55,.1); color: var(--down); border-radius: 4px; padding: 2px 8px; font-weight: 600; }
-.no-trade { color: var(--txt2); font-size: 13px; padding: 20px; text-align: center; }
 
 /* ── Loading overlay ── */
 #loading {

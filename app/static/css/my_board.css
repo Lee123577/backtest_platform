@@ -529,15 +529,6 @@ body.spx-shell .site-footer.mb-footer { max-width: none; margin-top: 24px; }
 /* ── 今日板块热度卡(复用排行榜的 rk-row/rk-group-label 列表样式;
    板块热度观察只展示板块层面,不含个股) ──────────────────────────────── */
 
-.mb-hs-tag {
-  font-size: 10px;
-  padding: 1px 6px;
-  border-radius: 8px;
-  margin-left: 6px;
-}
-.mb-hs-tag--win { background: rgba(207, 34, 46, .1); color: #cf222e; }
-.mb-hs-tag--lose { background: rgba(26, 127, 55, .1); color: #1a7f37; }
-
 /* AI 客观观察记录:紧贴板块名下方的一行小字 */
 .mb-hs-note {
   display: block;
@@ -683,7 +674,6 @@ body.spx-shell .site-footer.mb-footer { max-width: none; margin-top: 24px; }
   .mb-card, .mb-grid.mb-canvas-mode .mb-card, .rk-row { transition: none; }
   .mb-loading { animation: none; }
 }
-
 
 /* 盘中实时刷新指示点。只在"数据日期=今天且在交易时段"时出现 —— 收盘后这张
    图不再变,还闪着会让人以为数字在动。动效对 prefers-reduced-motion 关掉:

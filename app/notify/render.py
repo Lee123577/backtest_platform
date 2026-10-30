@@ -8,7 +8,7 @@
   onboarding_mail      — 新手引导：注册后第 0/1/3/7 天各一封，发完即止
 
 三条贯穿所有信的规矩：
-  1. **正文只放摘要，全文回站里看**。付费内容不能从邮件漏出去，顺带把人带回站上。
+  1. **正文只放摘要，全文回站里看**。邮件只做导流，顺带把人带回站上。
   2. **每封信都带退订链接**，而且是能一键点的绝对地址。少了它，QQ/Gmail
      会把整个发信域名的信誉打下来 —— 比少发几封信严重得多。
   3. **免责声明留在正文里**。邮件会被转发、被截图，脱离页面语境后
@@ -241,9 +241,9 @@ def daily_digest_mail(
             '<p style="margin:0;font-size:14px;color:#4b5563;">今日暂无板块热度数据。</p>'
         )
         html_parts.append(
-            f'<div>'
-            f'<div style="font-size:12px;color:#9ca3af;letter-spacing:1px;margin-bottom:6px;">'
-            f'AI 板块热度观察</div>'
+            '<div>'
+            '<div style="font-size:12px;color:#9ca3af;letter-spacing:1px;margin-bottom:6px;">'
+            'AI 板块热度观察</div>'
             + body_html
             + _btn(link, "查看板块热度观察")
             + '<p style="margin:12px 0 0;font-size:12px;color:#9ca3af;line-height:1.7;">'
@@ -285,7 +285,7 @@ _ONBOARDING: Dict[str, Dict[str, Any]] = {
              "在首页输入名称或代码，拉出 K 线，再挑两三个策略放在一起对比。",
              "/"),
             ("加进自选盯盘",
-             "收盘后，如果你选的策略规则在自选股上被触发，站内会标出来，会员还能收到邮件提醒。",
+             "收盘后，如果你选的策略规则在自选股上被触发，站内会标出来，也可以打开邮件提醒。",
              "/watchlist"),
         ],
         "cta": ("开始第一次回测", "/?strategy=ma_cross&code=000001&run=1"),
@@ -333,7 +333,7 @@ _ONBOARDING: Dict[str, Dict[str, Any]] = {
              "指数、涨跌家数、成交额放缩量、涨停梯队。",
              "/daily_review"),
             ("自选盯盘提醒",
-             "你的自选股触发所选策略的规则时，当天汇总成一封信（会员功能）。",
+             "你的自选股触发所选策略的规则时，当天汇总成一封信。",
              "/watchlist"),
             ("在哪里打开",
              "自选盯盘页底部的「邮件通知」，勾上就生效，随时可关。",

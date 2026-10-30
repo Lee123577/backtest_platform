@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
