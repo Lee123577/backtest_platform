@@ -81,9 +81,9 @@
         '<div class="dash-note">登录后配置自选盯盘</div>';
       return;
     }
-    if (!cfg || !cfg.subscribed) {
-      el.innerHTML = '<div class="dash-big muted">暂未开放</div>' +
-        '<div class="dash-note">该功能当前不可用</div>' +
+    if (!cfg) {
+      el.innerHTML = '<div class="dash-big muted">—</div>' +
+        '<div class="dash-note">盯盘配置暂时加载不出来</div>' +
         '<a class="dash-cta ghost" href="/watchlist">去看看</a>';
       return;
     }

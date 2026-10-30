@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import os
 import threading
-import time
 import urllib.request
 from abc import ABC, abstractmethod
 from typing import Optional

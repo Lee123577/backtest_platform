@@ -5,8 +5,8 @@
 POST /api/event                  — 前端上报业务事件(白名单 + 限流,公开)
 GET  /api/analytics/funnel       — 漏斗与渠道拆分(仅管理员 IP)
 
-前端只上报"服务端看不见"的动作(点分享、点首屏示例)。回测完成 / 注册 / 下单 /
-开通会员这类有服务端落点的，一律在服务端就地记 —— 前端 beacon 会被拦截器、
+前端只上报"服务端看不见"的动作(点分享、点首屏示例)。回测完成 / 注册 /
+加自选这类有服务端落点的，一律在服务端就地记 —— 前端 beacon 会被拦截器、
 断网和用户关页面吃掉，拿它算转化率会系统性偏低。
 """
 from __future__ import annotations
@@ -80,7 +80,7 @@ def request_context(request: Request, page_path: Optional[str] = None) -> Dict[s
     """从请求里取埋点要用的身份、归因与**设备/爬虫标记**(不查库的部分)。
 
     page_path 由调用方给(前端上报的页面);没给就退回请求自身的 path ——
-    服务端就地记的事件(注册/下单)本来也没有页面可言。
+    服务端就地记的事件(注册/加自选)本来也没有页面可言。
 
     UA 从 request.headers 取,用 bots 统一解析/打标 —— 这样**所有服务端就地
     埋点都自动带上 is_bot / device_type**,与访问日志同源(见 app/analytics/bots.py)。

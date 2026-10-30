@@ -179,14 +179,3 @@ def plain_text(md: Optional[str], limit: int = 150) -> str:
     return text[: limit - 1].rstrip() + "…"
 
 
-def preview_html(md: Optional[str], chars: int = 220) -> str:
-    """付费墙外露出的免费预览（历史篇给未订阅者/爬虫看的那一段）。
-
-    只取正文开头一小段，**绝不是全文**：HTML 是公共可缓存的，任何进到 HTML 的
-    内容都等于对所有人免费。给爬虫和给访客的是同一份，不做 UA 区分 ——
-    区分即 cloaking，Google 会判罚。
-    """
-    text = plain_text(md, limit=chars)
-    if not text:
-        return ""
-    return "<p>" + _esc(text) + "</p>"

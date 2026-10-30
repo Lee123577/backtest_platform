@@ -9,7 +9,7 @@
 信号判定 signal_on_last_bar 是纯函数(给定 df + 最新交易日),便于测试。
 扫描按 (code,strategy) 去重计算,同一票同策略被多个用户盯只算一次。
 
-DB 经模块级 db 引用;订阅判定经模块级 is_subscribed —— 测试均可 monkeypatch。
+DB 经模块级 db 引用 —— 测试可 monkeypatch。
 """
 from __future__ import annotations
 
@@ -20,7 +20,6 @@ from typing import Any, Dict, List, Optional
 
 from ..data.data_loader import normalize_code
 from ..strategies.registry import STRATEGY_REGISTRY, get_strategy
-from ..subscription.service import is_subscribed
 from . import db
 
 logger = logging.getLogger(__name__)
@@ -117,7 +116,7 @@ def signal_on_last_bar(
 # ── 收盘扫描 ──────────────────────────────────────────────────────────────────
 
 def scan() -> Dict[str, Any]:
-    """收盘后跑一遍,给订阅用户生成当日信号提醒。返回统计。"""
+    """收盘后跑一遍,给盯盘用户生成当日规则提醒。返回统计。"""
     db.ensure_tables()
     latest = db.latest_market_date()
     if latest is None:
@@ -132,9 +131,8 @@ def scan() -> Dict[str, Any]:
     for r in db.all_rule_rows():
         user_strats[r["user_id"]].append(r["strategy_id"])
 
-    # 目标用户：订阅有效 + 有自选 + 有盯盘策略
-    targets = [u for u in user_codes
-               if user_strats.get(u) and is_subscribed(u)]
+    # 目标用户：有自选 + 有盯盘策略(不再区分会员,登录用户都能用)
+    targets = [u for u in user_codes if user_strats.get(u)]
 
     kline_cache: Dict[str, Any] = {}
     signal_cache: Dict[tuple, Optional[str]] = {}

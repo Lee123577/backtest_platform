@@ -112,8 +112,7 @@ def unsubscribe(token: str, kind: Optional[str] = None) -> Optional[Dict[str, An
 def send_watchlist_alerts(trade_date: Optional[_Date] = None) -> Dict[str, Any]:
     """把当天新生成的盯盘提醒逐人发一封。返回统计。
 
-    数据来自 signal_alert（收盘扫描已经写好的那批），这里不重算信号：
-    扫描任务只给订阅有效的用户生成提醒，所以能进这封信的人本来就是会员。
+    数据来自 signal_alert（收盘扫描已经写好的那批），这里不重算信号。
     """
     from ..watchlist import db as wl_db
 
@@ -184,7 +183,7 @@ def _review_block(trade_date: _Date) -> Optional[Dict[str, Any]]:
         return None
     return {
         "title": dr_render.public_md(row.get("title")),
-        # 只取摘要，全文回站里看：正文是会员内容，不能整篇塞进邮件
+        # 只取摘要，全文回站里看：邮件只做导流，整篇塞进去既长又容易进垃圾箱
         "summary": dr_render.plain_text(dr_render.public_md(row.get("content_md")), 220),
     }
 

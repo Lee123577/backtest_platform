@@ -12,7 +12,7 @@ A 股股票过滤器（共享辅助函数）
 """
 from __future__ import annotations
 
-from typing import Iterable, Tuple
+from typing import Iterable
 
 
 # 沪市主板 600/601/603/605；深市主板 000/001/002/003

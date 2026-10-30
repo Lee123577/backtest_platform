@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import html as _htmlmod
 import logging
 import time
 from datetime import datetime as _DT
@@ -107,24 +108,27 @@ def _notify_admin(
         f"反馈内容：\n{content}\n\n"
         f"—— {mailer.SITE_NAME}\n"
     )
+    # HTML 版里每个来自用户的字段都要转义:反馈内容、联系方式、昵称/邮箱、上报的
+    # 页面路径全是用户可控的,不转义就能往管理员邮箱里塞任意 HTML/钓鱼链接。
+    e = _htmlmod.escape
     html = mailer.build_page(f"""
     <p style="margin:0 0 18px;font-size:15px;color:#111827;">
       收到一条新的用户反馈 <strong>#{fid}</strong>。</p>
     <table style="width:100%;border-collapse:collapse;font-size:13px;color:#374151;">
       <tr><td style="padding:6px 0;color:#6b7280;width:88px;">发送时间</td>
-          <td style="padding:6px 0;">{created}</td></tr>
+          <td style="padding:6px 0;">{e(created)}</td></tr>
       <tr><td style="padding:6px 0;color:#6b7280;">发送人</td>
-          <td style="padding:6px 0;">{sender}</td></tr>
+          <td style="padding:6px 0;">{e(sender)}</td></tr>
       <tr><td style="padding:6px 0;color:#6b7280;">所在菜单</td>
-          <td style="padding:6px 0;">{page}</td></tr>
+          <td style="padding:6px 0;">{e(page)}</td></tr>
       <tr><td style="padding:6px 0;color:#6b7280;">分类</td>
-          <td style="padding:6px 0;">{cat_label}</td></tr>
+          <td style="padding:6px 0;">{e(cat_label)}</td></tr>
       <tr><td style="padding:6px 0;color:#6b7280;">联系方式</td>
-          <td style="padding:6px 0;">{contact_text}</td></tr>
+          <td style="padding:6px 0;">{e(contact_text)}</td></tr>
     </table>
     <div style="margin:18px 0 0;padding:14px 16px;background:#f3f4f6;
         border-radius:8px;font-size:14px;color:#111827;line-height:1.7;
-        white-space:pre-wrap;word-break:break-word;">{content}</div>
+        white-space:pre-wrap;word-break:break-word;">{e(content)}</div>
     """)
 
     try:

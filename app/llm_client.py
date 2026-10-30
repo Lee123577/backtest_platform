@@ -248,8 +248,8 @@ async def _chat_once(
         status = e.response.status_code
         body = e.response.text[:300]
         # 402 = Payment Required；部分家欠费也可能回 400/403，故再按正文兜一次。
-        # 这里的 402 是**上游 LLM** 的响应，与本站 require_subscription 对外抛的
-        # 402（订阅墙）完全无关 —— 那个不会进到 httpx 异常里，不会互相污染。
+        # 这里的 402 是**上游 LLM** 的响应，只在 httpx 异常里出现，
+        # 与本站自己对外返回的任何状态码无关。
         if status == 402 or _is_balance_error(body):
             raise LLMBalanceError(
                 f"{describe(model)} 余额不足/欠费 HTTP {status}: {body}"

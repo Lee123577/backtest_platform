@@ -20,7 +20,6 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date as Date
 from typing import Any, Dict, List, Optional
 
-import akshare as ak
 import pandas as pd
 
 from .data_loader import _get_pool, get_kline_data, in_transaction

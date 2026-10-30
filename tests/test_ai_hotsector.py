@@ -368,9 +368,8 @@ def test_predict_once_uses_objective_top3_and_one_llm_call(monkeypatch):
         captured["args"] = args
     monkeypatch.setattr(runner.db, "upsert_pick", fake_upsert)
 
-    def boom(*a, **k):
-        raise AssertionError("predict_once 不应再调用 replace_stocks")
-    monkeypatch.setattr(runner.db, "replace_stocks", boom)
+    # 写个股的 DAO 已随方案 B 删除 —— predict_once 想写个股也无从写起
+    assert not hasattr(runner.db, "replace_stocks")
 
     res = asyncio.run(runner.predict_once(date(2026, 10, 15)))
 

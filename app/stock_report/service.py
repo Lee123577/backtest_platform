@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date as _Date
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 from ..ratelimit import SlidingWindowLimiter
 from . import db

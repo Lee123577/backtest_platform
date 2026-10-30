@@ -214,14 +214,9 @@
     });
   }
 
-  // ── 渲染：信号提醒(会员) ─────────────────────────────────────────────────
+  // ── 渲染：规则提醒 ───────────────────────────────────────────────────────
   function renderAlerts(data) {
     var wrap = $("wlAlerts");
-    if (!cfg.subscribed) {
-      $("wlReadBtn").style.display = "none";
-      wrap.innerHTML = '<div class="wl-paywall"><p>该功能暂未开放。</p></div>';
-      return;
-    }
     var alerts = (data && data.alerts) || [];
     $("wlReadBtn").style.display = alerts.some(function (a) { return !a.is_read; }) ? "" : "none";
     if (!alerts.length) {
@@ -271,7 +266,7 @@
   // 用户不知道自己开了什么，收到信第一反应是点垃圾邮件而不是退订。
   var NOTIFY_ITEMS = [
     ["watchlist_alert", "自选盯盘规则提醒",
-     "收盘扫描命中你勾选的策略时，当天把命中的股票汇总成一封发给你（会员功能，一天最多一封）"],
+     "收盘扫描命中你勾选的策略时，当天把命中的股票汇总成一封发给你（一天最多一封）"],
     ["daily_review", "AI 每日复盘",
      "每个交易日收盘后，把当天复盘的标题和摘要发给你，全文回站内看"],
     ["ai_hotsector", "AI 板块热度观察",
@@ -333,10 +328,6 @@
   function setSaveMsg(t, ok) { var e = $("wlSaveMsg"); e.textContent = t; e.className = "wl-save-msg" + (ok ? " ok" : ""); }
 
   function loadAlerts() {
-    if (!cfg.subscribed) {
-      renderAlerts(null);
-      return;
-    }
     getJson("/api/watchlist/alerts?limit=50")
       .then(renderAlerts)
       .catch(function () { renderAlerts({ alerts: [] }); });

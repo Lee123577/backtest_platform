@@ -9,7 +9,6 @@
 
 纯函数 + 假 cursor,不连真库。
 """
-import math
 
 import numpy as np
 import pandas as pd

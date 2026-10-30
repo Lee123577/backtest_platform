@@ -386,18 +386,6 @@ def get_session(token_hash: str) -> Optional[Dict[str, Any]]:
         return cur.fetchone()
 
 
-def touch_session(token_hash: str, now: _DT) -> None:
-    """刷新会话最近活跃时间(不改过期，滑动续期另说)。"""
-    conn = _get_pool()
-    if conn is None:
-        return
-    with conn.cursor() as cur:
-        cur.execute(
-            "UPDATE user_session SET last_seen_at=%s WHERE token_hash=%s",
-            (now, token_hash),
-        )
-
-
 def delete_session(token_hash: str) -> None:
     conn = _get_pool()
     if conn is None:

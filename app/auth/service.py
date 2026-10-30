@@ -22,7 +22,7 @@ import hashlib
 import logging
 import re
 import secrets
-from datetime import date as _Date, datetime as _DT, timedelta
+from datetime import datetime as _DT, timedelta
 from typing import Any, Dict, Optional, Tuple
 
 from ..ratelimit import SlidingWindowLimiter

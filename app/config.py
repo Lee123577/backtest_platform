@@ -83,7 +83,7 @@ class Settings:
     # 备选通道：企业微信/钉钉机器人 webhook，或 Server酱 SendKey。
     ALERT_WEBHOOK_KIND: str = os.getenv("ALERT_WEBHOOK_KIND", "").strip().lower()
     ALERT_WEBHOOK_URL: str = os.getenv("ALERT_WEBHOOK_URL", "").strip()
-    # 同类告警多少小时内不重复发，避免探针每小时唤醒都惊动一次
+    # 同类告警多少小时内不重复发(探针每交易日 09:00 跑一次;拦的是同日补跑/重复调用)
     ALERT_REPEAT_HOURS: int = int(os.getenv("ALERT_REPEAT_HOURS", "6"))
 
 

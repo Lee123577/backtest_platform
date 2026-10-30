@@ -5,14 +5,13 @@
 
   1. md_to_html   —— 受限 markdown 变换；模型产出的原始 HTML 一律被转义
   2. plain_text   —— meta description 用的纯文本摘要与截断
-  3. preview_html —— 付费墙外的免费预览**不能**是全文
 
 这三个函数的输出会直接进公开 HTML，出问题就是 XSS 或付费内容泄漏，
 所以边界都要钉死。
 """
 import pytest
 
-from app.daily_review.render import md_to_html, plain_text, preview_html
+from app.daily_review.render import md_to_html, plain_text
 
 
 # ── md_to_html ───────────────────────────────────────────────────────────────
@@ -88,24 +87,3 @@ def test_plain_text_truncates_with_ellipsis():
 
 def test_plain_text_short_input_untouched():
     assert plain_text("很短", limit=50) == "很短"
-
-
-# ── preview_html ─────────────────────────────────────────────────────────────
-
-def test_preview_is_not_full_text():
-    """付费墙外只露一小段 —— HTML 是公共可缓存的，全文进去等于对所有人免费。"""
-    body = "首段内容。" + "正文" * 500
-    out = preview_html(body, chars=100)
-    assert len(out) < 200
-    assert "正文" * 100 not in out
-
-
-def test_preview_escapes_html():
-    out = preview_html("<b>粗</b>")
-    assert "<b>" not in out
-    assert "&lt;b&gt;" in out
-
-
-def test_preview_empty_input():
-    assert preview_html(None) == ""
-    assert preview_html("") == ""

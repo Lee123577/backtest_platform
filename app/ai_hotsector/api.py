@@ -21,7 +21,7 @@ from __future__ import annotations
 import threading
 import time
 from datetime import date as _Date
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends
 

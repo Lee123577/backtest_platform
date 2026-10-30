@@ -351,9 +351,7 @@ def body_html(row: Optional[Dict[str, Any]], label: str) -> str:
 # 一个按钮都没有** —— 每篇报告都在讲一只具体的股票,读者看完却不能对这只股票
 # 做任何事。内容页到工具页的转化因此只有 1.3%。
 #
-# 两个出口对应两种意图:想验证的去回测,想跟踪的加自选。加自选要登录,
-# 而登录闸正是那 30 个免费终生名额唯一有意义的曝光位 —— /subscribe 一周
-# 只有 2 个人打开过,名额根本没被看见。
+# 两个出口对应两种意图:想验证的去回测,想跟踪的加自选(加自选要登录)。
 
 def actions_html(code: str, name: str, has_report: bool) -> str:
     label = name or code

@@ -19,9 +19,9 @@ from __future__ import annotations
 
 import logging
 from html import escape as _esc
-from typing import Any, Dict, Optional
+from typing import Optional
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 

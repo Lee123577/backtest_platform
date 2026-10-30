@@ -1,6 +1,6 @@
 # A 股量化回测平台
 
-基于 FastAPI + ECharts 的 A 股量化策略回测与模拟交易平台。核心场景:**单股信号**、**组合选股**(已并入首页)、**模拟盘**、**AI 板块热度观察**、**AI 每日复盘**、**个股 AI 报告**;账号周边还有**自选盯盘**、**个人数据看板**、**回测分享**与**订阅会员**。
+基于 FastAPI + ECharts 的 A 股量化策略回测与模拟交易平台。核心场景:**单股信号**、**组合选股**(已并入首页)、**模拟盘**、**AI 板块热度观察**、**AI 每日复盘**、**个股 AI 报告**;账号周边还有**自选盯盘**、**个人数据看板**、**讨论区**与**回测分享**。**全部功能免费**(付费会员已于 2026-10 下线)。
 
 ![单股策略](docs/images/01-single-stock.png)
 
@@ -52,16 +52,21 @@
 
 **AI 板块热度观察**
 - 每交易日 15:05 抓当日真实板块涨跌幅快照,客观取涨幅前 3 的板块,调一次 DeepSeek 对这几个板块各写一段客观观察记录(不选板块、不选个股)
-- T 日收盘价买入 → T+1 收盘价卖出,等权滚动复利;资金曲线对比中证1000基准 + 扣费后收益(佣金双边+印花税,最低佣金 5 元如实计入)
-- 只陈列板块层面的客观数据(板块名/当日涨跌幅/领涨股/成分股数/AI 客观观察记录);此前个股模拟跟踪的胜率/资金曲线保留在页面折叠区(2026-10-15 起停止更新)
-- 停牌/退市/AI 编造代码等异常个股自动排除(settle_status 状态机),不阻塞整批结算
+- 只陈列板块层面的客观数据(板块名/当日涨跌幅/领涨股/成分股数/AI 客观观察记录),不涉及任何个股选择
+- 当天观察还没生成时,`/today` 实时抓一次板块快照兜底(2s 超时、不重试、成功缓存 60s、失败负缓存 30s、单飞锁防并发堆积);
+  再取不到就回退上一批并标注真实数据日期
+- 2026-10-15 之前的「AI 个股模拟跟踪」(T 日买 → T+1 卖、资金曲线、胜率)已从公开页下线:
+  `ai_hotsector_settle` 只收尾遗留批次;`/api/ai_hotsector/{history,equity,stats,sector_stats,prompt_stats,intraday}`
+  仅限管理员查询
 
 **AI 每日复盘(DeepSeek)**
-- 每交易日 17:45(daily_update 之后)基于当日**真实落库数据**生成市场复盘:主要指数(含近60日位置)、行业板块快照(领涨领跌板块+领涨股,收盘后拉取东财板块行情,失败不阻塞)、涨停梯队(≥9.8% 近似口径,连板高度)、涨跌/大涨大跌家数、成交额放缩量(对比昨日与5日均量)、全市场涨跌幅榜 Top10、AI 热门板块结算战绩
+- 每交易日 17:45(daily_update 之后)基于当日**真实落库数据**生成市场复盘:主要指数(含近60日位置)、行业板块快照(领涨领跌板块+领涨股,收盘后拉取东财板块行情,失败不阻塞)、涨停梯队(≥9.8% 近似口径,连板高度)、涨跌/大涨大跌家数、成交额放缩量(对比昨日与5日均量)、全市场涨跌幅榜 Top10
 - 每篇复盘有独立 URL(`/daily_review/2026-07-08`),标题/正文/结构化数据由服务端直出 —— 可被搜索引擎收录并自动进 sitemap;旧的 hash 链接(`/daily_review#2026-07-08`)自动改写到新路径
-- 付费墙:最新一篇全文免费,往期正文仅会员可见。直出到 HTML 的只有免费预览(HTML 带 ETag、可被共享缓存,付费正文只走 API 按登录态下发)
-- 接口带缓存(latest 60s 进程缓存,历史日期浏览器缓存 1h)
-- 与 AI 热门板块相反的约束方向:那边禁止模型编造行情,这边只允许模型使用喂给它的行情
+- 所有复盘(含往期)对所有人开放,整篇正文服务端直出
+- 当天生成失败/缺失时回退最近一次成功的复盘,正文顶部标注真实数据日期并自动 noindex(避免多个 URL 同一正文);
+  旧日期如实提示"该交易日复盘暂缺",只有最新一期才说"正在生成"
+- 接口带缓存(latest 60s 进程缓存,各接口 `Cache-Control: public, max-age=60`)
+- 约束方向:只允许模型使用喂给它的行情,不得编造数据
 - 数据快照(context_json)与正文一起落库,可审计模型看到了什么
 
 **个股 AI 分析报告(DeepSeek)**
@@ -97,7 +102,7 @@
 - 反馈弹窗新增「使用评价」分类,用户可勾选"同意公开展示"并自填署名(默认不勾)
 - 上墙要**两道闸同时打开**:用户同意公开 + 管理员在 `/admin/tasks` 的反馈面板里精选。
   条件写在 SQL 里(`WHERE public_ok=1`),接口漏判也上不了墙
-- 首页、订阅页服务端直出;一条精选都没有时整块不出 —— 不拿示例文案冒充评价
+- 首页服务端直出;一条精选都没有时整块不出 —— 不拿示例文案冒充评价
 - 联系方式、IP 永不上墙;正文截断到 180 字
 
 **账号体系(邮箱验证码登录)**
@@ -110,39 +115,56 @@
 - 登录后可自定义昵称与头像:头像上传走原始 body、读之前先卡 2MB 上限,落盘前统一重编码成 PNG(`app/auth/avatar.py`)
 
 **登录账号的落点**
-- 自选盯盘 `/watchlist`:自选股 × 盯盘策略,每日收盘自动扫信号落站内提醒(自选/规则免费,提醒属会员权益)
+- 自选盯盘 `/watchlist`:自选股 × 盯盘策略,每日收盘自动扫描,规则触发落站内提醒(登录即可用)
 - 个人数据看板 `/my_board`:行情/复盘等卡片自由排版,登录后各自保存一份
 - 回测分享:回测结果存快照,生成 `/s/{token}` 公开链接(页面 noindex,靠链接传播不靠搜索)
-- 订阅会员 `/subscribe`:暂不接在线支付 —— 下单拿订单号 → QQ 人工核对 → 管理员履约
-- 终生会员免费名额:前 30 名登录用户可直接领,名额是**预置的 30 个空座位**,
-  领取 = `UPDATE ... WHERE user_id IS NULL LIMIT 1`,靠行锁串行化,并发下不会超发
-  (`COUNT(*)<30` 再插一行的写法必然发出第 31 份)
+- 讨论区 `/discuss`:浏览公开,发帖/回复/点赞需登录
+- 原订阅会员(`/subscribe`、下单、终生会员名额)已整体下线:页面返回 410,`app/subscription/` 已删除;
+  库里的 `subscription` / `payment_order` / `lifetime_grant` 表保留历史数据,代码不再读写
 
 **邮件通知(`app/notify/`)**
-- 两封信:收盘后的**自选信号提醒**(17:25)、**每日复盘 + 板块热度观察**推送(18:00)
+- 两封信:收盘后的**自选规则提醒**(17:25)、**每日复盘 + 板块热度观察**推送(18:00)
 - **新手引导**:注册后第 0/1/3/7 天各一封(跑通第一次回测 → 认识策略 → 学会怀疑回测结果 →
   打开收盘后邮件推送),每天 10:00 发。只发给注册 9 天内的账号,第 7 天那封之后永不再发;
   某封到期后宽限 2 天,任务停更久就作废不补发,同一天最多一封。默认开(有终点的注册流程延续,
   不是持续的内容推送),每封带一键退订
 - 一天最多一封:复盘和板块热度观察合成同一封,分两封就成了每天两条广告
-- 正文只放摘要 + 回站链接 —— 复盘全文是会员内容,不能从邮件漏出去
+- 正文只放摘要 + 回站链接 —— 邮件只做导流,整篇塞进去既长又容易进垃圾箱
 - 幂等靠 `email_send_log` 的 `(user_id, kind, 交易日)` 唯一键:**先占位再发信**,
   失败就释放占位;任务重跑时已收到的人跳过、失败的人重试,不会有人收到两封
 - 开关默认值分两类:盯盘提醒(用户自己配策略换来的结果)默认开,
   内容推送默认关必须自己勾;每封信带一键退订(`List-Unsubscribe-Post`),
   退订不要登录、GET 只出确认页(邮件客户端会预抓链接,GET 一执行就把人退了)
 
+**运维告警(`app/alerts.py` + `app/llm_balance.py`)**
+- `llm_balance_probe` 每交易日 09:00 查 LLM 账户余额(DeepSeek 走零成本的余额接口;没有余额接口的家默认不探活)。
+  欠费/低于 `LLM_BALANCE_MIN_CNY` 时发运维告警并 exit 3,网络/鉴权等瞬时问题只记日志
+- 调用侧把"欠费"与"限流"分开:`LLMBalanceError` 立即失败不重试,限流照旧退避
+- 告警出口:邮件(`ALERT_EMAILS`,空则 `ADMIN_EMAILS`)+ 可选 webhook(企业微信 / 钉钉 / Server酱)。
+  先写 `ops_alert` 再发送,同类告警 `ALERT_REPEAT_HOURS` 内不重复;机器人接口回 200 但 `errcode≠0` 也判失败
+- 邮件任务"0 收件人"会打 WARNING;`scripts/mail_selftest.py` 一次性确认 SMTP 真能投递
+
+**埋点与转化漏斗(`app/analytics/`)**
+- 漏斗:真人访客(JS 的 `page_view`)→ 点示例 → 看到示例结果 → 点登录 → 完成注册 → 跑通回测 → 加入自选
+- 口径:按设备(`anonymous_id` = sp_sid cookie)去重,排除管理员账号与 `is_bot=1`(UA 打标,规则见 `analytics/bots.py`,
+  与访问日志同源);`session_id` 是服务端按 30 分钟滑动窗口派生的会话,只用于会话/回访统计,不做访客去重
+- 渠道:首触 UTM 五段 + referer 兜底,落地即发一条 `channel_hit` 固化;前端事件带 `event_id`,重复投递靠唯一键丢弃
+
 **安全**
 - 管理员 = 登录邮箱在 `ADMIN_EMAILS` 里的账号,名单放 .env 不放库(拿到库口令 ≠ 拿到管理权)。曾用 IP 白名单,但家宽 IP 会变、IP 是位置不是身份,已废弃(`paper_admin_ip` 随之移除)
 - 写接口统一过同源检查(`app/csrf.py`),敏感端点各自叠滑动窗口限流(`app/ratelimit.py`)
 - 全局安全响应头(CSP/nosniff/X-Frame-Options 等);`TRUSTED_PROXIES` 配可信反代,防 `X-Forwarded-For` 伪造
+- 发给管理员的邮件(反馈通知等)里,所有用户可控字段一律 HTML 转义;告警 webhook 出错只记异常类型/状态码,
+  不把带 token 的 URL 写进日志和 `ops_alert`
 - **合规措辞**:站点是量化研究工具,不是投资顾问。页面上不出现读起来像荐股服务的说法 ——
   「AI 热门板块 / AI 荐股 / 强势股 / 战绩」统一叫「AI 板块观察 / 观察样本 / 跟踪记录」,模拟盘不叫「实盘」,
   自选提醒叫「规则提醒」而不是「买卖信号」,个股报告的「看多/看空」展示为「技术面偏强/偏弱」。
   模型生成的内容同样约束:AI 板块观察的理由只做客观介绍(提示词 v4,含推荐/预测措辞的理由不展示),
   复盘提示词 v6 禁用这些字眼,历史复盘对外展示前统一替换(`daily_review/render.public_md`)。
   `tests/test_compliance_wording.py` 扫描所有下发到浏览器的 HTML/JS,禁用词写回来会直接失败。
-  URL(如 `/ai_hotsector`)、接口与库字段名保持不变,避免外链和收录失效
+  URL(如 `/ai_hotsector`)、接口与库字段名保持不变,避免外链和收录失效。
+  公开页同样不出现历史选股收益(上涨占比 / 跑赢基准 / 资金曲线),也不出现"去 /tasks 手动触发"这类运维指引,
+  均有测试锁住
 - **爬虫拦截(`app/bot_guard.py`)**:访问日志里大多数"访客"是伪装成 Chrome、不跑 JS 的无头抓取。
   中间件挂在访问日志外层(被拦的请求不再写库),四层规则:
   1. 脚本库 / 无头浏览器 / SEO 外链爬虫 / AI 语料爬虫 / 空 UA → 403
@@ -202,7 +224,6 @@ MYSQL_DATABASE=back_test
 | `LLM_MODEL_HOTSECTOR` | 同 `LLM_MODEL` | AI 板块热度观察专用模型(单次调用) |
 | `LLM_BASE_URL` | 按档案 | 覆盖接口地址;接档案里没有的家时配 `LLM_PROVIDER=custom` + 这个 |
 | `LLM_API_KEY` | (空) | 显式指定 Key,优先级高于上面按家分开的那两个 |
-| `SUBSCRIBE_CONTACT_QQ` | 1415854304 | 订阅页展示的人工开通联系 QQ |
 | `DEBUG` | 0 | 开启后对外错误信息附带内部异常细节,仅本地排障用 |
 | `MAIL_PROVIDER` | 自动 | 验证码投递后端:`smtp` 真发信 / `console` 只打日志。**留空时按有没有配 `SMTP_HOST` 自动判断** |
 | `SMTP_HOST` | (空) | 发信 SMTP 主机,如 `smtp.qq.com`。配了它就等于开启真实投递 |
@@ -215,7 +236,13 @@ MYSQL_DATABASE=back_test
 | `SMTP_TIMEOUT` | 10 | SMTP 连接/读写超时(秒) |
 | `SITE_NAME` | `收盘 shoupan` | 邮件标题与落款里的站点名 |
 | `SITE_ORIGIN` | `https://shoupan.asia` | 站点对外地址(带协议,不带结尾斜杠)。canonical / sitemap / **邮件里的链接**都从这里取 |
-| `LIFETIME_SEATS` | 30 | 终生会员免费名额数。**只应调大不该调小** —— 发出去的收不回来,调小只会让剩余名额算成负数 |
+| `LLM_BALANCE_PROBE_ENABLED` | 1 | LLM 余额探针总开关 |
+| `LLM_BALANCE_MIN_CNY` | 10 | 余额低于这个数(元)就告警 |
+| `LLM_BALANCE_CHAT_PROBE` | 0 | 没有余额接口的供应商是否发一条最小 chat 探活(会产生一次计费调用) |
+| `ALERT_EMAILS` | 同 `ADMIN_EMAILS` | 运维告警收件人,逗号分隔 |
+| `ALERT_WEBHOOK_KIND` | (空) | 备选告警通道:`wecom` / `dingtalk` / `serverchan` |
+| `ALERT_WEBHOOK_URL` | (空) | 对应机器人 webhook / Server酱 SendKey 地址(含密钥,只放 .env) |
+| `ALERT_REPEAT_HOURS` | 6 | 同类告警多少小时内不重复发 |
 
 ### 初始化历史数据
 
@@ -275,12 +302,12 @@ python run.py
 | `/discuss` | 讨论区:发帖 / 回复 / 点赞,首屏弹幕(每次打开播一遍,不循环) |
 | `/strategy/{id}` | 策略专题页:规则拆解 / 全市场实测 / 参数表(可改参数直接带去回测) / FAQ |
 | `/paper_trading` | 模拟盘:持仓/收益曲线/成交流水/参数编辑 |
-| `/ai_hotsector` | AI 板块热度观察:当日客观板块热度 + 历史模拟跟踪(已停止更新) |
-| `/daily_review` | AI 每日复盘:最新一篇(当日数据概览 + DeepSeek 复盘正文 + 历史列表) |
+| `/ai_hotsector` | AI 板块热度观察:当日客观板块热度(不含个股) |
+| `/daily_review` | AI 每日复盘:最新一篇(当日数据概览 + DeepSeek 复盘正文 + 历史列表),往期全部公开 |
 | `/daily_review/2026-07-08` | 指定日期的复盘,每篇独立可索引 URL |
 | `/my_board` | 个人数据看板:卡片自由排版,登录后各自保存 |
-| `/watchlist` | 自选盯盘:自选股 + 盯盘策略,收盘扫信号(提醒属会员);页底可开关邮件通知 |
-| `/subscribe` | 订阅会员(下单 → QQ 人工开通);顶部是前 30 名免费领终生会员的入口 |
+| `/watchlist` | 自选盯盘:自选股 + 盯盘策略,收盘扫描规则触发(登录即可用);页底可开关邮件通知 |
+| `/subscribe` | 已下线(410)。付费会员取消,全部功能免费 |
 | `/s/{token}` | 回测结果分享快照页(公开,noindex) |
 | `/admin/tasks` | 调度任务监控:历史运行/状态/手动触发(管理员账号;旧路径 `/tasks` 307 跳转) |
 | `/unsubscribe?token=…` | 邮件退订页(公开,noindex;GET 只出确认页,退订动作在 POST) |
@@ -426,7 +453,8 @@ scheduler.runner.run_due()  →  subprocess 跑各任务(全表见下方"调度�
    ├─ ai_hotsector_predict  weekday 15:05  DeepSeek 板块热度观察(客观排序)
    ├─ sector_snapshot       weekday 15:10  新浪行业/概念板块涨跌快照
    ├─ daily_update          weekday 17:00  增量 K 线/财务/指数/北向/因子
-   ├─ watchlist_alert_scan  weekday 17:20  自选盯盘信号扫描(依赖 daily_update)
+   ├─ llm_balance_probe     weekday 09:00  LLM 账户余额探针(欠费/低余额告警)
+   ├─ watchlist_alert_scan  weekday 17:20  自选盯盘规则扫描(依赖 daily_update)
    ├─ daily_signal          weekday 17:30  模拟盘选股(依赖 daily_update)
    ├─ ai_hotsector_settle   weekday 17:35  AI 板块模拟跟踪历史结算(依赖 daily_update)
    ├─ daily_review_generate weekday 17:45  AI 复盘生成(依赖 daily_update)
@@ -514,15 +542,15 @@ scheduler.runner.run_due()  →  subprocess 跑各任务(全表见下方"调度�
 | `daily_review` | daily_review | 复盘标题/正文 + 数据快照(context_json),可审计模型看到了什么 |
 | `stock_ai_report` | stock_report | 个股 AI 分析报告(生成时间/提示词版本,按 code 去重) |
 | `app_user` / `email_code` / `user_session` | auth | 用户 / 登录验证码 / 会话(token 库内只存 sha256) |
-| `user_watchlist` / `user_alert_rule` / `signal_alert` | watchlist | 自选股 / 盯盘策略规则 / 收盘信号提醒 |
-| `subscription` / `payment_order` | subscription | 会员订阅态 / 人工开通订单 |
-| `lifetime_grant` | subscription | 终生会员免费名额(建表时预置 30 个空座位,抢占式领取) |
+| `user_watchlist` / `user_alert_rule` / `signal_alert` | watchlist | 自选股 / 盯盘策略规则 / 收盘规则提醒 |
+| `subscription` / `payment_order` / `lifetime_grant` | (已下线) | 原会员订阅态 / 人工开通订单 / 终生名额。付费会员取消后代码不再读写,表保留历史数据 |
+| `ops_alert` | alerts | 运维告警发送记录(去重 + 审计 sent_ok/err) |
 | `email_pref` / `email_send_log` | notify | 邮件通知开关 + 退订令牌 / 发信账本(一天一封的幂等闸) |
 | `user_board_layout` | my_board | 登录用户的看板布局(每人一行) |
 | `discuss_post` / `discuss_like` | discuss | 讨论区帖子与回复(状态:可见/隐藏/删除)/ 点赞(一人一帖一赞) |
 | `user_feedback` | feedback | 用户反馈(分类/处理状态) + 评价墙(用户同意公开 `public_ok` × 管理员精选 `featured`) |
 | `backtest_share` | share | 回测结果分享快照(`/s/{token}` 的内容) |
-| `user_event_log` | analytics | 前端埋点事件(转化漏斗/渠道归因) |
+| `user_event_log` | analytics | 埋点事件(转化漏斗/渠道归因;含 anonymous_id / 会话 / is_bot / event_id 幂等键) |
 | `task_run_log` | scheduler | 定时任务运行日志 |
 | `user_visit_log` | visit_log middleware | API 访问日志(地理位置) |
 
@@ -534,11 +562,12 @@ scheduler.runner.run_due()  →  subprocess 跑各任务(全表见下方"调度�
 
 | 任务名 | 调度 | 依赖 | 说明 |
 |---|---|---|---|
+| `llm_balance_probe` | weekday 09:00 | — | LLM 账户余额探针:欠费/低于阈值发运维告警并判 failed |
 | `ai_hotsector_predict` | weekday 15:05 | — | 板块热度观察生成(客观涨跌幅前 3 + AI 客观观察) |
 | `sector_snapshot` | weekday 15:10 | — | 新浪行业/概念板块涨跌快照(失败隔 40 分钟重试,当天最多 5 次) |
 | `daily_update` | weekday 17:00 | — | 增量更新 K 线/财务/指数/北向资金/因子 |
-| `watchlist_alert_scan` | weekday 17:20 | `daily_update` | 自选股 × 盯盘策略收盘信号扫描,命中落站内提醒 |
-| `watchlist_alert_mail` | weekday 17:25 | `watchlist_alert_scan` | 把当天命中的信号汇总成一封邮件发给开了通知的用户 |
+| `watchlist_alert_scan` | weekday 17:20 | `daily_update` | 自选股 × 盯盘策略收盘扫描,规则触发落站内提醒 |
+| `watchlist_alert_mail` | weekday 17:25 | `watchlist_alert_scan` | 把当天触发的规则汇总成一封邮件发给开了通知的用户 |
 | `daily_signal` | weekday 17:30 | `daily_update` | 模拟盘选股(参数由 `/paper_trading` 页 UI 配置,不硬编码在脚本里) |
 | `ai_hotsector_settle` | weekday 17:35 | `daily_update` | AI 板块模拟跟踪历史收尾(产品已停新批次,仅结算遗留) |
 | `daily_review_generate` | weekday 17:45 | `daily_update` | AI 每日市场复盘生成(DeepSeek) |
@@ -604,9 +633,12 @@ curl -s http://localhost:8000/api/strategies
 ```
 app/
   main.py                    FastAPI 应用入口(页面路由 + 核心 API + 中间件)
-  config.py                  Settings(MySQL / LLM / ADMIN_EMAILS / DEBUG)
+  config.py                  Settings(MySQL / LLM / ADMIN_EMAILS / 告警 / DEBUG)
   csrf.py                    写接口同源检查
-  llm_client.py              LLM 出口(OpenAI 兼容;换供应商=改 .env,三个 AI 功能共用)
+  llm_client.py              LLM 出口(OpenAI 兼容;换供应商=改 .env,三个 AI 功能共用;欠费单独抛 LLMBalanceError)
+  llm_balance.py             LLM 账户余额探针(返回结构化结论,不抛异常)
+  alerts.py / alerts_db.py   运维告警出口(邮件 + 企业微信/钉钉/Server酱 webhook)与 ops_alert 去重审计
+  bot_guard.py               爬虫拦截中间件(UA / 无 JS 行为 / 频率)
   ratelimit.py               滑动窗口限流(全站共用一份实现)
   json_safe.py               Decimal/date/NaN → JSON 安全转换
   visit_log.py               HTTP 访问日志中间件(IP 地理 + UA 解析)
@@ -642,16 +674,16 @@ app/
     avatar.py                  头像上传(重编码 PNG,2MB 上限在读之前就卡)
     admin.py                   管理员判定(ADMIN_EMAILS 登录账号)
     deps.py                    get_current_user / require_login 依赖
-  watchlist/                 自选盯盘(自选股 + 盯盘策略 + 收盘信号提醒)
-  subscription/              订阅会员(订单 → QQ 人工核对 → 管理员履约 / 前 30 名免费领终生会员)
-  notify/                    邮件通知(盯盘信号提醒 + 每日复盘/热门板块推送 + 新手引导)
+  watchlist/                 自选盯盘(自选股 + 盯盘策略 + 收盘规则提醒,登录即可用)
+  notify/                    邮件通知(盯盘规则提醒 + 每日复盘/板块热度观察推送 + 新手引导)
     db.py                      email_pref 开关与退订令牌 / email_send_log 发信账本
     service.py                 先占位再发信、失败释放占位(任务重跑不会重复打扰)
     render.py                  各封信的纯文本 + HTML 正文(退订链接与免责声明必带)
     api.py                     偏好接口(需登录) + 退订页(公开,不挂同源闸)
   my_board/                  个人数据看板(登录后各自保存布局,未登录只读)
   sectors/                   板块排行榜(sector_snapshot 快照的读取端,60s 缓存)
-  ai_hotsector/              板块热度观察(客观板块排序 + AI 客观观察;个股模拟跟踪已停更)
+  ai_hotsector/              板块热度观察(客观板块排序 + AI 客观观察;个股模拟跟踪已下线,旧接口仅管理员)
+    api.py                     /today 公开(含实时快照兜底与负缓存);其余历史接口 require_admin
     runner.py                  predict_once / settle_once 每日运行器
     db.py                      ai_hotsector_* 表 DDL + CRUD + settle_status 状态机
     prompts.py                 板块热度观察提示词(带版本号,单段式)
@@ -663,12 +695,15 @@ app/
     context.py / render.py / runner.py / db.py
   share/                     回测结果分享快照(/s/{token},限流 + IP 日配额)
   analytics/                 埋点与转化漏斗(前端白名单事件 + 服务端就地落点)
+    bots.py                    UA 爬虫分类(search/ai/seo/scanner/unknown),事件表与访问日志共用
+    sessions.py                30 分钟滑动窗口会话派生
+    attribution.py             首触 UTM / referer 渠道归因
   feedback/                  用户反馈(匿名可提,管理员处理) + 评价墙(render.py)
   discuss/                   讨论区(db / service / api;官方开场帖在 db.SEED_POSTS)
   data_status/               数据完整性状态查询
   scheduler/                 任务调度
     runner.py                  subprocess 执行 + 日志写入 task_run_log
-    registry.py                任务清单(16 个任务,唯一事实来源)
+    registry.py                任务清单(17 个任务,唯一事实来源)
     db.py                      task_run_log CRUD
   static/                    各页面 HTML/JS(服务端直出)
 
@@ -681,10 +716,12 @@ scripts/
   daily_review_generate.py   AI 每日市场复盘生成(17:45)
   stock_report_batch.py      个股 AI 报告批量预生成(18:10,成交额前 50)
   sector_snapshot.py         板块涨跌快照(15:10)
-  scan_watchlist_alerts.py   自选盯盘信号扫描(17:20)
-  notify_watchlist_alerts.py 盯盘信号提醒邮件(17:25)
-  notify_daily_digest.py     每日复盘+热门板块推送邮件(18:00)
+  scan_watchlist_alerts.py   自选盯盘规则扫描(17:20)
+  notify_watchlist_alerts.py 盯盘规则提醒邮件(17:25)
+  notify_daily_digest.py     每日复盘+板块热度观察推送邮件(18:00)
   notify_onboarding.py       新手引导邮件(每天 10:00)
+  llm_balance_probe.py       LLM 余额探针(每交易日 09:00,欠费/低余额 exit 3 并告警)
+  mail_selftest.py           一次性确认 SMTP 配置真能投递
   backfill_dividend.py       Ex-div 事件回填(支持 --day-of-month / --holdings-only)
   backfill_kline.py          K 线指定区间补漏
   backfill_market_cap.py     历史市值回填(--only-uncovered 只补缺口)
@@ -759,7 +796,7 @@ pytest 套件在 `tests/`(30 个文件、564 个用例),全部纯函数 —— �
 python -m pytest tests/
 ```
 
-覆盖:回测/组合引擎算账(`test_backtest_engine` / `test_portfolio_engine` / `test_metrics_money_fees`)、样本外与参数敏感性(`test_robustness`)、模拟盘 runner(`test_paper_runner`)、调度时刻表(`test_scheduler_schedule`)、登录会话与头像(`test_auth` / `test_auth_profile`)、管理员账号与同源(`test_admin_account` / `test_admin_origin`)、个股报告/AI 板块/复盘(`test_stock_report` / `test_ai_hotsector` / `test_daily_review*`)、限流(`test_ratelimit`)、看板归属(`test_my_board_scope`)、邮件通知与退订(`test_notify`)、自选/订阅(含终生会员名额)/反馈/分享/板块分组/股票搜索/数据质量/连接池/客户端 IP 判定等。
+覆盖:回测/组合引擎算账(`test_backtest_engine` / `test_portfolio_engine` / `test_metrics_money_fees`)、样本外与参数敏感性(`test_robustness`)、模拟盘 runner(`test_paper_runner`)、调度时刻表(`test_scheduler_schedule`)、登录会话与头像(`test_auth` / `test_auth_profile`)、管理员账号与同源(`test_admin_account` / `test_admin_origin`)、个股报告/AI 板块/复盘(`test_stock_report` / `test_ai_hotsector` / `test_daily_review*`)、合规措辞与公开页约束(`test_compliance_wording`)、页面路由完整性(`test_page_routes`)、埋点口径(`test_analytics`)、LLM 余额与告警(`test_llm_balance` / `test_alerts_webhook`)、限流(`test_ratelimit`)、看板归属(`test_my_board_scope`)、邮件通知与退订(`test_notify`)、自选/反馈/分享/板块分组/股票搜索/数据质量/连接池/客户端 IP 判定等。
 
 其中 `test_admin_origin.py::test_every_write_endpoint_is_guarded` 是一张回归网:它遍历整张路由表,任何写接口(POST/PUT/PATCH/DELETE)漏挂同源闸都会让测试变红 ——`/api/auth/{send_code,login,logout}` 三个漏网就是这么找出来的。
 

@@ -3,11 +3,8 @@
 ======================
 锁住 app/main.py 里给爬虫直出 HTML 的那几个纯函数（不起服务、不碰 DB）：
 
-  1. _dr_body —— **最新篇全文直出 / 往期只直出预览**
-     这条是安全边界：HTML 带 ETag、可被共享缓存复用，往期正文一旦进了 HTML
-     就等于对所有人免费，付费墙形同虚设。
-  2. _dr_head —— 付费篇要带 isAccessibleForFree=false + hasPart，
-     否则"给爬虫的和给用户的不一样"会被判成 cloaking。
+  1. _dr_body —— 所有复盘(含往期)整篇直出;回退快照的横幅文案。
+  2. _dr_head —— canonical / 面包屑 / isAccessibleForFree=true。
   3. _json_ld —— 正文里的 `</script>` 不能提前闭合脚本块。
 """
 import json
@@ -34,31 +31,22 @@ ROW = {
 CANON = "https://shoupan.asia/daily_review/2026-07-22"
 
 
-# ── _dr_body：付费内容不进 HTML ────────────────────────────────────────────
+# ── _dr_body：所有复盘整篇直出(已无付费墙) ──────────────────────────────────
 
-def test_free_review_renders_full_text():
-    html = _dr_body(ROW, locked=False)
+def test_review_renders_full_text():
+    html = _dr_body(ROW)
     assert "<h3>大盘综述</h3>" in html
-    assert TAIL_MARKER in html         # 最新篇免费 —— 整篇都在 HTML 里
-    assert "dr-paywall" not in html
-
-
-def test_locked_review_does_not_leak_full_text():
-    html = _dr_body(ROW, locked=True)
-    # 只露开头一小段预览，正文尾部绝不能出现
-    assert TAIL_MARKER not in html
-    assert len(html) < 800
-    assert "dr-paywall" in html
-    assert 'class="dr-paid"' in html   # 与 JSON-LD 的 cssSelector 对应
+    assert TAIL_MARKER in html         # 往期也整篇都在 HTML 里
+    assert "dr-paywall" not in html and "dr-paid" not in html
 
 
 def test_missing_review_renders_placeholder():
-    html = _dr_body(None, locked=False)
+    html = _dr_body(None)
     assert "no-data" in html
 
 
 def test_failed_review_renders_placeholder():
-    html = _dr_body({**ROW, "status": "failed"}, locked=False)
+    html = _dr_body({**ROW, "status": "failed"})
     assert "no-data" in html
     # 生成失败的正文可能是内部报错，不能直出
     assert "大盘综述" not in html
@@ -67,12 +55,12 @@ def test_failed_review_renders_placeholder():
 # ── 回退快照的横幅：旧日期不能说"正在生成" ──────────────────────────────────
 
 def test_stale_banner_最新一期说正在生成():
-    html = _dr_body(ROW, locked=False, stale=True, snapshot_date="2026-07-21", pending=True)
+    html = _dr_body(ROW, stale=True, snapshot_date="2026-07-21", pending=True)
     assert "正在生成" in html and "2026-07-21" in html
 
 
 def test_stale_banner_旧日期如实说暂缺():
-    html = _dr_body(ROW, locked=True, stale=True, snapshot_date="2026-03-02", pending=False)
+    html = _dr_body(ROW, stale=True, snapshot_date="2026-03-02", pending=False)
     assert "正在生成" not in html
     assert "该交易日复盘暂缺" in html and "2026-03-02" in html
 
@@ -87,7 +75,7 @@ def test_dr_pending_按是否已有更新的复盘判定():
     assert _dr_pending(date(2026, 3, 3), None) is True          # 取不到最新篇就按旧口径
 
 
-# ── _dr_head：付费墙的结构化声明 ───────────────────────────────────────────
+# ── _dr_head：结构化数据 ────────────────────────────────────────────────────
 
 def _ld_objects(head_html):
     return [json.loads(m) for m in
@@ -95,29 +83,22 @@ def _ld_objects(head_html):
                        head_html, re.S)]
 
 
-def test_head_marks_free_article_accessible():
-    objs = _ld_objects(_dr_head(ROW, CANON, locked=False))
+def test_head_marks_article_accessible():
+    objs = _ld_objects(_dr_head(ROW, CANON))
     article = next(o for o in objs if o["@type"] == "Article")
     assert article["isAccessibleForFree"] is True
     assert "hasPart" not in article
 
 
-def test_head_declares_paywall_for_locked():
-    objs = _ld_objects(_dr_head(ROW, CANON, locked=True))
-    article = next(o for o in objs if o["@type"] == "Article")
-    assert article["isAccessibleForFree"] is False
-    assert article["hasPart"]["cssSelector"] == ".dr-paid"
-
-
 def test_head_has_canonical_and_breadcrumb():
-    head = _dr_head(ROW, CANON, locked=True)
+    head = _dr_head(ROW, CANON)
     assert f'<link rel="canonical" href="{CANON}">' in head
     objs = _ld_objects(head)
     assert any(o["@type"] == "BreadcrumbList" for o in objs)
 
 
 def test_head_without_row_falls_back_to_generic_meta():
-    head = _dr_head(None, "https://shoupan.asia/daily_review", locked=False)
+    head = _dr_head(None, "https://shoupan.asia/daily_review")
     assert "<title>" in head
     assert 'rel="canonical"' in head
     assert _ld_objects(head) == []   # 没有具体文章就不编造 Article
@@ -125,7 +106,7 @@ def test_head_without_row_falls_back_to_generic_meta():
 
 def test_head_escapes_title():
     row = {**ROW, "title": '收盘"复盘"<script>'}
-    head = _dr_head(row, CANON, locked=False)
+    head = _dr_head(row, CANON)
     assert "<script>" not in head.replace(
         '<script type="application/ld+json">', "")
     assert "&quot;" in head or "&#" in head

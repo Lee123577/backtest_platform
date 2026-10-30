@@ -99,20 +99,6 @@
 .wl-savebtn { font-size: 14px; padding: 9px 20px; }
 .wl-addbtn  { font-size: 14px; padding: 0 18px; height: 38px; }
 
-/* 付费墙 */
-.wl-paywall {
-  text-align: center;
-  padding: 28px 20px;
-  border: 1px dashed var(--border, #3a3f4b);
-  border-radius: 12px;
-  background: rgba(91, 141, 239, .05);
-}
-.wl-paywall p { font-size: 13px; color: var(--txt2, #9aa0aa); margin: 0 0 14px; }
-.wl-paywall-btn {
-  border: none; border-radius: 8px; background: #5b8def; color: #fff;
-  font-size: 14px; padding: 10px 24px; cursor: pointer;
-}
-
 /* ── 自选股 ───────────────────────────────────────────────── */
 .wl-add { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
 .wl-add input {
@@ -165,22 +151,6 @@
 .wl-notify-foot { margin-top: 12px; font-size: 12px; color: var(--txt2, #9aa0aa); }
 .wl-notify-msg { font-size: 12px; color: #e0684d; margin-left: 8px; font-weight: 400; }
 .wl-notify-msg.ok { color: #2fa87d; }
-
-
-/* 登录闸上的免费名额提示。只在还有名额时由 JS 填内容并显示 —— 发完就消失,
-   挂一个"已抢光"在这儿只会让人转身就走。 */
-.wl-gate-offer {
-  margin: 14px 0 0;
-  padding: 12px 14px;
-  border: 1px solid #EF9F27;
-  border-radius: 8px;
-  background: rgba(239, 159, 39, .08);
-  font-size: 13px;
-  line-height: 1.8;
-  color: var(--txt, #24292f);
-}
-.wl-gate-offer b { color: #b06d00; }
-
 
 /* ── 自选股行情表 ────────────────────────────────────────────────────────
    替掉原来那排只有名字和代码的灰 chip。信号一天只出一次、还得等到 17:20,

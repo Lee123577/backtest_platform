@@ -169,7 +169,6 @@ body.spx-shell .site-footer {
   cursor: pointer;
 }
 .spx-menu a:hover, .spx-menu button:hover { background: var(--bg2, #f6f8fa); }
-.spx-menu .spx-menu-sub { font-size: 11px; color: var(--txt2, #9aa0aa); padding: 4px 12px 8px; }
 
 /* 遮罩(移动端侧边栏展开时) */
 .spx-mask {

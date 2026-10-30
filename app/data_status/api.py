@@ -300,7 +300,7 @@ def get_traffic_today():
 
     # 排除静态/健康检查等噪音路径
     skip_paths = ("/static/%", "/favicon.ico", "/robots.txt", "/api/admin/me")
-    skip_clause = " AND ".join([f"request_path NOT LIKE %s"] * len(skip_paths))
+    skip_clause = " AND ".join(["request_path NOT LIKE %s"] * len(skip_paths))
 
     pv = uv = uv_all = 0
     by_hour = [0] * 24
